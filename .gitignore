@@ -1,0 +1,8 @@
+bin/
+obj/
+*.user
+*.lscache
+artifacts/
+BenchmarkDotNet.Artifacts/
+.vs/
+[Tt]est[Rr]esults/
