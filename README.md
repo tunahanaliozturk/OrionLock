@@ -1,3 +1,7 @@
+<p align="center">
+  <img src="docs/logo.png" alt="OrionLock Logo" width="150" />
+</p>
+
 <h1 align="center">OrionLock</h1>
 
 <p align="center">
