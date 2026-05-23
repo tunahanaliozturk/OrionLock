@@ -57,6 +57,10 @@ A single `DistributedLock` instance (a DI singleton) re-acquiring a key it alrea
 
 `ActivitySource` and `Meter` named `Moongazing.OrionLock`. Each acquire opens a span tagged with the key and outcome; counters `orionlock.acquisitions`, `orionlock.contentions`, `orionlock.lease.lost`; histogram `orionlock.acquire.duration`.
 
+## Roadmap
+
+Twelve-month forward plan in [ROADMAP.md](ROADMAP.md): v0.2.0 (Q3 2026) multi-master RedLock + `sp_getapplock` + Postgres advisory locks, v0.3.0 (Q4 2026) fairness + observability, v0.4.0 (Q1 2027) opt-in cross-process reentrancy, v0.5.0 (Q1-Q2 2027) more backends + coordination primitives, v1.0.0 (Q2 2027) API freeze. If something on the list matters to you, open an issue with the `roadmap` label.
+
 ## More from the Orion family
 
 - [OrionGuard](https://github.com/tunahanaliozturk/OrionGuard) — validation, guard clauses, DDD primitives, domain events
