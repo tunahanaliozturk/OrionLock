@@ -1,7 +1,7 @@
 namespace Moongazing.OrionLock.EntityFrameworkCore;
 
 /// <summary>
-/// Persistent row backing <c>EfCoreLockProvider</c>. One row per lock key in the
+/// Persistent row backing <see cref="EfCoreLockProvider"/>. One row per lock key in the
 /// <c>OrionLock_Locks</c> table.
 /// </summary>
 public sealed class OrionLockRow
