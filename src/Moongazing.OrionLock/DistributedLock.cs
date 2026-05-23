@@ -6,11 +6,12 @@ namespace Moongazing.OrionLock;
 
 /// <summary>
 /// The default <see cref="IDistributedLock"/>. Composes a backend <see cref="IDistributedLockProvider"/>
-/// with a blocking-acquire retry loop and lease-renewing handles.
+/// with a blocking-acquire retry loop, same-process reentrancy, and lease-renewing handles.
 /// </summary>
 public sealed class DistributedLock : IDistributedLock
 {
     private readonly IDistributedLockProvider provider;
+    private readonly ReentrancyRegistry reentrancy = new();
 
     /// <summary>Creates a lock over the given backend provider.</summary>
     public DistributedLock(IDistributedLockProvider provider)
@@ -26,12 +27,24 @@ public sealed class DistributedLock : IDistributedLock
         ArgumentException.ThrowIfNullOrWhiteSpace(key);
         options ??= new DistributedLockOptions();
 
+        var nested = reentrancy.TryEnter(key);
+        if (nested is not null)
+        {
+            return nested;
+        }
+
         var ownerToken = Guid.NewGuid().ToString("N");
         var acquired = await provider
             .TryAcquireAsync(key, ownerToken, options.LeaseDuration, cancellationToken)
             .ConfigureAwait(false);
 
-        return acquired ? new DistributedLockHandle(provider, key, ownerToken, options) : null;
+        if (!acquired)
+        {
+            return null;
+        }
+
+        var real = new DistributedLockHandle(provider, key, ownerToken, options);
+        return reentrancy.Register(key, real);
     }
 
     /// <inheritdoc />
