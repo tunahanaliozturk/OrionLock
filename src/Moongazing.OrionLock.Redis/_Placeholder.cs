@@ -1,1 +1,0 @@
-namespace Moongazing.OrionLock.Redis;
