@@ -1,0 +1,10 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <PackageId>OrionLock</PackageId>
+    <Description>Distributed locking for .NET. A backend-agnostic IDistributedLock with blocking acquire, reentrancy, and background lease auto-renewal. Backends ship separately (OrionLock.Redis, OrionLock.EntityFrameworkCore).</Description>
+    <PackageTags>distributed-lock;redis;redlock;ef-core;locking;concurrency</PackageTags>
+  </PropertyGroup>
+  <ItemGroup>
+    <PackageReference Include="Microsoft.Extensions.DependencyInjection.Abstractions" Version="9.0.0" />
+  </ItemGroup>
+</Project>
