@@ -3,6 +3,7 @@
     <PackageId>OrionLock.EntityFrameworkCore</PackageId>
     <Description>EF Core lock-table backend for OrionLock distributed locking.</Description>
     <PackageTags>distributed-lock;ef-core;locking;orionlock</PackageTags>
+    <PackageReadmeFile>docs/README.md</PackageReadmeFile>
   </PropertyGroup>
   <ItemGroup>
     <PackageReference Include="Microsoft.EntityFrameworkCore.Relational" Version="9.0.0" />
@@ -10,5 +11,8 @@
   </ItemGroup>
   <ItemGroup>
     <ProjectReference Include="..\Moongazing.OrionLock\Moongazing.OrionLock.csproj" />
+  </ItemGroup>
+  <ItemGroup>
+    <None Include="docs/README.md" Pack="true" PackagePath="docs/" />
   </ItemGroup>
 </Project>
