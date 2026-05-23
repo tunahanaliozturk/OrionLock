@@ -1,3 +1,4 @@
+using Moongazing.OrionLock.Diagnostics;
 using Moongazing.OrionLock.Providers;
 
 namespace Moongazing.OrionLock.Internal;
@@ -72,6 +73,7 @@ public sealed class DistributedLockHandle : IDistributedLockHandle
                 if (!renewed)
                 {
                     isHeld = false;
+                    OrionLockDiagnostics.LeasesLost.Add(1);
                     SafeCancelLost();
                     return;
                 }

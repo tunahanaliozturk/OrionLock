@@ -1,4 +1,5 @@
 using System.Diagnostics;
+using Moongazing.OrionLock.Diagnostics;
 using Moongazing.OrionLock.Internal;
 using Moongazing.OrionLock.Providers;
 
@@ -54,17 +55,26 @@ public sealed class DistributedLock : IDistributedLock
         ArgumentException.ThrowIfNullOrWhiteSpace(key);
         options ??= new DistributedLockOptions();
 
+        using var activity = OrionLockDiagnostics.ActivitySource.StartActivity($"OrionLock.Acquire {key}");
+        activity?.SetTag("orionlock.key", key);
+
         var deadline = Stopwatch.StartNew();
         while (true)
         {
             var handle = await TryAcquireAsync(key, options, cancellationToken).ConfigureAwait(false);
             if (handle is not null)
             {
+                activity?.SetTag("orionlock.outcome", "acquired");
+                OrionLockDiagnostics.Acquisitions.Add(1);
+                OrionLockDiagnostics.AcquireDuration.Record(deadline.Elapsed.TotalMilliseconds);
                 return handle;
             }
 
+            OrionLockDiagnostics.Contentions.Add(1);
+
             if (deadline.Elapsed >= options.WaitTimeout)
             {
+                activity?.SetTag("orionlock.outcome", "timeout");
                 throw new LockAcquisitionTimeoutException(key, deadline.Elapsed);
             }
 
