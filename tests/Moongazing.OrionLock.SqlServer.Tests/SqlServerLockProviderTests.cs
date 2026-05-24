@@ -164,4 +164,26 @@ public partial class SqlServerLockProviderTests : IClassFixture<SqlServerContain
 
         Assert.False(await p.TryAcquireAsync(key, "owner-3", TimeSpan.FromSeconds(30), default));
     }
+
+    [Fact]
+    public async Task Dispose_ShouldReleaseAllOpenSessions()
+    {
+        var p1 = NewProvider();
+        var keys = Enumerable.Range(0, 3).Select(_ => $"k-{Guid.NewGuid():N}").ToArray();
+
+        for (var i = 0; i < keys.Length; i++)
+        {
+            Assert.True(await p1.TryAcquireAsync(keys[i], $"owner-{i}", TimeSpan.FromSeconds(30), default));
+        }
+
+        p1.Dispose();
+
+        // A fresh provider must be able to acquire all three keys (the previous sessions
+        // are closed, so the locks are released).
+        using var p2 = NewProvider();
+        for (var i = 0; i < keys.Length; i++)
+        {
+            Assert.True(await p2.TryAcquireAsync(keys[i], $"owner-after-{i}", TimeSpan.FromSeconds(30), default));
+        }
+    }
 }

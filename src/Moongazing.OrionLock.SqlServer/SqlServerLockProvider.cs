@@ -152,7 +152,16 @@ public sealed class SqlServerLockProvider : IDistributedLockProvider, IDisposabl
     }
 
     /// <inheritdoc />
-    public void Dispose() { /* implemented in Task 9 */ }
+    public void Dispose()
+    {
+        foreach (var kv in sessions.ToArray())
+        {
+            if (sessions.TryRemove(kv.Key, out var conn))
+            {
+                try { conn.Dispose(); } catch { /* best effort */ }
+            }
+        }
+    }
 
     // Helper used by the collision branch in TryAcquireAsync and by ReleaseAsync (Task 8).
     private async Task ReleaseInSession(SqlConnection conn, string resource, CancellationToken ct)
