@@ -126,8 +126,30 @@ public sealed class SqlServerLockProvider : IDistributedLockProvider, IDisposabl
     }
 
     /// <inheritdoc />
-    public Task ReleaseAsync(string key, string ownerToken, CancellationToken cancellationToken)
-        => throw new NotImplementedException("ReleaseAsync — implemented in Task 8.");
+    public async Task ReleaseAsync(string key, string ownerToken, CancellationToken cancellationToken)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(ownerToken);
+
+        if (!sessions.TryRemove(ownerToken, out var conn))
+        {
+            // Unknown token (never acquired or already released) — no-op, mirrors Redis/EF Core.
+            return;
+        }
+
+        try
+        {
+            await ReleaseInSession(conn, options.KeyPrefix + key, cancellationToken).ConfigureAwait(false);
+        }
+        catch
+        {
+            // Connection is dying; SQL Server releases session-scoped locks when the session
+            // ends, so disposing the connection below still drops the lock.
+        }
+        finally
+        {
+            try { await conn.DisposeAsync().ConfigureAwait(false); } catch { /* swallow */ }
+        }
+    }
 
     /// <inheritdoc />
     public void Dispose() { /* implemented in Task 9 */ }

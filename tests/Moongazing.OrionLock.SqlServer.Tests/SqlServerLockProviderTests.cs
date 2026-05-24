@@ -138,4 +138,30 @@ public partial class SqlServerLockProviderTests : IClassFixture<SqlServerContain
         // Next renewal must observe the broken session and return false.
         Assert.False(await p.TryRenewAsync(key, "owner-1", TimeSpan.FromSeconds(30), default));
     }
+
+    [Fact]
+    public async Task Release_ShouldAllowNextAcquire_ForOwner()
+    {
+        using var p = NewProvider();
+        var key = $"k-{Guid.NewGuid():N}";
+
+        await p.TryAcquireAsync(key, "owner-1", TimeSpan.FromSeconds(30), default);
+        await p.ReleaseAsync(key, "owner-1", default);
+
+        Assert.True(await p.TryAcquireAsync(key, "owner-2", TimeSpan.FromSeconds(30), default));
+    }
+
+    [Fact]
+    public async Task Release_ShouldBeNoOp_ForUnknownOwnerToken()
+    {
+        using var p = NewProvider();
+        var key = $"k-{Guid.NewGuid():N}";
+
+        // Acquire as owner-1, then call Release with an unrelated token. Must not throw
+        // and must not release owner-1's lock.
+        await p.TryAcquireAsync(key, "owner-1", TimeSpan.FromSeconds(30), default);
+        await p.ReleaseAsync(key, "never-seen", default);
+
+        Assert.False(await p.TryAcquireAsync(key, "owner-3", TimeSpan.FromSeconds(30), default));
+    }
 }
