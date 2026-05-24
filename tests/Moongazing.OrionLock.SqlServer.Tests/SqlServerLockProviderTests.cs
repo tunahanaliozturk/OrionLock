@@ -87,4 +87,24 @@ public partial class SqlServerLockProviderTests : IClassFixture<SqlServerContain
 
         Assert.Equal(1, results.Count(r => r));
     }
+
+    [Fact]
+    public async Task TryRenew_ShouldReturnTrue_ForKnownOwner()
+    {
+        using var p = NewProvider();
+        var key = $"k-{Guid.NewGuid():N}";
+
+        await p.TryAcquireAsync(key, "owner-1", TimeSpan.FromSeconds(30), default);
+        Assert.True(await p.TryRenewAsync(key, "owner-1", TimeSpan.FromSeconds(30), default));
+    }
+
+    [Fact]
+    public async Task TryRenew_ShouldReturnFalse_ForUnknownOwner()
+    {
+        using var p = NewProvider();
+        var key = $"k-{Guid.NewGuid():N}";
+
+        await p.TryAcquireAsync(key, "owner-1", TimeSpan.FromSeconds(30), default);
+        Assert.False(await p.TryRenewAsync(key, "owner-2", TimeSpan.FromSeconds(30), default));
+    }
 }

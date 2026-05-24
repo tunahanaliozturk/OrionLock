@@ -98,8 +98,32 @@ public sealed class SqlServerLockProvider : IDistributedLockProvider, IDisposabl
     }
 
     /// <inheritdoc />
-    public Task<bool> TryRenewAsync(string key, string ownerToken, TimeSpan leaseDuration, CancellationToken cancellationToken)
-        => throw new NotImplementedException("TryRenewAsync — implemented in Task 6.");
+    public async Task<bool> TryRenewAsync(string key, string ownerToken, TimeSpan leaseDuration, CancellationToken cancellationToken)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(ownerToken);
+
+        if (!sessions.TryGetValue(ownerToken, out var conn))
+        {
+            return false;
+        }
+
+        try
+        {
+            using var cmd = conn.CreateCommand();
+            cmd.CommandText = "SELECT 1";
+            cmd.CommandTimeout = (int)options.CommandTimeout.TotalSeconds;
+            await cmd.ExecuteScalarAsync(cancellationToken).ConfigureAwait(false);
+            return true;
+        }
+        catch
+        {
+            // Connection is no longer trustworthy — SQL Server has released the session
+            // (and therefore the lock) or the link is broken. Forget the session.
+            sessions.TryRemove(ownerToken, out _);
+            try { await conn.DisposeAsync().ConfigureAwait(false); } catch { /* already dead */ }
+            return false;
+        }
+    }
 
     /// <inheritdoc />
     public Task ReleaseAsync(string key, string ownerToken, CancellationToken cancellationToken)
