@@ -39,9 +39,9 @@ public sealed class LeaseLostException : Exception
 /// </summary>
 public sealed class OrionLockBackendException : Exception
 {
-    /// <summary>Initializes the exception with a key and reason.</summary>
+    /// <summary>Initializes the exception with a key and a backend-specific reason.</summary>
     public OrionLockBackendException(string key, string reason)
-        : base($"Distributed lock backend failure for key '{key}': {reason}")
+        : base($"OrionLock backend failure for key '{key}': {reason}")
     {
         Key = key;
         Reason = reason;
@@ -49,7 +49,7 @@ public sealed class OrionLockBackendException : Exception
 
     /// <summary>Initializes the exception with a key, reason, and inner exception.</summary>
     public OrionLockBackendException(string key, string reason, Exception inner)
-        : base($"Distributed lock backend failure for key '{key}': {reason}", inner)
+        : base($"OrionLock backend failure for key '{key}': {reason}", inner)
     {
         Key = key;
         Reason = reason;
