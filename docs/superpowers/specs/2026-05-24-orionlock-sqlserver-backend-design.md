@@ -58,7 +58,7 @@ src/Moongazing.OrionLock.SqlServer/
   SqlServerLockOptions.cs                 ← KeyPrefix, CommandTimeout
   OrionLockSqlServerBuilderExtensions.cs  ← UseSqlServer
   docs/
-    PackageReadme.md
+    README.md
 
 tests/Moongazing.OrionLock.SqlServer.Tests/
   SqlServerLockProviderTests.cs           ← Testcontainers.MsSql
@@ -407,7 +407,7 @@ alternative (LocalDB) is Windows-only and not viable.
 
 ### Documentation updates (in this PR)
 
-- `src/Moongazing.OrionLock.SqlServer/docs/PackageReadme.md` — new NuGet
+- `src/Moongazing.OrionLock.SqlServer/docs/README.md` — new NuGet
   package README, same template as Redis and EF Core packages. Covers quick
   start, `sp_getapplock` characteristics, case-insensitivity warning, 240-char
   key limit, pooling note.

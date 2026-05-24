@@ -17,13 +17,21 @@ public sealed class SqlServerLockProvider : IDistributedLockProvider, IDisposabl
 
     private readonly string connectionString;
     private readonly SqlServerLockOptions options;
-    private readonly ConcurrentDictionary<string, SqlConnection> sessions = new();
+    private readonly ConcurrentDictionary<string, SessionEntry> sessions = new();
+
+    private sealed record SessionEntry(string Resource, SqlConnection Connection);
 
     /// <summary>Creates the provider.</summary>
     public SqlServerLockProvider(string connectionString, SqlServerLockOptions options)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(connectionString);
         ArgumentNullException.ThrowIfNull(options);
+        if (options.KeyPrefix is null)
+        {
+            throw new ArgumentException(
+                $"{nameof(SqlServerLockOptions)}.{nameof(SqlServerLockOptions.KeyPrefix)} cannot be null; use string.Empty for no prefix.",
+                nameof(options));
+        }
         this.connectionString = connectionString;
         this.options = options;
     }
@@ -34,6 +42,7 @@ public sealed class SqlServerLockProvider : IDistributedLockProvider, IDisposabl
         ValidateKey(key);
         ArgumentException.ThrowIfNullOrWhiteSpace(ownerToken);
 
+        var resource = options.KeyPrefix + key;
         var conn = new SqlConnection(connectionString);
         try
         {
@@ -46,7 +55,7 @@ public sealed class SqlServerLockProvider : IDistributedLockProvider, IDisposabl
                 cmd.CommandText = "sp_getapplock";
                 cmd.CommandTimeout = (int)options.CommandTimeout.TotalSeconds;
 
-                cmd.Parameters.Add(new SqlParameter("@Resource",    SqlDbType.NVarChar, 255) { Value = options.KeyPrefix + key });
+                cmd.Parameters.Add(new SqlParameter("@Resource",    SqlDbType.NVarChar, 255) { Value = resource });
                 cmd.Parameters.Add(new SqlParameter("@LockMode",    SqlDbType.VarChar,  32)  { Value = "Exclusive" });
                 cmd.Parameters.Add(new SqlParameter("@LockOwner",   SqlDbType.VarChar,  32)  { Value = "Session" });
                 cmd.Parameters.Add(new SqlParameter("@LockTimeout", SqlDbType.Int)           { Value = 0 });
@@ -67,10 +76,10 @@ public sealed class SqlServerLockProvider : IDistributedLockProvider, IDisposabl
             switch (returnCode)
             {
                 case >= 0:
-                    if (!sessions.TryAdd(ownerToken, conn))
+                    if (!sessions.TryAdd(ownerToken, new SessionEntry(resource, conn)))
                     {
                         // ownerToken collision — vanishingly unlikely with GUIDs, but defensive.
-                        await ReleaseInSession(conn, options.KeyPrefix + key, cancellationToken).ConfigureAwait(false);
+                        await ReleaseInSession(conn, resource, cancellationToken).ConfigureAwait(false);
                         await conn.DisposeAsync().ConfigureAwait(false);
                         throw new InvalidOperationException($"ownerToken '{ownerToken}' already registered.");
                     }
@@ -102,14 +111,17 @@ public sealed class SqlServerLockProvider : IDistributedLockProvider, IDisposabl
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(ownerToken);
 
-        if (!sessions.TryGetValue(ownerToken, out var conn))
+        var resource = options.KeyPrefix + key;
+        if (!sessions.TryGetValue(ownerToken, out var session) ||
+            !string.Equals(session.Resource, resource, StringComparison.Ordinal))
         {
+            // Token unknown, or token+key combination does not match what was acquired.
             return false;
         }
 
         try
         {
-            using var cmd = conn.CreateCommand();
+            using var cmd = session.Connection.CreateCommand();
             cmd.CommandText = "SELECT 1";
             cmd.CommandTimeout = (int)options.CommandTimeout.TotalSeconds;
             await cmd.ExecuteScalarAsync(cancellationToken).ConfigureAwait(false);
@@ -119,8 +131,8 @@ public sealed class SqlServerLockProvider : IDistributedLockProvider, IDisposabl
         {
             // Connection is no longer trustworthy — SQL Server has released the session
             // (and therefore the lock) or the link is broken. Forget the session.
-            sessions.TryRemove(ownerToken, out _);
-            try { await conn.DisposeAsync().ConfigureAwait(false); } catch { /* already dead */ }
+            sessions.TryRemove(new KeyValuePair<string, SessionEntry>(ownerToken, session));
+            try { await session.Connection.DisposeAsync().ConfigureAwait(false); } catch { /* already dead */ }
             return false;
         }
     }
@@ -130,15 +142,23 @@ public sealed class SqlServerLockProvider : IDistributedLockProvider, IDisposabl
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(ownerToken);
 
-        if (!sessions.TryRemove(ownerToken, out var conn))
+        var resource = options.KeyPrefix + key;
+        if (!sessions.TryGetValue(ownerToken, out var session) ||
+            !string.Equals(session.Resource, resource, StringComparison.Ordinal))
         {
-            // Unknown token (never acquired or already released) — no-op, mirrors Redis/EF Core.
+            // Unknown token, or token+key combination does not match — no-op, mirrors Redis/EF Core.
+            return;
+        }
+
+        // Atomic remove: only succeeds if the entry has not been swapped under us.
+        if (!sessions.TryRemove(new KeyValuePair<string, SessionEntry>(ownerToken, session)))
+        {
             return;
         }
 
         try
         {
-            await ReleaseInSession(conn, options.KeyPrefix + key, cancellationToken).ConfigureAwait(false);
+            await ReleaseInSession(session.Connection, resource, cancellationToken).ConfigureAwait(false);
         }
         catch
         {
@@ -147,7 +167,7 @@ public sealed class SqlServerLockProvider : IDistributedLockProvider, IDisposabl
         }
         finally
         {
-            try { await conn.DisposeAsync().ConfigureAwait(false); } catch { /* swallow */ }
+            try { await session.Connection.DisposeAsync().ConfigureAwait(false); } catch { /* swallow */ }
         }
     }
 
@@ -156,14 +176,14 @@ public sealed class SqlServerLockProvider : IDistributedLockProvider, IDisposabl
     {
         foreach (var kv in sessions.ToArray())
         {
-            if (sessions.TryRemove(kv.Key, out var conn))
+            if (sessions.TryRemove(kv.Key, out var session))
             {
-                try { conn.Dispose(); } catch { /* best effort */ }
+                try { session.Connection.Dispose(); } catch { /* best effort */ }
             }
         }
     }
 
-    // Helper used by the collision branch in TryAcquireAsync and by ReleaseAsync (Task 8).
+    // Helper used by the collision branch in TryAcquireAsync and by ReleaseAsync.
     private async Task ReleaseInSession(SqlConnection conn, string resource, CancellationToken ct)
     {
         using var cmd = conn.CreateCommand();
@@ -191,5 +211,5 @@ public sealed class SqlServerLockProvider : IDistributedLockProvider, IDisposabl
 
     // Test-only accessor used by SqlServerLockProviderTests (InternalsVisibleTo).
     internal SqlConnection? GetSessionForTesting(string ownerToken)
-        => sessions.TryGetValue(ownerToken, out var c) ? c : null;
+        => sessions.TryGetValue(ownerToken, out var s) ? s.Connection : null;
 }

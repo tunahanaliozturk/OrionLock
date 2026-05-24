@@ -94,7 +94,7 @@ public partial class SqlServerLockProviderTests : IClassFixture<SqlServerContain
         using var p = NewProvider();
         var key = $"k-{Guid.NewGuid():N}";
 
-        await p.TryAcquireAsync(key, "owner-1", TimeSpan.FromSeconds(30), default);
+        Assert.True(await p.TryAcquireAsync(key, "owner-1", TimeSpan.FromSeconds(30), default));
         Assert.True(await p.TryRenewAsync(key, "owner-1", TimeSpan.FromSeconds(30), default));
     }
 
@@ -104,7 +104,7 @@ public partial class SqlServerLockProviderTests : IClassFixture<SqlServerContain
         using var p = NewProvider();
         var key = $"k-{Guid.NewGuid():N}";
 
-        await p.TryAcquireAsync(key, "owner-1", TimeSpan.FromSeconds(30), default);
+        Assert.True(await p.TryAcquireAsync(key, "owner-1", TimeSpan.FromSeconds(30), default));
         Assert.False(await p.TryRenewAsync(key, "owner-2", TimeSpan.FromSeconds(30), default));
     }
 
@@ -114,7 +114,7 @@ public partial class SqlServerLockProviderTests : IClassFixture<SqlServerContain
         using var p = NewProvider();
         var key = $"k-{Guid.NewGuid():N}";
 
-        await p.TryAcquireAsync(key, "owner-1", TimeSpan.FromSeconds(30), default);
+        Assert.True(await p.TryAcquireAsync(key, "owner-1", TimeSpan.FromSeconds(30), default));
 
         // Read the SPID of the session that holds the lock.
         var heldConn = p.GetSessionForTesting("owner-1")!;
@@ -145,7 +145,7 @@ public partial class SqlServerLockProviderTests : IClassFixture<SqlServerContain
         using var p = NewProvider();
         var key = $"k-{Guid.NewGuid():N}";
 
-        await p.TryAcquireAsync(key, "owner-1", TimeSpan.FromSeconds(30), default);
+        Assert.True(await p.TryAcquireAsync(key, "owner-1", TimeSpan.FromSeconds(30), default));
         await p.ReleaseAsync(key, "owner-1", default);
 
         Assert.True(await p.TryAcquireAsync(key, "owner-2", TimeSpan.FromSeconds(30), default));
@@ -159,10 +159,42 @@ public partial class SqlServerLockProviderTests : IClassFixture<SqlServerContain
 
         // Acquire as owner-1, then call Release with an unrelated token. Must not throw
         // and must not release owner-1's lock.
-        await p.TryAcquireAsync(key, "owner-1", TimeSpan.FromSeconds(30), default);
+        Assert.True(await p.TryAcquireAsync(key, "owner-1", TimeSpan.FromSeconds(30), default));
         await p.ReleaseAsync(key, "never-seen", default);
 
         Assert.False(await p.TryAcquireAsync(key, "owner-3", TimeSpan.FromSeconds(30), default));
+    }
+
+    [Fact]
+    public async Task TryRenew_ShouldReturnFalse_WhenTokenIsValidButKeyDoesNotMatch()
+    {
+        using var p = NewProvider();
+        var key = $"k-{Guid.NewGuid():N}";
+        var otherKey = $"k-{Guid.NewGuid():N}";
+
+        // Owner-1 holds 'key'. Calling renew with the SAME owner but a DIFFERENT key
+        // must not touch the held session — the (key, ownerToken) tuple is the contract.
+        Assert.True(await p.TryAcquireAsync(key, "owner-1", TimeSpan.FromSeconds(30), default));
+        Assert.False(await p.TryRenewAsync(otherKey, "owner-1", TimeSpan.FromSeconds(30), default));
+
+        // The original held session is still healthy; renew on the correct key still works.
+        Assert.True(await p.TryRenewAsync(key, "owner-1", TimeSpan.FromSeconds(30), default));
+    }
+
+    [Fact]
+    public async Task Release_ShouldBeNoOp_WhenTokenIsValidButKeyDoesNotMatch()
+    {
+        using var p = NewProvider();
+        var key = $"k-{Guid.NewGuid():N}";
+        var otherKey = $"k-{Guid.NewGuid():N}";
+
+        Assert.True(await p.TryAcquireAsync(key, "owner-1", TimeSpan.FromSeconds(30), default));
+
+        // Release called with the right token but the WRONG key must not release the lock.
+        await p.ReleaseAsync(otherKey, "owner-1", default);
+
+        // Lock is still held by owner-1, so a fresh owner cannot acquire it.
+        Assert.False(await p.TryAcquireAsync(key, "owner-2", TimeSpan.FromSeconds(30), default));
     }
 
     [Fact]
