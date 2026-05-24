@@ -31,3 +31,33 @@ public sealed class LeaseLostException : Exception
     /// <summary>The lock key.</summary>
     public string Key { get; }
 }
+
+/// <summary>
+/// Thrown when the distributed lock backend reports a non-contention failure
+/// (e.g. <c>sp_getapplock</c> deadlock victim, parameter validation error, or other
+/// backend-specific error code that is not a simple "lock not available" outcome).
+/// </summary>
+public sealed class OrionLockBackendException : Exception
+{
+    /// <summary>Initializes the exception with a key and reason.</summary>
+    public OrionLockBackendException(string key, string reason)
+        : base($"Distributed lock backend failure for key '{key}': {reason}")
+    {
+        Key = key;
+        Reason = reason;
+    }
+
+    /// <summary>Initializes the exception with a key, reason, and inner exception.</summary>
+    public OrionLockBackendException(string key, string reason, Exception inner)
+        : base($"Distributed lock backend failure for key '{key}': {reason}", inner)
+    {
+        Key = key;
+        Reason = reason;
+    }
+
+    /// <summary>The lock key that caused the backend failure.</summary>
+    public string Key { get; }
+
+    /// <summary>A human-readable reason describing the backend failure.</summary>
+    public string Reason { get; }
+}

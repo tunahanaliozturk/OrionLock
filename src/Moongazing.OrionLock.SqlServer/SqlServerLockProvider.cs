@@ -1,6 +1,7 @@
 using System.Collections.Concurrent;
 using System.Data;
 using Microsoft.Data.SqlClient;
+using Moongazing.OrionLock;
 using Moongazing.OrionLock.Providers;
 
 namespace Moongazing.OrionLock.SqlServer;
@@ -28,10 +29,72 @@ public sealed class SqlServerLockProvider : IDistributedLockProvider, IDisposabl
     }
 
     /// <inheritdoc />
-    public Task<bool> TryAcquireAsync(string key, string ownerToken, TimeSpan leaseDuration, CancellationToken cancellationToken)
+    public async Task<bool> TryAcquireAsync(string key, string ownerToken, TimeSpan leaseDuration, CancellationToken cancellationToken)
     {
         ValidateKey(key);
-        throw new NotImplementedException("TryAcquireAsync — implemented in Task 5.");
+        ArgumentException.ThrowIfNullOrWhiteSpace(ownerToken);
+
+        var conn = new SqlConnection(connectionString);
+        try
+        {
+            await conn.OpenAsync(cancellationToken).ConfigureAwait(false);
+
+            int returnCode;
+            using (var cmd = conn.CreateCommand())
+            {
+                cmd.CommandType = CommandType.StoredProcedure;
+                cmd.CommandText = "sp_getapplock";
+                cmd.CommandTimeout = (int)options.CommandTimeout.TotalSeconds;
+
+                cmd.Parameters.Add(new SqlParameter("@Resource",    SqlDbType.NVarChar, 255) { Value = options.KeyPrefix + key });
+                cmd.Parameters.Add(new SqlParameter("@LockMode",    SqlDbType.VarChar,  32)  { Value = "Exclusive" });
+                cmd.Parameters.Add(new SqlParameter("@LockOwner",   SqlDbType.VarChar,  32)  { Value = "Session" });
+                cmd.Parameters.Add(new SqlParameter("@LockTimeout", SqlDbType.Int)           { Value = 0 });
+                cmd.Parameters.Add(new SqlParameter("@DbPrincipal", SqlDbType.NVarChar, 32)  { Value = "public" });
+
+                var rc = new SqlParameter
+                {
+                    ParameterName = "@RC",
+                    SqlDbType = SqlDbType.Int,
+                    Direction = ParameterDirection.ReturnValue
+                };
+                cmd.Parameters.Add(rc);
+
+                await cmd.ExecuteNonQueryAsync(cancellationToken).ConfigureAwait(false);
+                returnCode = (int)rc.Value!;
+            }
+
+            switch (returnCode)
+            {
+                case >= 0:
+                    if (!sessions.TryAdd(ownerToken, conn))
+                    {
+                        // ownerToken collision — vanishingly unlikely with GUIDs, but defensive.
+                        await ReleaseInSession(conn, options.KeyPrefix + key, cancellationToken).ConfigureAwait(false);
+                        await conn.DisposeAsync().ConfigureAwait(false);
+                        throw new InvalidOperationException($"ownerToken '{ownerToken}' already registered.");
+                    }
+                    return true;
+
+                case -1:
+                    await conn.DisposeAsync().ConfigureAwait(false);
+                    return false;
+
+                case -2:
+                    await conn.DisposeAsync().ConfigureAwait(false);
+                    throw new OperationCanceledException(cancellationToken);
+
+                default:
+                    await conn.DisposeAsync().ConfigureAwait(false);
+                    throw new OrionLockBackendException(
+                        key, $"sp_getapplock returned {returnCode} (deadlock victim, validation error, or other backend failure).");
+            }
+        }
+        catch
+        {
+            try { await conn.DisposeAsync().ConfigureAwait(false); } catch { /* already failing */ }
+            throw;
+        }
     }
 
     /// <inheritdoc />
@@ -44,6 +107,19 @@ public sealed class SqlServerLockProvider : IDistributedLockProvider, IDisposabl
 
     /// <inheritdoc />
     public void Dispose() { /* implemented in Task 9 */ }
+
+    // Helper used by the collision branch in TryAcquireAsync and by ReleaseAsync (Task 8).
+    private async Task ReleaseInSession(SqlConnection conn, string resource, CancellationToken ct)
+    {
+        using var cmd = conn.CreateCommand();
+        cmd.CommandType = CommandType.StoredProcedure;
+        cmd.CommandText = "sp_releaseapplock";
+        cmd.CommandTimeout = (int)options.CommandTimeout.TotalSeconds;
+        cmd.Parameters.Add(new SqlParameter("@Resource",    SqlDbType.NVarChar, 255) { Value = resource });
+        cmd.Parameters.Add(new SqlParameter("@LockOwner",   SqlDbType.VarChar,  32)  { Value = "Session" });
+        cmd.Parameters.Add(new SqlParameter("@DbPrincipal", SqlDbType.NVarChar, 32)  { Value = "public" });
+        await cmd.ExecuteNonQueryAsync(ct).ConfigureAwait(false);
+    }
 
     private void ValidateKey(string key)
     {

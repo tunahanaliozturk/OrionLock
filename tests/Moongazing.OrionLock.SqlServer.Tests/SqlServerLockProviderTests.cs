@@ -2,11 +2,20 @@ using Moongazing.OrionLock.SqlServer;
 
 namespace Moongazing.OrionLock.SqlServer.Tests;
 
-public partial class SqlServerLockProviderTests
+public partial class SqlServerLockProviderTests : IClassFixture<SqlServerContainerFixture>
 {
+    private readonly SqlServerContainerFixture fx;
+
+    public SqlServerLockProviderTests(SqlServerContainerFixture fx) => this.fx = fx;
+
     // Validation tests do not need a real SQL Server.
     private static SqlServerLockProvider NewProviderWithoutServer(string prefix = "")
         => new("Server=does-not-matter;", new SqlServerLockOptions { KeyPrefix = prefix });
+
+    private SqlServerLockProvider NewProvider()
+        => new(fx.ConnectionString, new SqlServerLockOptions());
+
+    // --- existing validation tests, unchanged ---
 
     [Fact]
     public async Task TryAcquire_ShouldThrow_WhenKeyIsEmpty()
@@ -49,7 +58,33 @@ public partial class SqlServerLockProviderTests
         }
         catch
         {
-            // SqlException or NotImplementedException from the bogus connection string / not-yet-implemented path is fine.
+            // SqlException or similar from the bogus connection string is fine.
         }
+    }
+
+    // --- new integration tests ---
+
+    [Fact]
+    public async Task TryAcquire_ShouldSucceedThenBlockSecondOwner()
+    {
+        using var p = NewProvider();
+        var key = $"k-{Guid.NewGuid():N}";
+
+        Assert.True(await p.TryAcquireAsync(key, "owner-1", TimeSpan.FromSeconds(30), default));
+        Assert.False(await p.TryAcquireAsync(key, "owner-2", TimeSpan.FromSeconds(30), default));
+    }
+
+    [Fact]
+    public async Task TryAcquire_ShouldHandOutExactlyOne_AcrossParallelCallers()
+    {
+        using var p = NewProvider();
+        var key = $"k-{Guid.NewGuid():N}";
+
+        var tasks = Enumerable.Range(0, 5)
+            .Select(i => p.TryAcquireAsync(key, $"owner-{i}", TimeSpan.FromSeconds(30), default))
+            .ToArray();
+        var results = await Task.WhenAll(tasks);
+
+        Assert.Equal(1, results.Count(r => r));
     }
 }
