@@ -4,6 +4,19 @@ All notable changes to OrionLock are documented in this file. The format is base
 [Keep a Changelog](https://keepachangelog.com/en/1.0.0/) and this project adheres to
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Added
+
+- `OrionLock.SqlServer` backend using native `sp_getapplock` with session-scope
+  lifetime. The lock is held while the SQL session is alive — a crashed process
+  releases its locks automatically, with no clock-based expiry. `KeyPrefix` and
+  `CommandTimeout` options; combined key length limit of 240 characters
+  (SQL Server `@Resource` is `nvarchar(255)` with a 15-char safety margin).
+- `OrionLockBackendException` for non-contention backend failures (e.g. SQL
+  Server `sp_getapplock` deadlock-victim and validation errors), distinct from
+  `LockAcquisitionTimeoutException`.
+
 ## [0.1.1] - 2026-05-23
 
 ### Changed
