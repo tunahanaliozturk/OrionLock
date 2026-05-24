@@ -35,23 +35,38 @@ auto-renewal, and reentrancy.
 
 New minimalist family-style padlock + Orion-star keyhole logo in indigo line-art. No code changes.
 
+### v0.2.0 — SqlServer backend *(shipped 2026-05-24)*
+
+First piece of the original v0.2.0 scope. The remaining three items (Postgres
+advisory locks, multi-master RedLock, concurrency stress harness) ship as
+follow-up minor releases (0.2.x) rather than landing together.
+
+- **`OrionLock.SqlServer`** backend using `sp_getapplock` — native SQL Server
+  application lock with session-scope lifetime. Crash-safe: lock release is
+  tied to SQL session lifetime, so a crashed process drops its locks
+  automatically (no clock-based expiry). Faster than the generic EF Core
+  lock-table for SQL-Server-only deployments.
+- **`OrionLockBackendException`** for non-contention backend failures
+  (e.g. `sp_getapplock` deadlock-victim, parameter validation), distinct from
+  `LockAcquisitionTimeoutException`.
+
 ---
 
-## v0.2.0 — Multi-master Redis & native DB locks *(planned, Q3 2026)*
+## v0.2.x — Remaining v0.2.0-era work *(planned)*
 
-Address the two largest "explicitly deferred" items from the v0.1.0 spec.
+The three items originally bundled into v0.2.0 now ship as follow-up minor
+versions. Each lands as its own release after its own design/plan cycle.
 
-- **Multi-master RedLock algorithm** as a new opt-in `RedLockDistributedLock` next to the
-  existing single-instance `RedisLockProvider`. Same `IDistributedLockProvider` contract; the
-  difference is correctness under Redis-cluster failover scenarios. Consumers pick per workload.
-- **`OrionLock.SqlServer`** backend using `sp_getapplock` — the native SQL Server application
-  lock primitive, with proper transaction and connection-lifetime semantics. Faster than the
-  generic EF Core lock-table for SQL Server-only deployments.
-- **`OrionLock.Postgres`** backend using PostgreSQL advisory locks (`pg_advisory_lock` /
-  `pg_advisory_xact_lock`). Same rationale as SQL Server.
-- **Concurrency stress harness** — a multi-process integration test that runs N OrionLock
-  instances against a shared backend and asserts mutual exclusion under contention. Catches
-  regressions in the lease/renewal paths.
+- **`OrionLock.Postgres`** backend using PostgreSQL advisory locks
+  (`pg_advisory_lock` / `pg_advisory_xact_lock`). Same crash-safe rationale as
+  SqlServer.
+- **Multi-master RedLock algorithm** as a new opt-in `RedLockDistributedLock`
+  next to the existing single-instance `RedisLockProvider`. Same
+  `IDistributedLockProvider` contract; the difference is correctness under
+  Redis-cluster failover scenarios. Consumers pick per workload.
+- **Concurrency stress harness** — a multi-process integration test that runs
+  N OrionLock instances against a shared backend and asserts mutual exclusion
+  under contention. Catches regressions in the lease/renewal paths.
 
 ---
 
