@@ -42,6 +42,18 @@ foreach (var item in items)
 
 `LeaseLostException` exists for code paths that want to throw rather than poll, but the canonical pattern is `LostToken` passed into cancellable inner work.
 
+## A note on the SqlServer backend
+
+`OrionLock.SqlServer` has the same `IDistributedLockHandle` contract as the
+other backends — `IsHeld` flips and `LostToken` fires when the lease is lost —
+but its underlying lease model is different. There is no clock-based expiry.
+The lock is held while the SQL session that took it is alive, and `LeaseDuration`
+only governs how often the watchdog runs its `SELECT 1` connection health check.
+
+The practical effect: false positives from clock skew between application
+nodes and SQL Server are impossible on this backend. The trade-off is that
+each held lock costs one open SQL connection.
+
 ## Choosing `LeaseDuration`
 
 - **Long enough** that the critical section's worst-case wall-clock fits inside it (otherwise the watchdog's three retries cannot cover transient backend hiccups before expiry).

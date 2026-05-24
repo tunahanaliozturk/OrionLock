@@ -1,0 +1,23 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <PackageId>OrionLock.SqlServer</PackageId>
+    <Description>SQL Server (sp_getapplock) backend for OrionLock distributed locking.</Description>
+    <PackageTags>distributed-lock;sql-server;sp_getapplock;applock;orionlock</PackageTags>
+    <PackageReadmeFile>docs/README.md</PackageReadmeFile>
+    <PackageIcon>docs/logo.png</PackageIcon>
+  </PropertyGroup>
+  <ItemGroup>
+    <PackageReference Include="Microsoft.Data.SqlClient" Version="5.2.2" />
+    <PackageReference Include="Microsoft.Extensions.DependencyInjection.Abstractions" Version="9.0.0" />
+  </ItemGroup>
+  <ItemGroup>
+    <ProjectReference Include="..\Moongazing.OrionLock\Moongazing.OrionLock.csproj" />
+  </ItemGroup>
+  <ItemGroup>
+    <InternalsVisibleTo Include="Moongazing.OrionLock.SqlServer.Tests" />
+  </ItemGroup>
+  <ItemGroup>
+    <None Include="docs/README.md" Pack="true" PackagePath="docs/" />
+    <None Include="docs/logo.png" Pack="true" PackagePath="docs/" />
+  </ItemGroup>
+</Project>
