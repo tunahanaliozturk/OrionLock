@@ -107,4 +107,35 @@ public partial class SqlServerLockProviderTests : IClassFixture<SqlServerContain
         await p.TryAcquireAsync(key, "owner-1", TimeSpan.FromSeconds(30), default);
         Assert.False(await p.TryRenewAsync(key, "owner-2", TimeSpan.FromSeconds(30), default));
     }
+
+    [Fact]
+    public async Task TryRenew_ShouldReturnFalse_AfterConnectionKilled()
+    {
+        using var p = NewProvider();
+        var key = $"k-{Guid.NewGuid():N}";
+
+        await p.TryAcquireAsync(key, "owner-1", TimeSpan.FromSeconds(30), default);
+
+        // Read the SPID of the session that holds the lock.
+        var heldConn = p.GetSessionForTesting("owner-1")!;
+        Assert.NotNull(heldConn);
+        short spid;
+        using (var cmd = heldConn.CreateCommand())
+        {
+            cmd.CommandText = "SELECT @@SPID";
+            spid = (short)(await cmd.ExecuteScalarAsync())!;
+        }
+
+        // From a side connection, kill that session.
+        await using (var killConn = new Microsoft.Data.SqlClient.SqlConnection(fx.ConnectionString))
+        {
+            await killConn.OpenAsync();
+            using var kill = killConn.CreateCommand();
+            kill.CommandText = $"KILL {spid}";
+            await kill.ExecuteNonQueryAsync();
+        }
+
+        // Next renewal must observe the broken session and return false.
+        Assert.False(await p.TryRenewAsync(key, "owner-1", TimeSpan.FromSeconds(30), default));
+    }
 }
