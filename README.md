@@ -68,6 +68,7 @@ Twelve-month forward plan in [ROADMAP.md](ROADMAP.md): v0.2.0 (Q3 2026) multi-ma
 - [OrionKey](https://github.com/tunahanaliozturk/OrionKey) — source-generated strongly-typed IDs
 - [OrionAudit](https://github.com/tunahanaliozturk/OrionAudit) — automatic EF Core change-audit trail
 - [OrionPatch](https://github.com/tunahanaliozturk/OrionPatch) — transactional outbox for EF Core (enqueue inside SaveChanges, dispatch at-least-once through a pluggable sink)
+- [OrionVault](https://github.com/tunahanaliozturk/OrionVault) - column-level transparent data encryption at rest for EF Core
 
 ## License
 
