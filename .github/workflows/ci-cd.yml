@@ -57,6 +57,7 @@ jobs:
           dotnet pack src/Moongazing.OrionLock.Redis/Moongazing.OrionLock.Redis.csproj --no-build --configuration Release -o ./nupkgs
           dotnet pack src/Moongazing.OrionLock.EntityFrameworkCore/Moongazing.OrionLock.EntityFrameworkCore.csproj --no-build --configuration Release -o ./nupkgs
           dotnet pack src/Moongazing.OrionLock.SqlServer/Moongazing.OrionLock.SqlServer.csproj --no-build --configuration Release -o ./nupkgs
+          dotnet pack src/Moongazing.OrionLock.Postgres/Moongazing.OrionLock.Postgres.csproj --no-build --configuration Release -o ./nupkgs
           dotnet pack src/Moongazing.OrionLock.Testing/Moongazing.OrionLock.Testing.csproj --no-build --configuration Release -o ./nupkgs
       - name: Push to NuGet.org
         run: dotnet nuget push "./nupkgs/*.nupkg" --api-key "${{ secrets.NUGET }}" --source https://api.nuget.org/v3/index.json --skip-duplicate

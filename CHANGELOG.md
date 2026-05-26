@@ -4,6 +4,12 @@ All notable changes to OrionLock are documented in this file. The format is base
 [Keep a Changelog](https://keepachangelog.com/en/1.0.0/) and this project adheres to
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.2.3] - 2026-05-26
+
+### Added
+
+- New backend package `OrionLock.Postgres` 0.2.3 using PostgreSQL `pg_try_advisory_lock` for session-scoped advisory locks. Same semantics as `OrionLock.SqlServer`: lock lifetime is the session lifetime; crashed process auto-releases. Configurable `KeyPrefix` and `CommandTimeout`. String keys hashed via SHA-256 to a 64-bit integer (Postgres advisory keys are int64). `Dispose` explicitly calls `pg_advisory_unlock` before returning each held connection to the Npgsql pool, so locks drop deterministically on provider disposal.
+
 ## [0.2.2] - 2026-05-26
 
 ### Fixed
