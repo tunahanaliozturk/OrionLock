@@ -17,6 +17,55 @@
 
 ---
 
+## How it works
+
+The acquire path is a single backend call with a generated lease id; the release path validates ownership before deleting the row so two processes cannot accidentally release each other's locks. Between the two, a watchdog renews the lease at one-third of `LeaseDuration` and trips `handle.LostToken` if renewal fails.
+
+```mermaid
+sequenceDiagram
+    autonumber
+    participant App as Application code
+    participant Lock as DistributedLock
+    participant WD as Renewal watchdog<br/>(per handle)
+    participant BE as Backend<br/>(Redis / Postgres / SqlServer)
+
+    App->>Lock: AcquireAsync("order:42", 30s)
+    Lock->>BE: SET NX PX 30000<br/>(or pg_try_advisory_lock / sp_getapplock)
+    BE-->>Lock: acquired (lease id = G)
+    Lock->>WD: start (renew every 10s)
+    Lock-->>App: handle (IsHeld=true, LostToken open)
+
+    loop while held
+        WD->>BE: renew if owner == G
+        BE-->>WD: ok or lost
+        alt renewal failed
+            WD->>App: cancel LostToken
+        end
+    end
+
+    App->>Lock: handle.DisposeAsync()
+    Lock->>BE: delete if owner == G
+    BE-->>Lock: released
+```
+
+The same pattern fits the "single-instance hosted job" recipe: a background service tries to claim a well-known key on its schedule, runs the work if it wins, and goes back to sleep if another replica got there first. Postgres advisory locks make this especially clean because the lock is auto-released on session end if the holding process crashes.
+
+```mermaid
+flowchart TD
+    Start([Replica wakes on schedule]) --> Try{TryAcquireAsync<br/>'settlement:daily'}
+    Try -- "null (another replica holds it)" --> Skip[Log skipped]
+    Skip --> Sleep[Sleep until next tick]
+    Try -- "handle acquired" --> Run[Run the job body]
+    Run --> Release[Dispose handle<br/>backend releases]
+    Release --> Sleep
+    Sleep --> Start
+
+    classDef skip fill:#fee2e2,stroke:#991b1b,color:#7f1d1d
+    classDef run fill:#dcfce7,stroke:#166534,color:#14532d
+    class Skip,Sleep skip
+    class Run,Release run
+```
+
 ## Quick start
 
 ```bash
@@ -57,6 +106,10 @@ A single `DistributedLock` instance (a DI singleton) re-acquiring a key it alrea
 ## OpenTelemetry
 
 `ActivitySource` and `Meter` named `Moongazing.OrionLock`. Each acquire opens a span tagged with the key and outcome; counters `orionlock.acquisitions`, `orionlock.contentions`, `orionlock.lease.lost`; histogram `orionlock.acquire.duration`.
+
+## Benchmarks
+
+See [benchmarks.md](benchmarks.md) for the BenchmarkDotNet harness in `bench/Moongazing.OrionLock.Benchmarks`, the scenarios it covers (uncontended in-memory acquire/release as the abstraction-cost floor, with Redis and Postgres backends queued for v0.2), and the comparison baselines we report against.
 
 ## Roadmap
 
