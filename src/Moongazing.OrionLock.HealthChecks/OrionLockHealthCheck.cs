@@ -122,23 +122,34 @@ public sealed class OrionLockHealthCheck : IHealthCheck
         }
         catch (OrionLockBackendException ex)
         {
-            OrionLockDiagnostics.RecordHealthCheckResult("unhealthy");
+            // Honor the caller-configured failureStatus on the registration so an operator can
+            // tune backend outages to Degraded (e.g., keep readiness probes from flapping on
+            // transient errors) without forking this code. The metric label tracks the chosen
+            // semantic.
+            OrionLockDiagnostics.RecordHealthCheckResult(FailureMetricLabel(context));
             data["error"] = ex.Message;
             return new HealthCheckResult(
-                HealthStatus.Unhealthy,
+                context.Registration.FailureStatus,
                 description: $"OrionLock backend '{backend}' reported a backend failure.",
                 exception: ex,
                 data: data);
         }
         catch (Exception ex)
         {
-            OrionLockDiagnostics.RecordHealthCheckResult("unhealthy");
+            OrionLockDiagnostics.RecordHealthCheckResult(FailureMetricLabel(context));
             data["error"] = ex.Message;
             return new HealthCheckResult(
-                HealthStatus.Unhealthy,
+                context.Registration.FailureStatus,
                 description: $"OrionLock backend '{backend}' threw '{ex.GetType().Name}' during probe.",
                 exception: ex,
                 data: data);
         }
     }
+
+    private static string FailureMetricLabel(HealthCheckContext context) => context.Registration.FailureStatus switch
+    {
+        HealthStatus.Healthy => "healthy",
+        HealthStatus.Degraded => "degraded",
+        _ => "unhealthy",
+    };
 }

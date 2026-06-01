@@ -12,7 +12,7 @@ services.AddHealthChecks()
             tags: ["ready", "infra"]);
 ```
 
-### Outcomes
+## Outcomes
 
 - **Healthy** - sentinel was acquired and released; backend is reachable.
 - **Degraded** - backend reachable but the sentinel could not be acquired before `WaitTimeout` (likely contention from another probe).

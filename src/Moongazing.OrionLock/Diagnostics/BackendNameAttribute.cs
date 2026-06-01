@@ -14,9 +14,26 @@ public sealed class BackendNameAttribute : Attribute
     public string Name { get; }
 
     /// <summary>Initializes the attribute with the backend identifier.</summary>
+    /// <exception cref="ArgumentException">
+    /// <paramref name="name"/> is null, whitespace, or contains characters other than
+    /// lowercase ASCII letters, digits, hyphen, or underscore. Enforced so the value
+    /// composes cleanly into an OpenTelemetry metric tag without per-backend variance.
+    /// </exception>
     public BackendNameAttribute(string name)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(name);
+        foreach (var ch in name)
+        {
+            var isLowerAsciiLetter = ch is >= 'a' and <= 'z';
+            var isDigit = ch is >= '0' and <= '9';
+            var isAllowedPunctuation = ch is '_' or '-';
+            if (!(isLowerAsciiLetter || isDigit || isAllowedPunctuation))
+            {
+                throw new ArgumentException(
+                    "Backend name must contain only lowercase ASCII letters, digits, '_' or '-'.",
+                    nameof(name));
+            }
+        }
         Name = name;
     }
 }
