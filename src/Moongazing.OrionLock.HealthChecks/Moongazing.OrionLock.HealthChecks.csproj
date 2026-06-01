@@ -1,17 +1,19 @@
 <Project Sdk="Microsoft.NET.Sdk">
   <PropertyGroup>
-    <PackageId>OrionLock</PackageId>
-    <Description>Distributed locking for .NET. A backend-agnostic IDistributedLock with blocking acquire, reentrancy, and background lease auto-renewal. Backends ship separately (OrionLock.Redis, OrionLock.EntityFrameworkCore).</Description>
-    <PackageTags>distributed-lock;redis;redlock;ef-core;locking;concurrency</PackageTags>
+    <PackageId>Moongazing.OrionLock.HealthChecks</PackageId>
+    <Description>IHealthCheck integration for OrionLock distributed locking. Probes backend reachability by acquiring a sentinel lock so container readiness probes fail fast when the lock backend is unreachable.</Description>
+    <PackageTags>health-check;distributed-lock;orion;orionlock</PackageTags>
     <PackageReadmeFile>docs/README.md</PackageReadmeFile>
     <PackageIcon>docs/logo.png</PackageIcon>
   </PropertyGroup>
   <ItemGroup>
+    <PackageReference Include="Microsoft.Extensions.Diagnostics.HealthChecks" Version="9.0.0" />
     <PackageReference Include="Microsoft.Extensions.DependencyInjection.Abstractions" Version="9.0.0" />
   </ItemGroup>
   <ItemGroup>
-    <InternalsVisibleTo Include="Moongazing.OrionLock.Tests" />
-    <InternalsVisibleTo Include="Moongazing.OrionLock.HealthChecks" />
+    <ProjectReference Include="..\Moongazing.OrionLock\Moongazing.OrionLock.csproj" />
+  </ItemGroup>
+  <ItemGroup>
     <InternalsVisibleTo Include="Moongazing.OrionLock.HealthChecks.Tests" />
   </ItemGroup>
   <ItemGroup>
