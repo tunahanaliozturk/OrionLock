@@ -1,5 +1,6 @@
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.DependencyInjection;
+using Moongazing.OrionLock.Diagnostics;
 using Moongazing.OrionLock.Providers;
 
 namespace Moongazing.OrionLock.EntityFrameworkCore;
@@ -8,6 +9,7 @@ namespace Moongazing.OrionLock.EntityFrameworkCore;
 /// EF Core lock-table <see cref="IDistributedLockProvider"/>. Each call resolves a scoped
 /// <see cref="DbContext"/> and runs provider-agnostic SQL against the <c>OrionLock_Locks</c> table.
 /// </summary>
+[BackendName("efcore")]
 public sealed class EfCoreLockProvider : IDistributedLockProvider
 {
     private readonly IServiceScopeFactory scopeFactory;

@@ -3,6 +3,7 @@ using System.Security.Cryptography;
 using System.Text;
 using Npgsql;
 using Moongazing.OrionLock;
+using Moongazing.OrionLock.Diagnostics;
 using Moongazing.OrionLock.Providers;
 
 namespace Moongazing.OrionLock.Postgres;
@@ -12,6 +13,7 @@ namespace Moongazing.OrionLock.Postgres;
 /// Holds one dedicated <see cref="NpgsqlConnection"/> per active lock; the lock lifetime
 /// IS the session lifetime, so a crashed process releases its locks automatically.
 /// </summary>
+[BackendName("postgres")]
 public sealed class PostgresLockProvider : IDistributedLockProvider, IDisposable
 {
     private readonly string connectionString;

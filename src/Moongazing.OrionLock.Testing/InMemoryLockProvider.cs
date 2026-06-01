@@ -1,4 +1,5 @@
 using System.Collections.Concurrent;
+using Moongazing.OrionLock.Diagnostics;
 using Moongazing.OrionLock.Providers;
 
 namespace Moongazing.OrionLock.Testing;
@@ -7,6 +8,7 @@ namespace Moongazing.OrionLock.Testing;
 /// In-process <see cref="IDistributedLockProvider"/> with real lease-expiry semantics, for unit
 /// tests that should not depend on a Redis server or a database.
 /// </summary>
+[BackendName("inmemory")]
 public sealed class InMemoryLockProvider : IDistributedLockProvider
 {
     private sealed record Lease(string OwnerToken, DateTime ExpiresOnUtc);
