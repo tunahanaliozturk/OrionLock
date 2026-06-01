@@ -1,3 +1,4 @@
+using Moongazing.OrionLock.Diagnostics;
 using Moongazing.OrionLock.Providers;
 using StackExchange.Redis;
 
@@ -7,6 +8,7 @@ namespace Moongazing.OrionLock.Redis;
 /// Redis-backed <see cref="IDistributedLockProvider"/>. Acquire is <c>SET key token NX PX</c>;
 /// renew and release are owner-checked Lua scripts (compare-and-extend, compare-and-delete).
 /// </summary>
+[BackendName("redis")]
 public sealed class RedisLockProvider : IDistributedLockProvider
 {
     private const string RenewScript =

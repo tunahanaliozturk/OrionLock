@@ -39,6 +39,10 @@ Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "Moongazing.OrionLock.Postgr
 EndProject
 Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "Moongazing.OrionLock.Postgres.Tests", "tests\Moongazing.OrionLock.Postgres.Tests\Moongazing.OrionLock.Postgres.Tests.csproj", "{E09C9DD7-B85E-47B9-A119-763366B8A726}"
 EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "Moongazing.OrionLock.HealthChecks", "src\Moongazing.OrionLock.HealthChecks\Moongazing.OrionLock.HealthChecks.csproj", "{B6D807EF-1EAC-43C1-8C3E-46C9CC364F04}"
+EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "Moongazing.OrionLock.HealthChecks.Tests", "tests\Moongazing.OrionLock.HealthChecks.Tests\Moongazing.OrionLock.HealthChecks.Tests.csproj", "{68CEA2F1-6423-4143-B7BE-98B219ACB4D1}"
+EndProject
 Global
 	GlobalSection(SolutionConfigurationPlatforms) = preSolution
 		Debug|Any CPU = Debug|Any CPU
@@ -217,6 +221,30 @@ Global
 		{E09C9DD7-B85E-47B9-A119-763366B8A726}.Release|x64.Build.0 = Release|Any CPU
 		{E09C9DD7-B85E-47B9-A119-763366B8A726}.Release|x86.ActiveCfg = Release|Any CPU
 		{E09C9DD7-B85E-47B9-A119-763366B8A726}.Release|x86.Build.0 = Release|Any CPU
+		{B6D807EF-1EAC-43C1-8C3E-46C9CC364F04}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{B6D807EF-1EAC-43C1-8C3E-46C9CC364F04}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{B6D807EF-1EAC-43C1-8C3E-46C9CC364F04}.Debug|x64.ActiveCfg = Debug|Any CPU
+		{B6D807EF-1EAC-43C1-8C3E-46C9CC364F04}.Debug|x64.Build.0 = Debug|Any CPU
+		{B6D807EF-1EAC-43C1-8C3E-46C9CC364F04}.Debug|x86.ActiveCfg = Debug|Any CPU
+		{B6D807EF-1EAC-43C1-8C3E-46C9CC364F04}.Debug|x86.Build.0 = Debug|Any CPU
+		{B6D807EF-1EAC-43C1-8C3E-46C9CC364F04}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{B6D807EF-1EAC-43C1-8C3E-46C9CC364F04}.Release|Any CPU.Build.0 = Release|Any CPU
+		{B6D807EF-1EAC-43C1-8C3E-46C9CC364F04}.Release|x64.ActiveCfg = Release|Any CPU
+		{B6D807EF-1EAC-43C1-8C3E-46C9CC364F04}.Release|x64.Build.0 = Release|Any CPU
+		{B6D807EF-1EAC-43C1-8C3E-46C9CC364F04}.Release|x86.ActiveCfg = Release|Any CPU
+		{B6D807EF-1EAC-43C1-8C3E-46C9CC364F04}.Release|x86.Build.0 = Release|Any CPU
+		{68CEA2F1-6423-4143-B7BE-98B219ACB4D1}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{68CEA2F1-6423-4143-B7BE-98B219ACB4D1}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{68CEA2F1-6423-4143-B7BE-98B219ACB4D1}.Debug|x64.ActiveCfg = Debug|Any CPU
+		{68CEA2F1-6423-4143-B7BE-98B219ACB4D1}.Debug|x64.Build.0 = Debug|Any CPU
+		{68CEA2F1-6423-4143-B7BE-98B219ACB4D1}.Debug|x86.ActiveCfg = Debug|Any CPU
+		{68CEA2F1-6423-4143-B7BE-98B219ACB4D1}.Debug|x86.Build.0 = Debug|Any CPU
+		{68CEA2F1-6423-4143-B7BE-98B219ACB4D1}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{68CEA2F1-6423-4143-B7BE-98B219ACB4D1}.Release|Any CPU.Build.0 = Release|Any CPU
+		{68CEA2F1-6423-4143-B7BE-98B219ACB4D1}.Release|x64.ActiveCfg = Release|Any CPU
+		{68CEA2F1-6423-4143-B7BE-98B219ACB4D1}.Release|x64.Build.0 = Release|Any CPU
+		{68CEA2F1-6423-4143-B7BE-98B219ACB4D1}.Release|x86.ActiveCfg = Release|Any CPU
+		{68CEA2F1-6423-4143-B7BE-98B219ACB4D1}.Release|x86.Build.0 = Release|Any CPU
 	EndGlobalSection
 	GlobalSection(SolutionProperties) = preSolution
 		HideSolutionNode = FALSE
@@ -236,5 +264,7 @@ Global
 		{666A2CD9-1023-4660-9601-19183B51BB8F} = {0AB3BF05-4346-4AA6-1389-037BE0695223}
 		{6E817B80-5EDB-461E-952B-9719AAA8571A} = {827E0CD3-B72D-47B6-A68D-7590B98EB39B}
 		{E09C9DD7-B85E-47B9-A119-763366B8A726} = {0AB3BF05-4346-4AA6-1389-037BE0695223}
+		{B6D807EF-1EAC-43C1-8C3E-46C9CC364F04} = {827E0CD3-B72D-47B6-A68D-7590B98EB39B}
+		{68CEA2F1-6423-4143-B7BE-98B219ACB4D1} = {0AB3BF05-4346-4AA6-1389-037BE0695223}
 	EndGlobalSection
 EndGlobal

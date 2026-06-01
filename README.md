@@ -101,11 +101,16 @@ A single `DistributedLock` instance (a DI singleton) re-acquiring a key it alrea
 - **`OrionLock.Redis`** — `SET NX PX` acquire, owner-checked Lua renew/release. Single Redis endpoint (single-instance lock; multi-master RedLock is post-0.1).
 - **`OrionLock.EntityFrameworkCore`** — provider-agnostic `OrionLock_Locks` table; PostgreSQL, SQL Server, MySQL, SQLite. See [docs/migrations/orionlock-locks-table.md](docs/migrations/orionlock-locks-table.md).
 - **`OrionLock.SqlServer`** — native `sp_getapplock` with session-scope lifetime. Crash-safe (no clock-based expiry; SQL Server releases the lock when the session ends) and faster than the EF Core lock table on SQL Server.
+- **`OrionLock.Postgres`** — native `pg_try_advisory_lock` with session-scope lifetime. Crash-safe with the same rationale as SqlServer.
 - **`OrionLock.Testing`** — in-memory provider for tests, no Redis or DB required.
+
+## Health checks
+
+`Moongazing.OrionLock.HealthChecks` ships an `IHealthCheck` that probes backend reachability by acquiring and releasing a sentinel lock. Register it via `services.AddHealthChecks().AddOrionLockHealthCheck(name: "orionlock", failureStatus: HealthStatus.Degraded, tags: ["ready", "infra"])`. The probe returns `Healthy` on success, `Degraded` when the sentinel is contended within `WaitTimeout`, and `Unhealthy` when the backend throws. Useful for failing fast in container readiness probes when Redis or the database is unreachable.
 
 ## OpenTelemetry
 
-`ActivitySource` and `Meter` named `Moongazing.OrionLock`. Each acquire opens a span tagged with the key and outcome; counters `orionlock.acquisitions`, `orionlock.contentions`, `orionlock.lease.lost`; histogram `orionlock.acquire.duration`.
+`ActivitySource` and `Meter` named `Moongazing.OrionLock`. Each acquire opens a span tagged with the key and outcome. Counters: `orionlock.acquisitions`, `orionlock.contentions`, `orionlock.lease.lost`, `orionlock.health_check.result` (tagged by `result`). Histograms: `orionlock.acquire.duration` (end-to-end blocking-acquire time), `orionlock.acquire.latency` (single backend round-trip, tagged by `backend`), `orionlock.lease_renewal.duration` (per-renewal time, tagged by `backend`). See [docs/lock-key-cardinality.md](docs/lock-key-cardinality.md) before sending high-cardinality lock keys through the meter.
 
 ## Benchmarks
 

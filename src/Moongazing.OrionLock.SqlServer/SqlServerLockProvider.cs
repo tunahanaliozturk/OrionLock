@@ -2,6 +2,7 @@ using System.Collections.Concurrent;
 using System.Data;
 using Microsoft.Data.SqlClient;
 using Moongazing.OrionLock;
+using Moongazing.OrionLock.Diagnostics;
 using Moongazing.OrionLock.Providers;
 
 namespace Moongazing.OrionLock.SqlServer;
@@ -11,6 +12,7 @@ namespace Moongazing.OrionLock.SqlServer;
 /// dedicated <see cref="SqlConnection"/> per active lock — the lock lifetime IS the SQL session
 /// lifetime, so a crashed process releases its locks automatically.
 /// </summary>
+[BackendName("sqlserver")]
 public sealed class SqlServerLockProvider : IDistributedLockProvider, IDisposable
 {
     private const int MaxResourceLength = 240;

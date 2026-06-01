@@ -12,12 +12,49 @@ public static class OrionLockDiagnostics
     /// <summary>The OrionLock meter name.</summary>
     public const string MeterName = "Moongazing.OrionLock";
 
-    internal static readonly ActivitySource ActivitySource = new(ActivitySourceName, "0.1.0");
+    /// <summary>The tag key used to label per-backend metrics with the backend identifier (e.g. <c>redis</c>).</summary>
+    public const string BackendTagName = "backend";
 
-    private static readonly Meter Meter = new(MeterName, "0.1.0");
+    /// <summary>The tag key used to label the health-check result counter (<c>healthy</c>, <c>degraded</c>, <c>unhealthy</c>).</summary>
+    public const string HealthCheckResultTagName = "result";
+
+    internal static readonly ActivitySource ActivitySource = new(ActivitySourceName, "0.3.0");
+
+    private static readonly Meter Meter = new(MeterName, "0.3.0");
 
     internal static readonly Counter<long> Acquisitions = Meter.CreateCounter<long>("orionlock.acquisitions");
     internal static readonly Counter<long> Contentions = Meter.CreateCounter<long>("orionlock.contentions");
     internal static readonly Counter<long> LeasesLost = Meter.CreateCounter<long>("orionlock.lease.lost");
+
+    /// <summary>End-to-end duration of <c>AcquireAsync</c> including wait/retry, in milliseconds.</summary>
     internal static readonly Histogram<double> AcquireDuration = Meter.CreateHistogram<double>("orionlock.acquire.duration");
+
+    /// <summary>
+    /// Duration of a single <see cref="Providers.IDistributedLockProvider.TryAcquireAsync"/> call,
+    /// in milliseconds, tagged with the backend identifier (<c>redis</c>, <c>sqlserver</c>, <c>postgres</c>,
+    /// <c>efcore</c>, <c>inmemory</c>).
+    /// </summary>
+    internal static readonly Histogram<double> AcquireLatency = Meter.CreateHistogram<double>("orionlock.acquire.latency");
+
+    /// <summary>
+    /// Duration of a single lease renewal call in the watchdog, in milliseconds. Useful for spotting
+    /// backend slowdown that could push renewals past <c>LeaseDuration / 3</c>.
+    /// </summary>
+    internal static readonly Histogram<double> LeaseRenewalDuration = Meter.CreateHistogram<double>("orionlock.lease_renewal.duration");
+
+    /// <summary>
+    /// Health-check outcomes for the OrionLock health check, tagged with <c>result</c>
+    /// (<c>healthy</c>, <c>degraded</c>, <c>unhealthy</c>). Incremented on every probe.
+    /// </summary>
+    internal static readonly Counter<long> HealthCheckResult = Meter.CreateCounter<long>("orionlock.health_check.result");
+
+    // Internal accessors so sibling packages (HealthChecks) can record without exposing the Meter publicly.
+    internal static void RecordAcquireLatency(double milliseconds, string backend)
+        => AcquireLatency.Record(milliseconds, new KeyValuePair<string, object?>(BackendTagName, backend));
+
+    internal static void RecordLeaseRenewalDuration(double milliseconds, string backend)
+        => LeaseRenewalDuration.Record(milliseconds, new KeyValuePair<string, object?>(BackendTagName, backend));
+
+    internal static void RecordHealthCheckResult(string result)
+        => HealthCheckResult.Add(1, new KeyValuePair<string, object?>(HealthCheckResultTagName, result));
 }

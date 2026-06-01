@@ -4,6 +4,31 @@ All notable changes to OrionLock are documented in this file. The format is base
 [Keep a Changelog](https://keepachangelog.com/en/1.0.0/) and this project adheres to
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.3.0] - 2026-06-01
+
+### Added
+
+- New package `Moongazing.OrionLock.HealthChecks` 0.3.0 with `AddOrionLockHealthCheck(...)` on `IHealthChecksBuilder`. The check probes the registered `IDistributedLockProvider` by acquiring and releasing a configurable sentinel key (`OrionLockHealthCheckOptions.SentinelKey`, default `orionlock:_healthcheck`) with a short lease (default 2 s) and `WaitTimeout` (default 500 ms). Returns `Healthy` on success, `Degraded` on `LockAcquisitionTimeoutException` or sentinel contention, `Unhealthy` on `OrionLockBackendException` or any other exception with the message surfaced in `Data["error"]`. Intended for container readiness probes that should fail fast when the lock backend is unreachable.
+- Three new instruments on the existing `Moongazing.OrionLock` Meter:
+  - `orionlock.acquire.latency` histogram (milliseconds), tagged with `backend` (`redis`, `sqlserver`, `postgres`, `efcore`, `inmemory`). Measures a single backend `TryAcquireAsync` round-trip and isolates backend latency from the blocking-retry loop that `orionlock.acquire.duration` covers.
+  - `orionlock.lease_renewal.duration` histogram (milliseconds), tagged with `backend`. Wired into the renewal watchdog so spikes that risk pushing renewals past `LeaseDuration / 3` are observable.
+  - `orionlock.health_check.result` counter, tagged with `result` (`healthy`, `degraded`, `unhealthy`), incremented on every health-check probe.
+- New `BackendNameAttribute` and `BackendNameResolver` in `Moongazing.OrionLock.Diagnostics` so providers declare their telemetry identifier as a stable class-level constant. All five bundled providers are annotated.
+- Lock-key cardinality guidance documented at [docs/lock-key-cardinality.md](docs/lock-key-cardinality.md). Lock keys are never used as metric tags by OrionLock; if you wrap OrionLock, follow the same rule.
+
+### Changed
+
+- `AddOrionLock` now transparently wraps the registered `IDistributedLockProvider` in an internal measuring decorator at `IDistributedLock` construction time. The decorator records `orionlock.acquire.latency` and `orionlock.lease_renewal.duration` and passes provider exceptions and return values through unchanged. No public-API change for consumers; backends do not need to opt in.
+
+### Deferred from v0.3.0
+
+- **Optional FIFO waiter queueing for `AcquireAsync`** is deferred to v0.3.1. The blocking-acquire semantics change deserves its own design cycle and a behaviour-change opt-in switch.
+- **`OrionLock.Consul` backend** is deferred to v0.3.2. Third-party SDK integration belongs in its own release alongside the matching design notes.
+
+### Migration
+
+No breaking changes. The HealthChecks package is opt-in - existing applications continue to work unchanged. The three new instruments are emitted automatically on the existing `Moongazing.OrionLock` Meter; consumers already listening on that Meter pick them up without configuration. The internal measuring decorator does not alter `IDistributedLockProvider` semantics or surface.
+
 ## [0.2.3] - 2026-05-26
 
 ### Added
