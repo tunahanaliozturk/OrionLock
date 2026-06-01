@@ -9,4 +9,4 @@ await using var handle = await locker.AcquireAsync("order:42", TimeSpan.FromSeco
 // critical section; handle.LostToken trips if the lease is lost
 ```
 
-Backends ship separately: `OrionLock.Redis`, `OrionLock.EntityFrameworkCore`, `OrionLock.Testing`. See https://github.com/tunahanaliozturk/OrionLock for the full README.
+Backends ship separately: `OrionLock.Redis`, `OrionLock.EntityFrameworkCore`, `OrionLock.SqlServer`, `OrionLock.Postgres`, `OrionLock.Testing`. Container readiness probes can use `Moongazing.OrionLock.HealthChecks`. See https://github.com/tunahanaliozturk/OrionLock for the full README.

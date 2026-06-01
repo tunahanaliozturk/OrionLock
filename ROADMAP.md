@@ -50,16 +50,38 @@ follow-up minor releases (0.2.x) rather than landing together.
   (e.g. `sp_getapplock` deadlock-victim, parameter validation), distinct from
   `LockAcquisitionTimeoutException`.
 
+### v0.2.3 — Postgres backend *(shipped 2026-05-26)*
+
+- **`OrionLock.Postgres`** backend using PostgreSQL `pg_try_advisory_lock`.
+  Session-scope lifetime, same crash-safe rationale as SqlServer. Closes one
+  of the three follow-up items originally bundled into v0.2.0.
+
+### v0.3.0 — HealthChecks + telemetry pass *(shipped 2026-06-01)*
+
+The first release that goes beyond "minimum correct lock" into operational quality. Only the
+HealthChecks package and the telemetry pass ship here; FIFO waiter queueing and the Consul
+backend follow as v0.3.1 and v0.3.2 (see below) because each deserves its own design cycle.
+
+- **`Moongazing.OrionLock.HealthChecks`** package with `AddOrionLockHealthCheck(...)` on
+  `IHealthChecksBuilder`. Probes the registered `IDistributedLockProvider` by acquiring a
+  sentinel lock; returns `Healthy`, `Degraded` (contention or `LockAcquisitionTimeoutException`),
+  or `Unhealthy` (`OrionLockBackendException` or other exception). Sized for container readiness
+  probes.
+- **Richer telemetry on the existing `Moongazing.OrionLock` Meter**:
+  `orionlock.acquire.latency` histogram tagged by backend (single backend round-trip),
+  `orionlock.lease_renewal.duration` histogram tagged by backend (per-renewal),
+  `orionlock.health_check.result` counter tagged by result. Plus a [lock-key cardinality
+  guidance doc](docs/lock-key-cardinality.md) explaining why OrionLock never tags metrics with
+  raw lock keys.
+
 ---
 
 ## v0.2.x — Remaining v0.2.0-era work *(planned)*
 
-The three items originally bundled into v0.2.0 now ship as follow-up minor
-versions. Each lands as its own release after its own design/plan cycle.
+Two of the three items originally bundled into v0.2.0 still ship as follow-up minor versions.
+Postgres advisory locks landed in v0.2.3; multi-master RedLock and the concurrency stress
+harness remain.
 
-- **`OrionLock.Postgres`** backend using PostgreSQL advisory locks
-  (`pg_advisory_lock` / `pg_advisory_xact_lock`). Same crash-safe rationale as
-  SqlServer.
 - **Multi-master RedLock algorithm** as a new opt-in `RedLockDistributedLock`
   next to the existing single-instance `RedisLockProvider`. Same
   `IDistributedLockProvider` contract; the difference is correctness under
@@ -70,18 +92,25 @@ versions. Each lands as its own release after its own design/plan cycle.
 
 ---
 
-## v0.3.0 — Fairness & observability *(planned, Q4 2026)*
+## v0.3.x — Remaining v0.3.0-era work *(planned)*
 
-The first release that goes beyond "minimum correct lock" into operational quality.
+The two items originally bundled into v0.3.0 ship as follow-up minor versions. Each lands as
+its own release after its own design cycle, mirroring the v0.2.x split.
+
+### v0.3.1 — Optional FIFO waiter queueing *(planned)*
 
 - **Optional FIFO waiter queueing** for blocking `AcquireAsync`. The default polling-retry loop
   is unchanged; the new queued mode lets a consumer pay a small per-acquire cost for fair ordering.
-  Disabled by default (would change behaviour for existing callers).
-- **`OrionLock.Consul`** backend — third-party Consul-managed sessions as an `IDistributedLockProvider`.
-- **Health-check helper** — an `IHealthCheck` that surfaces backend reachability so consumers can
-  fail-fast in container probes when the lock backend is unreachable.
-- **Richer telemetry**: lease-renewal histogram, per-backend latency tag, lock-key cardinality
-  guidance in the docs.
+  Disabled by default. Deferred from v0.3.0 because it changes blocking-acquire semantics and
+  deserves a behaviour-change opt-in switch designed against a specific backend's primitives
+  (Redis sorted-set vs. Postgres advisory wait list etc.).
+
+### v0.3.2 — `OrionLock.Consul` backend *(planned)*
+
+- **`OrionLock.Consul`** backend - third-party Consul-managed sessions as an
+  `IDistributedLockProvider`. Deferred from v0.3.0 because it brings the HashiCorp Consul .NET
+  SDK as a new top-level dependency and warrants its own release alongside the matching
+  session-TTL design notes.
 
 ---
 
