@@ -65,14 +65,20 @@ public sealed class DistributedLockHandle : IDistributedLockHandle
                 {
                     return;
                 }
+#pragma warning disable CA1031 // intentional: transient backend faults are recoverable; failure is recorded by MeasuringLockProvider
                 catch
+#pragma warning restore CA1031
                 {
                     // Transient renewal failure (network blip, backend timeout). The failure
                     // counter is recorded by MeasuringLockProvider before the exception bubbles
-                    // up here, so the catch only needs to treat it as renewed=false and let the
-                    // next renewal interval run. The watchdog will trip LostToken on a subsequent
-                    // confirmed loss.
-                    renewed = false;
+                    // up here. The watchdog INTENTIONALLY does not drop the lease on a throw -
+                    // the backend's lease TTL still binds, so on the next interval one of two
+                    // things happens: the renewal succeeds (transient resolved) or the renewal
+                    // returns false (lease confirmed gone). This is what makes the new
+                    // orionlock.lease_renewal.failures counter operationally distinct from
+                    // orionlock.lease.lost: failures measure backend instability, losses only
+                    // increment on confirmed loss. Continue the loop.
+                    continue;
                 }
 
                 if (!renewed)
