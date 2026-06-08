@@ -4,6 +4,27 @@ All notable changes to OrionLock are documented in this file. The format is base
 [Keep a Changelog](https://keepachangelog.com/en/1.0.0/) and this project adheres to
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.3.1] - 2026-06-04
+
+### Added
+
+#### Lease-renewal failure telemetry
+
+- New `orionlock.lease_renewal.failures` counter on the existing `Moongazing.OrionLock` Meter, tagged with `backend`. Distinct from `orionlock.lease.lost`: a renewal call that throws (transient network failure, backend timeout) before the watchdog can confirm the result is recorded as a *failure*; a renewal call that returns false (lease confirmed gone, peer took it, lease expired) continues to record as a *loss*. Lets operators tell "backend is unstable but the lease is still ours" apart from "we lost the lease".
+- `MeasuringLockProvider.TryRenewAsync` records the failure counter and re-throws so the watchdog observes the original exception unchanged. The watchdog's catch now only treats the throw as renewed=false and lets the next renewal interval run.
+- `OrionLockDiagnostics.ActivitySource` and `Meter` versions bumped to `0.3.1`.
+
+### Deferred
+
+Remaining v0.3.x items from the original 0.3.0 plan continue with their previously published targets:
+
+- Optional FIFO waiter queueing -> v0.3.2.
+- `OrionLock.Consul` backend -> v0.3.3.
+
+### Migration from v0.3.0
+
+Source-compatible. No DI registration changes. The new counter starts emitting on adopt without configuration.
+
 ## [0.3.0] - 2026-06-01
 
 ### Added

@@ -18,9 +18,9 @@ public static class OrionLockDiagnostics
     /// <summary>The tag key used to label the health-check result counter (<c>healthy</c>, <c>degraded</c>, <c>unhealthy</c>).</summary>
     public const string HealthCheckResultTagName = "result";
 
-    internal static readonly ActivitySource ActivitySource = new(ActivitySourceName, "0.3.0");
+    internal static readonly ActivitySource ActivitySource = new(ActivitySourceName, "0.3.1");
 
-    private static readonly Meter Meter = new(MeterName, "0.3.0");
+    private static readonly Meter Meter = new(MeterName, "0.3.1");
 
     internal static readonly Counter<long> Acquisitions = Meter.CreateCounter<long>("orionlock.acquisitions");
     internal static readonly Counter<long> Contentions = Meter.CreateCounter<long>("orionlock.contentions");
@@ -43,6 +43,16 @@ public static class OrionLockDiagnostics
     internal static readonly Histogram<double> LeaseRenewalDuration = Meter.CreateHistogram<double>("orionlock.lease_renewal.duration");
 
     /// <summary>
+    /// Number of transient lease-renewal failures, tagged with <c>backend</c>. Distinct from
+    /// <see cref="LeasesLost"/>: a renewal call that throws (network blip, backend timeout) before
+    /// the watchdog can confirm the result is recorded here; a renewal call that successfully
+    /// reports the lease is gone (peer took it, lease expired) records <see cref="LeasesLost"/>.
+    /// Useful for spotting backend instability that has not yet cost real availability because
+    /// the next renewal attempt succeeded.
+    /// </summary>
+    internal static readonly Counter<long> LeaseRenewalFailures = Meter.CreateCounter<long>("orionlock.lease_renewal.failures");
+
+    /// <summary>
     /// Health-check outcomes for the OrionLock health check, tagged with <c>result</c>
     /// (<c>healthy</c>, <c>degraded</c>, <c>unhealthy</c>). Incremented on every probe.
     /// </summary>
@@ -54,6 +64,9 @@ public static class OrionLockDiagnostics
 
     internal static void RecordLeaseRenewalDuration(double milliseconds, string backend)
         => LeaseRenewalDuration.Record(milliseconds, new KeyValuePair<string, object?>(BackendTagName, backend));
+
+    internal static void RecordLeaseRenewalFailure(string backend)
+        => LeaseRenewalFailures.Add(1, new KeyValuePair<string, object?>(BackendTagName, backend));
 
     internal static void RecordHealthCheckResult(string result)
         => HealthCheckResult.Add(1, new KeyValuePair<string, object?>(HealthCheckResultTagName, result));

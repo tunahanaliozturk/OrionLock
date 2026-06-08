@@ -49,6 +49,17 @@ internal sealed class MeasuringLockProvider : IDistributedLockProvider
         {
             return await inner.TryRenewAsync(key, ownerToken, leaseDuration, cancellationToken).ConfigureAwait(false);
         }
+        catch (OperationCanceledException)
+        {
+            throw;
+        }
+#pragma warning disable CA1031 // we re-throw after recording the metric, so the consumer still sees the original failure
+        catch
+#pragma warning restore CA1031
+        {
+            OrionLockDiagnostics.RecordLeaseRenewalFailure(backendName);
+            throw;
+        }
         finally
         {
             OrionLockDiagnostics.RecordLeaseRenewalDuration(sw.Elapsed.TotalMilliseconds, backendName);
