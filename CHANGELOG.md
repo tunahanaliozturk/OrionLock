@@ -4,6 +4,34 @@ All notable changes to OrionLock are documented in this file. The format is base
 [Keep a Changelog](https://keepachangelog.com/en/1.0.0/) and this project adheres to
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.3.2] - 2026-06-09
+
+### Added
+
+#### Optional FIFO waiter coordination (contract + in-process implementation)
+
+- **`IFifoWaiterCoordinator`** in `Moongazing.OrionLock.Fairness`. Two methods: `EnterAsync(key, ct)` returns an `IFifoWaiterTicket` when the caller reaches the head of the per-key queue; `LeaveAsync(ticket, ct)` pops the head so the next waiter unblocks. Catches the "thundering herd attempts AcquireAsync, last-arrived first-served polling race" failure mode without forcing every consumer to write their own coordination.
+- **`NullFifoWaiterCoordinator`** default registration. Every `EnterAsync` completes immediately with a no-op ticket - byte-for-byte v0.3.1 behaviour, so consumers see no change unless they wire an alternate implementation.
+- **`InProcessFifoWaiterCoordinator`** single-process implementation backed by a `ConcurrentDictionary<string, Queue<TaskCompletionSource>>`. Tickets are issued and dequeued in arrival order per key; cancelled non-head waiters self-skip on dequeue so a cancellation does not stall the queue. Different keys do not contend.
+- `OrionLockDiagnostics.ActivitySource` and `Meter` versions bumped to `0.3.2`.
+
+### Deferred to v0.3.3
+
+- Wiring `IFifoWaiterCoordinator` into `DistributedLockOptions` and the `AcquireAsync` retry loop. v0.3.2 ships the contract + implementation so distributed (cross-process) backends - Redis sorted-set queueing, ZooKeeper ephemeral nodes - can land in v0.3.3 without changing the public interface.
+- `OrionLock.Consul` backend continues to target v0.3.4 (renamed from v0.3.3 because the FIFO integration takes that slot).
+
+`ROADMAP.md` reflects the new sequence.
+
+### Migration from v0.3.1
+
+Source-compatible. The new interface and implementations are additive; no DI changes are required to stay on v0.3.1 behaviour. Pre-register an alternate coordinator if you want to start measuring the contract today:
+
+```csharp
+services.AddSingleton<IFifoWaiterCoordinator, InProcessFifoWaiterCoordinator>();
+```
+
+The default `AcquireAsync` retry path does not yet consult the coordinator; integration ships in v0.3.3.
+
 ## [0.3.1] - 2026-06-04
 
 ### Added
