@@ -67,6 +67,11 @@ public sealed class DistributedLockHandle : IDistributedLockHandle
                 }
                 catch
                 {
+                    // Transient renewal failure (network blip, backend timeout). The failure
+                    // counter is recorded by MeasuringLockProvider before the exception bubbles
+                    // up here, so the catch only needs to treat it as renewed=false and let the
+                    // next renewal interval run. The watchdog will trip LostToken on a subsequent
+                    // confirmed loss.
                     renewed = false;
                 }
 
