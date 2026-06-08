@@ -97,20 +97,25 @@ harness remain.
 The two items originally bundled into v0.3.0 ship as follow-up minor versions. Each lands as
 its own release after its own design cycle, mirroring the v0.2.x split.
 
-### v0.3.1 — Optional FIFO waiter queueing *(planned)*
+### v0.3.1 — Lease-renewal failure telemetry *(shipped 2026-06-04)*
 
-- **Optional FIFO waiter queueing** for blocking `AcquireAsync`. The default polling-retry loop
-  is unchanged; the new queued mode lets a consumer pay a small per-acquire cost for fair ordering.
-  Disabled by default. Deferred from v0.3.0 because it changes blocking-acquire semantics and
-  deserves a behaviour-change opt-in switch designed against a specific backend's primitives
-  (Redis sorted-set vs. Postgres advisory wait list etc.).
+Smaller piece of the original v0.3.0 deferral. Splits the `lease.lost` counter into a distinct `lease_renewal.failures` counter; the watchdog continues on exception instead of dropping the lease.
 
-### v0.3.2 — `OrionLock.Consul` backend *(planned)*
+### v0.3.2 — FIFO waiter coordination contract *(shipped 2026-06-09)*
+
+Ships `IFifoWaiterCoordinator` + `NullFifoWaiterCoordinator` default + `InProcessFifoWaiterCoordinator` single-process implementation. Integration into `DistributedLockOptions` and the `AcquireAsync` retry loop stages to v0.3.3 so distributed (cross-process) backends can land without source-breaking the public interface.
+
+### v0.3.3 — FIFO waiter coordination wiring *(planned, retargeted from original v0.3.1)*
+
+- Wires `IFifoWaiterCoordinator` into the `AcquireAsync` retry loop behind a new
+  `DistributedLockOptions.FifoWaiterCoordinator` opt-in. Adds the first distributed backend
+  (Redis sorted-set queueing). Disabled by default; consumers opt in per options instance.
+
+### v0.3.4 — `OrionLock.Consul` backend *(planned, retargeted from v0.3.2)*
 
 - **`OrionLock.Consul`** backend - third-party Consul-managed sessions as an
-  `IDistributedLockProvider`. Deferred from v0.3.0 because it brings the HashiCorp Consul .NET
-  SDK as a new top-level dependency and warrants its own release alongside the matching
-  session-TTL design notes.
+  `IDistributedLockProvider`. Brings the HashiCorp Consul .NET SDK as a new top-level
+  dependency and warrants its own release alongside the matching session-TTL design notes.
 
 ---
 
