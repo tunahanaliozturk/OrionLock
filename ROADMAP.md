@@ -105,13 +105,20 @@ Smaller piece of the original v0.3.0 deferral. Splits the `lease.lost` counter i
 
 Ships `IFifoWaiterCoordinator` + `NullFifoWaiterCoordinator` default + `InProcessFifoWaiterCoordinator` single-process implementation. Integration into `DistributedLockOptions` and the `AcquireAsync` retry loop stages to v0.3.3 so distributed (cross-process) backends can land without source-breaking the public interface.
 
-### v0.3.3 — FIFO waiter coordination wiring *(planned, retargeted from original v0.3.1)*
+### v0.3.3 — FIFO waiter coordination wiring *(shipped 2026-06-09)*
 
-- Wires `IFifoWaiterCoordinator` into the `AcquireAsync` retry loop behind a new
-  `DistributedLockOptions.FifoWaiterCoordinator` opt-in. Adds the first distributed backend
-  (Redis sorted-set queueing). Disabled by default; consumers opt in per options instance.
+- Wires `IFifoWaiterCoordinator` into the `AcquireAsync` retry loop behind the new `DistributedLockOptions.UseFifoWaiterCoordinator` opt-in flag (default `false`).
+- `DistributedLock` constructor gains optional `IFifoWaiterCoordinator` parameter; positional callers of the v0.3.2 single-arg constructor still compile.
+- `AddOrionLock()` registers `NullFifoWaiterCoordinator` via `TryAddSingleton`; consumers replace it with `InProcessFifoWaiterCoordinator` (or a future distributed implementation) before the call.
+- `TryAcquireAsync` deliberately bypasses the coordinator; opt-in fairness applies only to blocking `AcquireAsync`.
 
-### v0.3.4 — `OrionLock.Consul` backend *(planned, retargeted from v0.3.2)*
+### v0.3.4 — Distributed FIFO backend *(planned, retargeted from v0.3.3 distributed-backend slot)*
+
+- First distributed (cross-process) `IFifoWaiterCoordinator` implementation backed by Redis
+  sorted-set queueing. Plugs into the v0.3.3 wiring without source-breaking the public
+  interface.
+
+### v0.3.5 — `OrionLock.Consul` backend *(planned, retargeted from v0.3.4)*
 
 - **`OrionLock.Consul`** backend - third-party Consul-managed sessions as an
   `IDistributedLockProvider`. Brings the HashiCorp Consul .NET SDK as a new top-level
