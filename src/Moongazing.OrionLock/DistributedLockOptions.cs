@@ -14,4 +14,18 @@ public sealed class DistributedLockOptions
 
     /// <summary>When true, a background watchdog re-extends the lease while the handle is alive. Default true.</summary>
     public bool AutoRenew { get; set; } = true;
+
+    /// <summary>
+    /// When <see langword="true"/>, <see cref="IDistributedLock.AcquireAsync"/> consults the
+    /// registered <see cref="Fairness.IFifoWaiterCoordinator"/> so callers acquire the lock in
+    /// arrival order under contention rather than racing on the polling-retry loop. Default
+    /// <see langword="false"/> preserves v0.3.2 behaviour. The coordinator is consulted only
+    /// during blocking <c>AcquireAsync</c>; non-blocking <c>TryAcquireAsync</c> bypasses it.
+    /// </summary>
+    /// <remarks>
+    /// Honours the registered DI <see cref="Fairness.IFifoWaiterCoordinator"/> implementation.
+    /// In-process coordination ships with <see cref="Fairness.InProcessFifoWaiterCoordinator"/>;
+    /// distributed (cross-process) backends are on the v0.3.x roadmap.
+    /// </remarks>
+    public bool UseFifoWaiterCoordinator { get; set; }
 }

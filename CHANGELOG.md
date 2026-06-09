@@ -4,6 +4,39 @@ All notable changes to OrionLock are documented in this file. The format is base
 [Keep a Changelog](https://keepachangelog.com/en/1.0.0/) and this project adheres to
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.3.3] - 2026-06-09
+
+### Added
+
+#### FIFO waiter coordinator wiring into `AcquireAsync`
+
+Completes the v0.3.2 contract by integrating `IFifoWaiterCoordinator` into the blocking-acquire retry loop. Consumers who registered an alternate coordinator in v0.3.2 saw no behaviour change yet; v0.3.3 enables it via an explicit opt-in.
+
+- **`DistributedLockOptions.UseFifoWaiterCoordinator`** new bool, default `false`. When `true`, `AcquireAsync(key, options)` consults the registered coordinator before entering the polling-retry loop and releases the ticket in a `finally` so timeouts and cancellations do not strand subsequent waiters.
+- **`DistributedLock` constructor** gains an optional `IFifoWaiterCoordinator` parameter (defaulting to `NullFifoWaiterCoordinator`). Positional callers of the v0.3.2 single-arg constructor still compile.
+- **DI**: `AddOrionLock()` now `TryAddSingleton<IFifoWaiterCoordinator, NullFifoWaiterCoordinator>()`, so consumers opt in by registering `InProcessFifoWaiterCoordinator` (or a distributed implementation) before that call.
+- **Non-blocking path unchanged**: `TryAcquireAsync` deliberately bypasses the coordinator. Opt-in fairness applies only to the blocking `AcquireAsync` contract.
+- `OrionLockDiagnostics.ActivitySource` and `Meter` versions bumped to `0.3.3`.
+
+### Deferred
+
+- Distributed (cross-process) FIFO backend (Redis sorted-set queueing) -> v0.3.4 (renamed from v0.3.4 Consul which slides to v0.3.5)
+- `OrionLock.Consul` backend -> v0.3.5 (was v0.3.4)
+
+### Migration from v0.3.2
+
+Source-compatible. Default behaviour unchanged. Opt in per acquire:
+
+```csharp
+services.AddSingleton<IFifoWaiterCoordinator, InProcessFifoWaiterCoordinator>();
+services.AddOrionLock().UseRedis(/* ... */);
+
+await lock.AcquireAsync(key, new DistributedLockOptions
+{
+    UseFifoWaiterCoordinator = true,
+});
+```
+
 ## [0.3.2] - 2026-06-09
 
 ### Added

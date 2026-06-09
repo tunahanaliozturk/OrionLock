@@ -1,5 +1,6 @@
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.DependencyInjection.Extensions;
+using Moongazing.OrionLock.Fairness;
 using Moongazing.OrionLock.Internal;
 using Moongazing.OrionLock.Providers;
 
@@ -22,11 +23,17 @@ public static class ServiceCollectionExtensions
     {
         ArgumentNullException.ThrowIfNull(services);
 
+        // Default fairness coordinator: no-op (preserves v0.3.2 behaviour). Consumers replace
+        // with InProcessFifoWaiterCoordinator (or a future distributed implementation) before
+        // calling AddOrionLock to enable FIFO ordering via DistributedLockOptions.UseFifoWaiterCoordinator.
+        services.TryAddSingleton<IFifoWaiterCoordinator, NullFifoWaiterCoordinator>();
+
         services.TryAddSingleton<IDistributedLock>(sp =>
         {
             var raw = sp.GetRequiredService<IDistributedLockProvider>();
             var measured = raw is MeasuringLockProvider ? raw : new MeasuringLockProvider(raw);
-            return new DistributedLock(measured);
+            var fifo = sp.GetRequiredService<IFifoWaiterCoordinator>();
+            return new DistributedLock(measured, fifo);
         });
 
         return new OrionLockBuilder(services);
