@@ -12,13 +12,27 @@ namespace Moongazing.OrionLock;
 public sealed class DistributedLock : IDistributedLock
 {
     private readonly IDistributedLockProvider provider;
+    private readonly Fairness.IFifoWaiterCoordinator fifoCoordinator;
     private readonly ReentrancyRegistry reentrancy = new();
 
     /// <summary>Creates a lock over the given backend provider.</summary>
     public DistributedLock(IDistributedLockProvider provider)
+        : this(provider, fifoCoordinator: null)
+    {
+    }
+
+    /// <summary>
+    /// Creates a lock over the given backend provider with an optional FIFO waiter
+    /// coordinator (v0.3.3). When <paramref name="fifoCoordinator"/> is null, a
+    /// <see cref="Fairness.NullFifoWaiterCoordinator"/> is used so v0.3.2 behaviour is
+    /// preserved unless the consumer opts in via
+    /// <see cref="DistributedLockOptions.UseFifoWaiterCoordinator"/>.
+    /// </summary>
+    public DistributedLock(IDistributedLockProvider provider, Fairness.IFifoWaiterCoordinator? fifoCoordinator)
     {
         ArgumentNullException.ThrowIfNull(provider);
         this.provider = provider;
+        this.fifoCoordinator = fifoCoordinator ?? new Fairness.NullFifoWaiterCoordinator();
     }
 
     /// <inheritdoc />
@@ -58,27 +72,46 @@ public sealed class DistributedLock : IDistributedLock
         using var activity = OrionLockDiagnostics.ActivitySource.StartActivity($"OrionLock.Acquire {key}");
         activity?.SetTag("orionlock.key", key);
 
-        var deadline = Stopwatch.StartNew();
-        while (true)
+        // v0.3.3: opt-in FIFO ordering. When enabled, the caller waits for its turn at the
+        // head of the per-key queue BEFORE entering the polling-retry loop. LeaveAsync runs
+        // in a finally so a thrown timeout / cancellation does not strand subsequent waiters.
+        Fairness.IFifoWaiterTicket? ticket = null;
+        if (options.UseFifoWaiterCoordinator)
         {
-            var handle = await TryAcquireAsync(key, options, cancellationToken).ConfigureAwait(false);
-            if (handle is not null)
+            ticket = await fifoCoordinator.EnterAsync(key, cancellationToken).ConfigureAwait(false);
+        }
+
+        try
+        {
+            var deadline = Stopwatch.StartNew();
+            while (true)
             {
-                activity?.SetTag("orionlock.outcome", "acquired");
-                OrionLockDiagnostics.Acquisitions.Add(1);
-                OrionLockDiagnostics.AcquireDuration.Record(deadline.Elapsed.TotalMilliseconds);
-                return handle;
+                var handle = await TryAcquireAsync(key, options, cancellationToken).ConfigureAwait(false);
+                if (handle is not null)
+                {
+                    activity?.SetTag("orionlock.outcome", "acquired");
+                    OrionLockDiagnostics.Acquisitions.Add(1);
+                    OrionLockDiagnostics.AcquireDuration.Record(deadline.Elapsed.TotalMilliseconds);
+                    return handle;
+                }
+
+                OrionLockDiagnostics.Contentions.Add(1);
+
+                if (deadline.Elapsed >= options.WaitTimeout)
+                {
+                    activity?.SetTag("orionlock.outcome", "timeout");
+                    throw new LockAcquisitionTimeoutException(key, deadline.Elapsed);
+                }
+
+                await Task.Delay(options.RetryInterval, cancellationToken).ConfigureAwait(false);
             }
-
-            OrionLockDiagnostics.Contentions.Add(1);
-
-            if (deadline.Elapsed >= options.WaitTimeout)
+        }
+        finally
+        {
+            if (ticket is not null)
             {
-                activity?.SetTag("orionlock.outcome", "timeout");
-                throw new LockAcquisitionTimeoutException(key, deadline.Elapsed);
+                await fifoCoordinator.LeaveAsync(ticket, CancellationToken.None).ConfigureAwait(false);
             }
-
-            await Task.Delay(options.RetryInterval, cancellationToken).ConfigureAwait(false);
         }
     }
 
