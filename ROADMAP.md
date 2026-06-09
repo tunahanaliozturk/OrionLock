@@ -112,11 +112,11 @@ Ships `IFifoWaiterCoordinator` + `NullFifoWaiterCoordinator` default + `InProces
 - `AddOrionLock()` registers `NullFifoWaiterCoordinator` via `TryAddSingleton`; consumers replace it with `InProcessFifoWaiterCoordinator` (or a future distributed implementation) before the call.
 - `TryAcquireAsync` deliberately bypasses the coordinator; opt-in fairness applies only to blocking `AcquireAsync`.
 
-### v0.3.4 — Distributed FIFO backend *(planned, retargeted from v0.3.3 distributed-backend slot)*
+### v0.3.4 — Distributed FIFO backend *(shipped 2026-06-09)*
 
-- First distributed (cross-process) `IFifoWaiterCoordinator` implementation backed by Redis
-  sorted-set queueing. Plugs into the v0.3.3 wiring without source-breaking the public
-  interface.
+- **`RedisFifoWaiterCoordinator`** ships in the existing `Moongazing.OrionLock.Redis` package. Sorted-set per lock key, score = arrival epoch ms; `EnterAsync` polls `ZRANGE 0 0`, `LeaveAsync` issues `ZREM`. Cancellation removes the caller from the queue so it does not block waiters behind it.
+- `RedisFifoWaiterOptions` (KeyPrefix, PollInterval, WaiterTtl, Database) + `OrionLockBuilder.UseRedisFifoWaiterCoordinator()` DI helper.
+- Stale-waiter pruning by score on every Enter / Leave call so crashed processes do not block the queue indefinitely.
 
 ### v0.3.5 — `OrionLock.Consul` backend *(planned, retargeted from v0.3.4)*
 
