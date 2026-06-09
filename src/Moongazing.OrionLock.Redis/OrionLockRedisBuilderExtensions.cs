@@ -1,6 +1,7 @@
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.DependencyInjection.Extensions;
 using Moongazing.OrionLock.DependencyInjection;
+using Moongazing.OrionLock.Fairness;
 using Moongazing.OrionLock.Providers;
 using StackExchange.Redis;
 
@@ -38,6 +39,28 @@ public static class OrionLockRedisBuilderExtensions
 
         builder.Services.TryAddSingleton<IDistributedLockProvider>(
             sp => new RedisLockProvider(sp.GetRequiredService<IConnectionMultiplexer>(), options));
+
+        return builder;
+    }
+
+    /// <summary>
+    /// Register the <see cref="RedisFifoWaiterCoordinator"/> as the distributed
+    /// <see cref="IFifoWaiterCoordinator"/> (v0.3.4). Replaces any previously-registered
+    /// coordinator (including the default <c>NullFifoWaiterCoordinator</c> wired by
+    /// <c>AddOrionLock</c>). Consumers still opt in per-acquire via
+    /// <c>DistributedLockOptions.UseFifoWaiterCoordinator = true</c>.
+    /// </summary>
+    public static OrionLockBuilder UseRedisFifoWaiterCoordinator(
+        this OrionLockBuilder builder, Action<RedisFifoWaiterOptions>? configure = null)
+    {
+        ArgumentNullException.ThrowIfNull(builder);
+
+        var options = new RedisFifoWaiterOptions();
+        configure?.Invoke(options);
+
+        builder.Services.RemoveAll<IFifoWaiterCoordinator>();
+        builder.Services.AddSingleton<IFifoWaiterCoordinator>(
+            sp => new RedisFifoWaiterCoordinator(sp.GetRequiredService<IConnectionMultiplexer>(), options));
 
         return builder;
     }
