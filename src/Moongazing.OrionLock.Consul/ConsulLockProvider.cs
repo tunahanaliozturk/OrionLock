@@ -21,11 +21,13 @@ public sealed class ConsulLockProvider : IDistributedLockProvider
     private readonly IConsulClientAdapter consul;
     private readonly ConsulLockOptions options;
 
-    // ownerToken -> sessionId. Each owner gets one session per active lock so renew/release
-    // can find the matching Consul session without re-creating it. Keyed by ownerToken
-    // because the OrionLock core mints a fresh token per acquire so the cardinality is
-    // bounded by active locks per process.
-    private readonly ConcurrentDictionary<string, string> ownerToSession = new(StringComparer.Ordinal);
+    // (ownerToken, key) -> sessionId. Each acquire mints a fresh ownerToken, so in normal
+    // OrionLock usage one ownerToken maps to one key; but the contract permits callers to
+    // present the same ownerToken for different keys, and using the token alone would let
+    // a Release for key A destroy a session that holds key B. Keying on (token, key)
+    // ensures Renew and Release only touch the session whose original Acquire matched both.
+    private readonly ConcurrentDictionary<(string Owner, string Key), string> ownerKeyToSession =
+        new();
 
     /// <summary>Construct over a Consul adapter (production wires DefaultConsulClientAdapter).</summary>
     public ConsulLockProvider(IConsulClientAdapter consul, ConsulLockOptions? options = null)
@@ -48,20 +50,43 @@ public sealed class ConsulLockProvider : IDistributedLockProvider
         ArgumentException.ThrowIfNullOrWhiteSpace(ownerToken);
 
         var ttl = SessionTtl(leaseDuration);
-        var sessionId = await consul.CreateSessionAsync(ttl, options.SessionBehavior, cancellationToken)
+        var sessionId = await consul.CreateSessionAsync(ttl, options.SessionBehavior, options.LockDelay, cancellationToken)
             .ConfigureAwait(false);
 
-        var acquired = await consul.KvAcquireAsync(FullKey(key), ownerToken, sessionId, cancellationToken)
-            .ConfigureAwait(false);
+        bool acquired;
+        try
+        {
+            acquired = await consul.KvAcquireAsync(FullKey(key), ownerToken, sessionId, cancellationToken)
+                .ConfigureAwait(false);
+        }
+        catch
+        {
+            // Any failure between CreateSession and KvAcquire MUST destroy the orphan session
+            // so we do not leak the lease on the Consul server. CancellationToken.None is
+            // deliberate: cleanup runs even if the outer call was cancelled.
+            await consul.DestroySessionAsync(sessionId, CancellationToken.None).ConfigureAwait(false);
+            throw;
+        }
+
         if (!acquired)
         {
-            // Lost the race; release the orphan session so we don't leak holds on the Consul
-            // server.
             await consul.DestroySessionAsync(sessionId, CancellationToken.None).ConfigureAwait(false);
             return false;
         }
 
-        ownerToSession[ownerToken] = sessionId;
+        try
+        {
+            ownerKeyToSession[(ownerToken, key)] = sessionId;
+        }
+        catch
+        {
+            // Same protection if the mapping store throws (e.g. OOM). Release the KV lock
+            // and destroy the session so we do not strand state in Consul that the local
+            // process cannot recover.
+            await consul.KvReleaseAsync(FullKey(key), sessionId, CancellationToken.None).ConfigureAwait(false);
+            await consul.DestroySessionAsync(sessionId, CancellationToken.None).ConfigureAwait(false);
+            throw;
+        }
         return true;
     }
 
@@ -69,11 +94,12 @@ public sealed class ConsulLockProvider : IDistributedLockProvider
     public async Task<bool> TryRenewAsync(
         string key, string ownerToken, TimeSpan leaseDuration, CancellationToken cancellationToken)
     {
+        ArgumentException.ThrowIfNullOrWhiteSpace(key);
         ArgumentException.ThrowIfNullOrWhiteSpace(ownerToken);
 
-        if (!ownerToSession.TryGetValue(ownerToken, out var sessionId))
+        if (!ownerKeyToSession.TryGetValue((ownerToken, key), out var sessionId))
         {
-            // We never held this lock - or the session was already destroyed.
+            // We never held this (owner, key) pair - or the session was already destroyed.
             return false;
         }
 
@@ -81,8 +107,8 @@ public sealed class ConsulLockProvider : IDistributedLockProvider
         if (!renewed)
         {
             // Consul reports the session is gone; lease is lost. Drop our local mapping so a
-            // subsequent renew doesn't spam the dead session id.
-            ownerToSession.TryRemove(ownerToken, out _);
+            // subsequent renew does not spam the dead session id.
+            ownerKeyToSession.TryRemove((ownerToken, key), out _);
         }
         return renewed;
     }
@@ -90,9 +116,10 @@ public sealed class ConsulLockProvider : IDistributedLockProvider
     /// <inheritdoc />
     public async Task ReleaseAsync(string key, string ownerToken, CancellationToken cancellationToken)
     {
+        ArgumentException.ThrowIfNullOrWhiteSpace(key);
         ArgumentException.ThrowIfNullOrWhiteSpace(ownerToken);
 
-        if (!ownerToSession.TryRemove(ownerToken, out var sessionId))
+        if (!ownerKeyToSession.TryRemove((ownerToken, key), out var sessionId))
         {
             return;
         }

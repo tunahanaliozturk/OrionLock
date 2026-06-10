@@ -20,7 +20,7 @@ public sealed class ConsulLockProviderTests
     {
         var (adapter, sut) = NewProvider();
         adapter.Setup(a => a.CreateSessionAsync(
-                It.IsAny<TimeSpan>(), It.IsAny<string>(), It.IsAny<CancellationToken>()))
+                It.IsAny<TimeSpan>(), It.IsAny<string>(), It.IsAny<TimeSpan>(), It.IsAny<CancellationToken>()))
             .ReturnsAsync("session-1");
         adapter.Setup(a => a.KvAcquireAsync(
                 "orionlock/k", "owner-1", "session-1", It.IsAny<CancellationToken>()))
@@ -29,7 +29,7 @@ public sealed class ConsulLockProviderTests
         var acquired = await sut.TryAcquireAsync("k", "owner-1", Lease, CancellationToken.None);
 
         Assert.True(acquired);
-        adapter.Verify(a => a.CreateSessionAsync(Lease, "release", It.IsAny<CancellationToken>()), Times.Once);
+        adapter.Verify(a => a.CreateSessionAsync(Lease, "release", TimeSpan.Zero, It.IsAny<CancellationToken>()), Times.Once);
         adapter.Verify(a => a.KvAcquireAsync("orionlock/k", "owner-1", "session-1", It.IsAny<CancellationToken>()), Times.Once);
     }
 
@@ -38,7 +38,7 @@ public sealed class ConsulLockProviderTests
     {
         var (adapter, sut) = NewProvider();
         adapter.Setup(a => a.CreateSessionAsync(
-                It.IsAny<TimeSpan>(), It.IsAny<string>(), It.IsAny<CancellationToken>()))
+                It.IsAny<TimeSpan>(), It.IsAny<string>(), It.IsAny<TimeSpan>(), It.IsAny<CancellationToken>()))
             .ReturnsAsync("session-x");
         adapter.Setup(a => a.KvAcquireAsync(
                 It.IsAny<string>(), It.IsAny<string>(), It.IsAny<string>(), It.IsAny<CancellationToken>()))
@@ -55,7 +55,7 @@ public sealed class ConsulLockProviderTests
     {
         var (adapter, sut) = NewProvider(new ConsulLockOptions { MinSessionTtl = TimeSpan.FromSeconds(15) });
         adapter.Setup(a => a.CreateSessionAsync(
-                It.IsAny<TimeSpan>(), It.IsAny<string>(), It.IsAny<CancellationToken>()))
+                It.IsAny<TimeSpan>(), It.IsAny<string>(), It.IsAny<TimeSpan>(), It.IsAny<CancellationToken>()))
             .ReturnsAsync("session-1");
         adapter.Setup(a => a.KvAcquireAsync(
                 It.IsAny<string>(), It.IsAny<string>(), It.IsAny<string>(), It.IsAny<CancellationToken>()))
@@ -63,7 +63,7 @@ public sealed class ConsulLockProviderTests
 
         await sut.TryAcquireAsync("k", "owner-1", TimeSpan.FromSeconds(5), CancellationToken.None);
 
-        adapter.Verify(a => a.CreateSessionAsync(TimeSpan.FromSeconds(15), "release", It.IsAny<CancellationToken>()), Times.Once);
+        adapter.Verify(a => a.CreateSessionAsync(TimeSpan.FromSeconds(15), "release", TimeSpan.Zero, It.IsAny<CancellationToken>()), Times.Once);
     }
 
     [Fact]
@@ -135,7 +135,7 @@ public sealed class ConsulLockProviderTests
     {
         var (adapter, sut) = NewProvider(new ConsulLockOptions { SessionBehavior = "delete" });
         adapter.Setup(a => a.CreateSessionAsync(
-                It.IsAny<TimeSpan>(), It.IsAny<string>(), It.IsAny<CancellationToken>()))
+                It.IsAny<TimeSpan>(), It.IsAny<string>(), It.IsAny<TimeSpan>(), It.IsAny<CancellationToken>()))
             .ReturnsAsync("session-d");
         adapter.Setup(a => a.KvAcquireAsync(
                 It.IsAny<string>(), It.IsAny<string>(), It.IsAny<string>(), It.IsAny<CancellationToken>()))
@@ -143,7 +143,7 @@ public sealed class ConsulLockProviderTests
 
         await sut.TryAcquireAsync("k", "owner-1", Lease, CancellationToken.None);
 
-        adapter.Verify(a => a.CreateSessionAsync(It.IsAny<TimeSpan>(), "delete", It.IsAny<CancellationToken>()), Times.Once);
+        adapter.Verify(a => a.CreateSessionAsync(It.IsAny<TimeSpan>(), "delete", TimeSpan.Zero, It.IsAny<CancellationToken>()), Times.Once);
     }
 
     [Fact]
@@ -151,7 +151,7 @@ public sealed class ConsulLockProviderTests
     {
         var (adapter, sut) = NewProvider(new ConsulLockOptions { KeyPrefix = "tenants/acme/" });
         adapter.Setup(a => a.CreateSessionAsync(
-                It.IsAny<TimeSpan>(), It.IsAny<string>(), It.IsAny<CancellationToken>()))
+                It.IsAny<TimeSpan>(), It.IsAny<string>(), It.IsAny<TimeSpan>(), It.IsAny<CancellationToken>()))
             .ReturnsAsync("session-1");
         adapter.Setup(a => a.KvAcquireAsync(
                 "tenants/acme/orders", "owner-1", "session-1", It.IsAny<CancellationToken>()))
@@ -162,11 +162,85 @@ public sealed class ConsulLockProviderTests
         Assert.True(acquired);
     }
 
+    [Fact]
+    public async Task TryRenewAsync_ignores_session_for_a_different_key_held_by_same_owner()
+    {
+        // The same ownerToken is presented for two different keys. Renewing one MUST NOT
+        // touch the other's session.
+        var adapter = new Mock<IConsulClientAdapter>();
+        var sut = new ConsulLockProvider(adapter.Object);
+        adapter.SetupSequence(a => a.CreateSessionAsync(
+                It.IsAny<TimeSpan>(), It.IsAny<string>(), It.IsAny<TimeSpan>(), It.IsAny<CancellationToken>()))
+            .ReturnsAsync("session-A").ReturnsAsync("session-B");
+        adapter.Setup(a => a.KvAcquireAsync(
+                It.IsAny<string>(), It.IsAny<string>(), It.IsAny<string>(), It.IsAny<CancellationToken>()))
+            .ReturnsAsync(true);
+        adapter.Setup(a => a.RenewSessionAsync(It.IsAny<string>(), It.IsAny<CancellationToken>()))
+            .ReturnsAsync(true);
+
+        await sut.TryAcquireAsync("key-A", "owner-shared", Lease, CancellationToken.None);
+        await sut.TryAcquireAsync("key-B", "owner-shared", Lease, CancellationToken.None);
+
+        await sut.TryRenewAsync("key-A", "owner-shared", Lease, CancellationToken.None);
+
+        adapter.Verify(a => a.RenewSessionAsync("session-A", It.IsAny<CancellationToken>()), Times.Once);
+        adapter.Verify(a => a.RenewSessionAsync("session-B", It.IsAny<CancellationToken>()), Times.Never);
+    }
+
+    [Fact]
+    public async Task TryAcquireAsync_destroys_session_when_KV_acquire_throws()
+    {
+        var adapter = new Mock<IConsulClientAdapter>();
+        var sut = new ConsulLockProvider(adapter.Object);
+        adapter.Setup(a => a.CreateSessionAsync(
+                It.IsAny<TimeSpan>(), It.IsAny<string>(), It.IsAny<TimeSpan>(), It.IsAny<CancellationToken>()))
+            .ReturnsAsync("session-x");
+        adapter.Setup(a => a.KvAcquireAsync(
+                It.IsAny<string>(), It.IsAny<string>(), It.IsAny<string>(), It.IsAny<CancellationToken>()))
+            .ThrowsAsync(new InvalidOperationException("network down"));
+
+        await Assert.ThrowsAsync<InvalidOperationException>(
+            () => sut.TryAcquireAsync("k", "owner-1", Lease, CancellationToken.None));
+
+        adapter.Verify(a => a.DestroySessionAsync("session-x", It.IsAny<CancellationToken>()), Times.Once);
+    }
+
+    [Fact]
+    public async Task LockDelay_flows_through_to_CreateSessionAsync()
+    {
+        var adapter = new Mock<IConsulClientAdapter>();
+        var sut = new ConsulLockProvider(adapter.Object, new ConsulLockOptions
+        {
+            LockDelay = TimeSpan.FromSeconds(2),
+        });
+        adapter.Setup(a => a.CreateSessionAsync(
+                It.IsAny<TimeSpan>(), It.IsAny<string>(), It.IsAny<TimeSpan>(), It.IsAny<CancellationToken>()))
+            .ReturnsAsync("session-1");
+        adapter.Setup(a => a.KvAcquireAsync(
+                It.IsAny<string>(), It.IsAny<string>(), It.IsAny<string>(), It.IsAny<CancellationToken>()))
+            .ReturnsAsync(true);
+
+        await sut.TryAcquireAsync("k", "owner-1", Lease, CancellationToken.None);
+
+        adapter.Verify(a => a.CreateSessionAsync(
+            It.IsAny<TimeSpan>(), "release", TimeSpan.FromSeconds(2), It.IsAny<CancellationToken>()),
+            Times.Once);
+    }
+
+    [Fact]
+    public async Task ReleaseAsync_rejects_blank_key_argument()
+    {
+        var (_, sut) = NewProvider();
+
+        await Assert.ThrowsAsync<ArgumentException>(
+            () => sut.ReleaseAsync(" ", "owner-1", CancellationToken.None));
+    }
+
     private static async Task<(Mock<IConsulClientAdapter> adapter, ConsulLockProvider sut)> AcquireAsync()
     {
         var (adapter, sut) = NewProvider();
         adapter.Setup(a => a.CreateSessionAsync(
-                It.IsAny<TimeSpan>(), It.IsAny<string>(), It.IsAny<CancellationToken>()))
+                It.IsAny<TimeSpan>(), It.IsAny<string>(), It.IsAny<TimeSpan>(), It.IsAny<CancellationToken>()))
             .ReturnsAsync("session-1");
         adapter.Setup(a => a.KvAcquireAsync(
                 It.IsAny<string>(), It.IsAny<string>(), It.IsAny<string>(), It.IsAny<CancellationToken>()))

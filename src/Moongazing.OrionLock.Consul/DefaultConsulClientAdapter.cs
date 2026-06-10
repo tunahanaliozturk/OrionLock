@@ -19,11 +19,12 @@ public sealed class DefaultConsulClientAdapter : IConsulClientAdapter
     }
 
     /// <inheritdoc />
-    public async Task<string> CreateSessionAsync(TimeSpan ttl, string behavior, CancellationToken cancellationToken)
+    public async Task<string> CreateSessionAsync(TimeSpan ttl, string behavior, TimeSpan lockDelay, CancellationToken cancellationToken)
     {
         var entry = new SessionEntry
         {
             TTL = ttl,
+            LockDelay = lockDelay,
             Behavior = string.Equals(behavior, "delete", StringComparison.OrdinalIgnoreCase)
                 ? SessionBehavior.Delete
                 : SessionBehavior.Release,

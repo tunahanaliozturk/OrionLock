@@ -24,7 +24,11 @@ public static class OrionLockConsulBuilderExtensions
         var options = new ConsulLockOptions();
         configure?.Invoke(options);
 
-        builder.Services.TryAddSingleton<IConsulClient>(_ =>
+        // AddSingleton (NOT TryAddSingleton) so the address-overload's wiring wins over any
+        // previously-registered IConsulClient. The TryAdd shape would have silently
+        // swallowed the consumer's `address` argument when a client was already in the DI
+        // container, contradicting the docstring above.
+        builder.Services.AddSingleton<IConsulClient>(_ =>
             new ConsulClient(cfg => cfg.Address = new Uri(address)));
         builder.Services.TryAddSingleton<IConsulClientAdapter>(
             sp => new DefaultConsulClientAdapter(sp.GetRequiredService<IConsulClient>()));

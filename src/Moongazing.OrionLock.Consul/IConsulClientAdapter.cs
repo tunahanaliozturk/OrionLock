@@ -8,8 +8,8 @@ namespace Moongazing.OrionLock.Consul;
 /// </summary>
 public interface IConsulClientAdapter
 {
-    /// <summary>Create a Consul session bound to the given TTL + behaviour. Returns the session id.</summary>
-    Task<string> CreateSessionAsync(TimeSpan ttl, string behavior, CancellationToken cancellationToken);
+    /// <summary>Create a Consul session bound to the given TTL, behaviour, and lock-delay. Returns the session id.</summary>
+    Task<string> CreateSessionAsync(TimeSpan ttl, string behavior, TimeSpan lockDelay, CancellationToken cancellationToken);
 
     /// <summary>Renew an existing session. Returns false when the session no longer exists (caller treats this as lease loss).</summary>
     Task<bool> RenewSessionAsync(string sessionId, CancellationToken cancellationToken);

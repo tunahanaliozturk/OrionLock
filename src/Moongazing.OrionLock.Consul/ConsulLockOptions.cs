@@ -23,8 +23,19 @@ public sealed class ConsulLockOptions
     /// <summary>
     /// Consul session TTL refresh window above the OrionLock lease duration. Consul rejects
     /// session TTLs shorter than 10 seconds, so the provider takes <c>max(LeaseDuration,
-    /// MinSessionTtl)</c> as the actual session TTL and renews on <see cref="Providers.IDistributedLockProvider.TryRenewAsync"/>.
-    /// Default 10 seconds, the Consul-enforced floor.
+    /// MinSessionTtl)</c> as the actual session TTL and renews on
+    /// <c>IDistributedLockProvider.TryRenewAsync</c>. Default 10 seconds, the Consul-enforced
+    /// floor.
     /// </summary>
     public TimeSpan MinSessionTtl { get; set; } = TimeSpan.FromSeconds(10);
+
+    /// <summary>
+    /// Consul session <c>LockDelay</c>. When omitted, Consul applies a default 15-second
+    /// LockDelay during which the released key remains unavailable to other sessions. That
+    /// silently blocks blocking waiters that timed out within OrionLock's default 10-second
+    /// <c>WaitTimeout</c>. Default <see cref="TimeSpan.Zero"/> so a release immediately puts
+    /// the lock back in the pool; tune up only for workloads that intentionally want a
+    /// quiescence window between handoffs.
+    /// </summary>
+    public TimeSpan LockDelay { get; set; } = TimeSpan.Zero;
 }
