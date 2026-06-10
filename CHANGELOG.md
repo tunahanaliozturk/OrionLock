@@ -4,6 +4,35 @@ All notable changes to OrionLock are documented in this file. The format is base
 [Keep a Changelog](https://keepachangelog.com/en/1.0.0/) and this project adheres to
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.3.6] - 2026-06-10
+
+### Added
+
+#### `Moongazing.OrionLock.Etcd` (NEW PACKAGE) - etcd v3 backend
+
+Fourth distributed-lock provider. etcd v3 lease-bound keys: `TryAcquire` creates a lease + transactional put-if-absent against the key, `TryRenew` pings the lease keep-alive, `Release` performs delete-if-match then revokes the lease.
+
+- **`EtcdLockProvider`** implements `IDistributedLockProvider`. `(ownerToken, key)` pair tracking (same protective pattern as the Consul provider) so the same owner can hold multiple keys safely.
+- **Lease-expiry contract**: etcd automatically removes the key when the lease TTL elapses without a keep-alive, so a crashed holder loses the lock without external intervention. Other instances see the key free on the next polling tick.
+- **Compare-and-swap on release**: `KvDeleteIfMatchAsync` guards against the lease-expiry race where another owner took over the key - the holder MUST NOT delete the new owner's key. The lease revoke runs unconditionally so the slot does not leak on etcd.
+- **Session-leak protection**: KV-put failure between lease grant and dictionary store triggers an explicit lease revoke before re-throwing.
+- **`EtcdLockOptions`** carries `KeyPrefix` (default `orionlock/`) and `MinLeaseTtlSeconds` (default 5; etcd lease TTL is integer seconds).
+- **`IEtcdClientAdapter`** abstraction over `LeaseGrant`/`LeaseKeepAlive`/`LeaseRevoke`/`KvPutIfAbsent`/`KvDeleteIfMatch`. Production wires `DefaultEtcdClientAdapter` over the official `dotnet-etcd` client; unit tests substitute mocks so the provider can be exercised without a running etcd cluster.
+- **`OrionLockBuilder.UseEtcd(connectionString, configure?)`** + **`UseEtcd(configure?)`** DI helpers. The connection-string overload uses `AddSingleton` (not `TryAddSingleton`) so the supplied address wins over any previously-registered `IEtcdClient`.
+
+### Tests
+
+11 unit facts cover: lease grant + KV put, orphan-lease revoke on lost race, orphan-lease revoke on KV-put exception, `MinLeaseTtlSeconds` clamp, TryRenew without active lease, TryRenew on healthy lease, TryRenew dropping mapping on lease-lost, Release delete-if-match + revoke, Release idempotent for unknown owner-key pair, multi-key isolation under same owner, KeyPrefix namespacing.
+
+### Migration from v0.3.5
+
+Source-compatible. Add-on is opt-in:
+
+```csharp
+services.AddOrionLock()
+    .UseEtcd("http://localhost:2379");
+```
+
 ## [0.3.5] - 2026-06-10
 
 ### Added
