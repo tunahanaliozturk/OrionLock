@@ -4,6 +4,27 @@ All notable changes to OrionLock are documented in this file. The format is base
 [Keep a Changelog](https://keepachangelog.com/en/1.0.0/) and this project adheres to
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.3.10] - 2026-06-11
+
+### Added
+
+#### Fairness watchdog: auto-release on prolonged renewal failure
+
+v0.3.9 and earlier kept retrying lease renewals INDEFINITELY on transient backend exceptions - the only way a held lock surrendered was a renewal that explicitly returned `false`. A stuck backend (unreachable for hours but never returning a clean `false`) could perpetually deny new waiters because the holder never thought its lease was lost.
+
+- `DistributedLockOptions.RenewalFailureGracePeriod` (nullable; default = `LeaseDuration`) bounds how long the watchdog tolerates throwing renewals before declaring the lease lost.
+- When the grace period elapses since the last successful renewal AND a renewal throws again, the watchdog flips `IsHeld` to false, increments the `orionlock.lease.lost` counter, and trips `LostToken` so the consumer can react.
+- Successful renewal updates the `lastSuccessfulRenewalUtc` timestamp so the grace period resets - intermittent transient faults under the cap continue retrying as before.
+- Internal `DistributedLockHandle` ctor exposes a `nowUtc` clock hook so tests can drive the deadline deterministically.
+
+### Tests
+
+2 new facts: `LostToken` fires when renew failures exceed grace, successful renewal resets the grace window. 13 facts total.
+
+### Migration from v0.3.9
+
+Source-compatible. Defaulting `RenewalFailureGracePeriod` to `LeaseDuration` means a held lock that loses contact with the backend will declare itself lost after `LeaseDuration` of failures - matching the backend lease TTL contract.
+
 ## [0.3.9] - 2026-06-11
 
 ### Added
