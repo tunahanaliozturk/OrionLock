@@ -13,15 +13,30 @@ public sealed class DistributedLockHandle : IDistributedLockHandle
     private readonly IDistributedLockProvider provider;
     private readonly string ownerToken;
     private readonly TimeSpan leaseDuration;
+    private readonly TimeSpan renewalGrace;
     private readonly CancellationTokenSource lostCts = new();
     private readonly CancellationTokenSource? watchdogCts;
     private readonly Task? watchdog;
+    private readonly Func<DateTime> nowUtc;
+    private DateTime lastSuccessfulRenewalUtc;
     private int disposed;
     private volatile bool isHeld = true;
 
     /// <summary>Creates a handle and, when <see cref="DistributedLockOptions.AutoRenew"/> is set, starts the watchdog.</summary>
     public DistributedLockHandle(
         IDistributedLockProvider provider, string key, string ownerToken, DistributedLockOptions options)
+        : this(provider, key, ownerToken, options, nowUtc: null)
+    {
+    }
+
+    /// <summary>
+    /// Test-only ctor exposing a clock hook so the fairness watchdog grace period can be
+    /// driven deterministically. Production code uses the 4-arg overload which binds the
+    /// clock to <see cref="DateTime.UtcNow"/>.
+    /// </summary>
+    internal DistributedLockHandle(
+        IDistributedLockProvider provider, string key, string ownerToken, DistributedLockOptions options,
+        Func<DateTime>? nowUtc)
     {
         ArgumentNullException.ThrowIfNull(provider);
         ArgumentNullException.ThrowIfNull(options);
@@ -29,6 +44,9 @@ public sealed class DistributedLockHandle : IDistributedLockHandle
         Key = key;
         this.ownerToken = ownerToken;
         leaseDuration = options.LeaseDuration;
+        renewalGrace = options.RenewalFailureGracePeriod ?? options.LeaseDuration;
+        this.nowUtc = nowUtc ?? (() => DateTime.UtcNow);
+        lastSuccessfulRenewalUtc = this.nowUtc();
 
         if (options.AutoRenew)
         {
@@ -71,13 +89,18 @@ public sealed class DistributedLockHandle : IDistributedLockHandle
                 {
                     // Transient renewal failure (network blip, backend timeout). The failure
                     // counter is recorded by MeasuringLockProvider before the exception bubbles
-                    // up here. The watchdog INTENTIONALLY does not drop the lease on a throw -
-                    // the backend's lease TTL still binds, so on the next interval one of two
-                    // things happens: the renewal succeeds (transient resolved) or the renewal
-                    // returns false (lease confirmed gone). This is what makes the new
-                    // orionlock.lease_renewal.failures counter operationally distinct from
-                    // orionlock.lease.lost: failures measure backend instability, losses only
-                    // increment on confirmed loss. Continue the loop.
+                    // up here. v0.3.10 fairness watchdog: if exceptions keep firing past the
+                    // RenewalFailureGracePeriod since the last successful renewal, treat as
+                    // confirmed lost so a stuck backend cannot perpetually deny new waiters
+                    // by leaving the lease unreleasable. The backend's TTL has almost
+                    // certainly expired by now anyway.
+                    if (nowUtc() - lastSuccessfulRenewalUtc > renewalGrace)
+                    {
+                        isHeld = false;
+                        OrionLockDiagnostics.LeasesLost.Add(1);
+                        SafeCancelLost();
+                        return;
+                    }
                     continue;
                 }
 
@@ -88,6 +111,7 @@ public sealed class DistributedLockHandle : IDistributedLockHandle
                     SafeCancelLost();
                     return;
                 }
+                lastSuccessfulRenewalUtc = nowUtc();
             }
         }
         catch (OperationCanceledException)

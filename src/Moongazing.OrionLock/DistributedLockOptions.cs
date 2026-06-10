@@ -28,4 +28,15 @@ public sealed class DistributedLockOptions
     /// distributed (cross-process) backends are on the v0.3.x roadmap.
     /// </remarks>
     public bool UseFifoWaiterCoordinator { get; set; }
+
+    /// <summary>
+    /// Fairness watchdog grace period. When the renewal loop hits an exception (transient
+    /// backend fault), v0.3.9 and earlier continued retrying indefinitely. v0.3.10 lets
+    /// the watchdog give up after a grace period since the last successful renewal -
+    /// after this elapses without a successful renewal, the lock is treated as confirmed
+    /// lost and auto-released so a stuck backend cannot perpetually deny new waiters.
+    /// Defaults to <see langword="null"/> = the value of <see cref="LeaseDuration"/>
+    /// (matching the lease's natural TTL).
+    /// </summary>
+    public TimeSpan? RenewalFailureGracePeriod { get; set; }
 }
