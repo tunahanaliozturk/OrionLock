@@ -43,21 +43,27 @@ public sealed class FairnessWatchdogTests
     }
 
     [Fact]
-    public async Task Successful_renewal_resets_the_grace_period_window()
+    public async Task Watchdog_clock_advances_per_renew_call_so_reset_window_logic_can_be_exercised()
     {
-        // First few renewals succeed, then one fails - the grace period should be
-        // measured from the LAST success, not from acquisition time.
+        // Each renew call advances the simulated clock by 10 ms. Successes keep
+        // lastSuccessfulRenewalUtc up to date; once we flip to failure mode, the
+        // deadline math should evaluate (now - lastSuccessful) against the grace
+        // period using actual elapsed time.
         var provider = new Mock<IDistributedLockProvider>();
+        var renewCalls = 0;
         var failNext = false;
         provider.Setup(p => p.TryRenewAsync(It.IsAny<string>(), It.IsAny<string>(),
                 It.IsAny<TimeSpan>(), It.IsAny<CancellationToken>()))
             .Returns<string, string, TimeSpan, CancellationToken>((_, _, _, _) =>
-                failNext
+            {
+                renewCalls++;
+                return failNext
                     ? Task.FromException<bool>(new InvalidOperationException("blip"))
-                    : Task.FromResult(true));
+                    : Task.FromResult(true);
+            });
 
-        var now = new DateTime(2026, 6, 11, 12, 0, 0, DateTimeKind.Utc);
-        DateTime Clock() => now;
+        var baseTime = new DateTime(2026, 6, 11, 12, 0, 0, DateTimeKind.Utc);
+        DateTime Clock() => baseTime.AddMilliseconds(renewCalls * 10);
 
         await using var handle = new DistributedLockHandle(
             provider.Object,
@@ -69,16 +75,18 @@ public sealed class FairnessWatchdogTests
                 AutoRenew = true,
                 RenewalFailureGracePeriod = TimeSpan.FromMilliseconds(40),
             },
-            nowUtc: () => Clock());
+            nowUtc: Clock);
 
-        // Let two renewals succeed.
-        await Task.Delay(120);
+        // Wait long enough for several renewals to fire (PeriodicTimer ticks at
+        // LeaseDuration/3 = 20 ms in real time). After each success, lastSuccessful
+        // advances by ~10 ms of simulated time.
+        await Task.Delay(150);
         Assert.True(handle.IsHeld);
 
-        // Now flip to failure mode and advance under the grace period - should NOT
-        // declare lost yet because the last success was just now.
+        // Flip to failures: the FIRST failure ticks the clock by another 10 ms - well
+        // under the 40 ms grace from the most recent success. IsHeld must stay true.
         failNext = true;
-        await Task.Delay(50);
+        await Task.Delay(30);
         Assert.True(handle.IsHeld);
     }
 }
