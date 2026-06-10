@@ -131,12 +131,17 @@ public sealed class RedisFifoWaiterCoordinator : IFifoWaiterCoordinator
         {
             return;
         }
-        var cutoff = clock.GetUtcNow().ToUnixTimeMilliseconds() - (long)options.WaiterTtl.TotalMilliseconds;
-        if (cutoff <= 0)
+        var cutoffMs = clock.GetUtcNow().ToUnixTimeMilliseconds() - (long)options.WaiterTtl.TotalMilliseconds;
+        if (cutoffMs <= 0)
         {
             return;
         }
-        await Db.SortedSetRemoveRangeByScoreAsync(redisKey, double.NegativeInfinity, cutoff).ConfigureAwait(false);
+        // Scores are packed (ms << 16) | sequence. Shift the millisecond cutoff into the
+        // same encoding so RemoveRangeByScore compares like-for-like; without this the raw
+        // ms cutoff (e.g. 850) is smaller than every packed score (>= 65,536,000) and
+        // pruning would never remove anything.
+        var cutoffScore = cutoffMs << 16;
+        await Db.SortedSetRemoveRangeByScoreAsync(redisKey, double.NegativeInfinity, cutoffScore).ConfigureAwait(false);
     }
 
     private sealed record RedisFifoWaiterTicket(string Key, string WaiterId) : IFifoWaiterTicket;
