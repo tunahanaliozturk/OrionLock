@@ -34,6 +34,13 @@ public sealed class RedisFifoWaiterCoordinator : IFifoWaiterCoordinator
     private readonly RedisFifoWaiterOptions options;
     private readonly TimeProvider clock;
 
+    // Sub-millisecond tiebreaker: when two processes ZADD inside the same epoch ms, the
+    // pair (ms, monotonic-sequence) produces a unique score that preserves arrival order.
+    // The sequence counter is process-local and wraps; equal-score collisions are still
+    // possible across two processes but the per-process burst case (which is what triggers
+    // the unfair-by-Guid-ordering hazard the most) is fixed.
+    private static long sequenceCounter;
+
     /// <summary>Construct against an already-connected <see cref="IConnectionMultiplexer"/>.</summary>
     public RedisFifoWaiterCoordinator(
         IConnectionMultiplexer connection,
@@ -53,39 +60,54 @@ public sealed class RedisFifoWaiterCoordinator : IFifoWaiterCoordinator
     public async Task<IFifoWaiterTicket> EnterAsync(string key, CancellationToken cancellationToken)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(key);
+        cancellationToken.ThrowIfCancellationRequested();
 
         var waiterId = Guid.NewGuid().ToString("N");
         var redisKey = Key(key);
 
         await PruneStaleAsync(redisKey).ConfigureAwait(false);
 
-        var scoreNow = clock.GetUtcNow().ToUnixTimeMilliseconds();
+        // Score = epoch-ms shifted left + per-process monotonic sequence. Within a single
+        // process this preserves arrival order even when many ZADD calls land in the same
+        // millisecond. Across processes the millisecond component dominates so two waiters
+        // arriving 1+ ms apart still order by arrival; same-ms cross-process ties fall back
+        // to member (random Guid) but are exceedingly rare.
+        var scoreNow = ComputeScore();
         await Db.SortedSetAddAsync(redisKey, waiterId, scoreNow).ConfigureAwait(false);
 
-        // Poll for head position. Bounded by the caller's cancellation token; AcquireAsync's
-        // WaitTimeout wraps this via the linked token plumbed from the lock options.
-        while (true)
+        // From here on the waiter id is in Redis - ANY exit path must ZREM it, otherwise
+        // we strand the slot until the WaiterTtl prune sweep catches it.
+        try
         {
-            cancellationToken.ThrowIfCancellationRequested();
-
-            var head = await Db.SortedSetRangeByRankAsync(redisKey, 0, 0).ConfigureAwait(false);
-            if (head.Length > 0 && head[0] == waiterId)
+            while (true)
             {
-                return new RedisFifoWaiterTicket(key, waiterId);
-            }
+                cancellationToken.ThrowIfCancellationRequested();
 
-            try
-            {
+                var head = await Db.SortedSetRangeByRankAsync(redisKey, 0, 0).ConfigureAwait(false);
+                if (head.Length > 0 && head[0] == waiterId)
+                {
+                    return new RedisFifoWaiterTicket(key, waiterId);
+                }
+
                 await Task.Delay(options.PollInterval, clock, cancellationToken).ConfigureAwait(false);
             }
-            catch (OperationCanceledException)
-            {
-                // On cancellation, remove ourselves from the queue so we do not block waiters
-                // behind us. ZREM is idempotent so a duplicate from LeaveAsync is harmless.
-                await Db.SortedSetRemoveAsync(redisKey, waiterId).ConfigureAwait(false);
-                throw;
-            }
         }
+        catch
+        {
+            // Covers cancellation (pre-loop, mid-loop, during delay) AND any transient Redis
+            // failure that escapes the loop. ZREM is idempotent so a duplicate Leave is
+            // harmless. Use the unbounded operation token so cleanup still happens even when
+            // the caller's token is cancelled.
+            await Db.SortedSetRemoveAsync(redisKey, waiterId).ConfigureAwait(false);
+            throw;
+        }
+    }
+
+    private long ComputeScore()
+    {
+        var ms = clock.GetUtcNow().ToUnixTimeMilliseconds();
+        var seq = Interlocked.Increment(ref sequenceCounter) & 0xFFFF; // 16-bit wrap
+        return (ms << 16) | seq;
     }
 
     /// <inheritdoc />
