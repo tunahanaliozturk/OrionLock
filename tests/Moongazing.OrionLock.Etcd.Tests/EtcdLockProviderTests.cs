@@ -170,6 +170,30 @@ public sealed class EtcdLockProviderTests
         Assert.True(acquired);
     }
 
+    [Fact]
+    public void Constructor_rejects_non_positive_MinLeaseTtlSeconds()
+    {
+        var adapter = new Mock<IEtcdClientAdapter>();
+        Assert.Throws<ArgumentOutOfRangeException>(
+            () => new EtcdLockProvider(adapter.Object, new EtcdLockOptions { MinLeaseTtlSeconds = 0 }));
+        Assert.Throws<ArgumentOutOfRangeException>(
+            () => new EtcdLockProvider(adapter.Object, new EtcdLockOptions { MinLeaseTtlSeconds = -3 }));
+    }
+
+    [Fact]
+    public async Task ReleaseAsync_revokes_lease_even_when_KvDelete_throws()
+    {
+        var (adapter, sut) = await AcquireAsync();
+        adapter.Setup(a => a.KvDeleteIfMatchAsync(It.IsAny<string>(), It.IsAny<string>(), It.IsAny<CancellationToken>()))
+            .ThrowsAsync(new InvalidOperationException("network blip"));
+
+        await Assert.ThrowsAsync<InvalidOperationException>(
+            () => sut.ReleaseAsync("k", "owner-1", CancellationToken.None));
+
+        // Revoke must run even though delete threw, otherwise the lease lingers until TTL.
+        adapter.Verify(a => a.LeaseRevokeAsync(11L, It.IsAny<CancellationToken>()), Times.Once);
+    }
+
     private static async Task<(Mock<IEtcdClientAdapter> adapter, EtcdLockProvider sut)> AcquireAsync()
     {
         var (adapter, sut) = NewProvider();

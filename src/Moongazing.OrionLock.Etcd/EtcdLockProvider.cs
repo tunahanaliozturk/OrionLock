@@ -34,6 +34,7 @@ public sealed class EtcdLockProvider : IDistributedLockProvider
         ArgumentNullException.ThrowIfNull(etcd);
         this.etcd = etcd;
         this.options = options ?? new EtcdLockOptions();
+        this.options.ValidateAndNormalise();
     }
 
     private string FullKey(string lockKey) => options.KeyPrefix + lockKey;
@@ -123,10 +124,20 @@ public sealed class EtcdLockProvider : IDistributedLockProvider
             return;
         }
 
-        // Delete-if-match guards the case where the original lease expired and another
-        // owner took over the key: we MUST NOT delete the new owner's key. The lease
-        // revoke runs unconditionally so we do not leak the slot on the etcd side.
-        await etcd.KvDeleteIfMatchAsync(FullKey(key), ownerToken, cancellationToken).ConfigureAwait(false);
-        await etcd.LeaseRevokeAsync(leaseId, cancellationToken).ConfigureAwait(false);
+        try
+        {
+            // Delete-if-match guards the case where the original lease expired and another
+            // owner took over the key: we MUST NOT delete the new owner's key. If this
+            // call throws we still need to revoke the lease below, otherwise the key stays
+            // bound to the now-defunct local mapping until TTL expiry.
+            await etcd.KvDeleteIfMatchAsync(FullKey(key), ownerToken, cancellationToken).ConfigureAwait(false);
+        }
+        finally
+        {
+            // Revoke runs unconditionally so we do not leak the slot on the etcd side.
+            // CancellationToken.None: the lease MUST be released even if the outer call was
+            // cancelled or the delete-if-match threw, otherwise the lease lingers until TTL.
+            await etcd.LeaseRevokeAsync(leaseId, CancellationToken.None).ConfigureAwait(false);
+        }
     }
 }

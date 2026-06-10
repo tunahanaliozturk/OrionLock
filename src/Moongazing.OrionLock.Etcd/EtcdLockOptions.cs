@@ -18,4 +18,23 @@ public sealed class EtcdLockOptions
     /// when creating the lease. Default 5 seconds.
     /// </summary>
     public int MinLeaseTtlSeconds { get; set; } = 5;
+
+    /// <summary>
+    /// Validate + normalise the options. Called by the provider constructor. Trims a
+    /// trailing slash from a blank-or-empty prefix (we accept either) and rejects a
+    /// non-positive <see cref="MinLeaseTtlSeconds"/> so a misconfigured options object
+    /// cannot produce a 0-second lease TTL (which etcd would reject at grant time anyway,
+    /// but the failure message is clearer here).
+    /// </summary>
+    internal void ValidateAndNormalise()
+    {
+        if (MinLeaseTtlSeconds <= 0)
+        {
+            throw new ArgumentOutOfRangeException(
+                nameof(MinLeaseTtlSeconds),
+                MinLeaseTtlSeconds,
+                "EtcdLockOptions.MinLeaseTtlSeconds must be a positive integer (etcd requires whole-second TTLs).");
+        }
+        KeyPrefix ??= string.Empty;
+    }
 }

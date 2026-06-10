@@ -30,21 +30,41 @@ public sealed class DefaultEtcdClientAdapter : IEtcdClientAdapter
     /// <inheritdoc />
     public async Task<bool> LeaseKeepAliveAsync(long leaseId, CancellationToken cancellationToken)
     {
+        // Single-shot keep-alive ping: dotnet-etcd 7.x's high-level LeaseKeepAlive helper
+        // takes a request + a result-collecting callback and a cancellation token. The
+        // callback fires for each refresh response; etcd's documented contract is that any
+        // response with TTL > 0 means the lease was refreshed for that many seconds.
+        // TTL == 0 means the lease expired and the server is reporting lease-lost. We use
+        // an asynchronous TaskCompletionSource so the first response (or the stream's
+        // completion without a response) unblocks the await without holding the keep-alive
+        // call open forever.
+        var tcs = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
+        Action<LeaseKeepAliveResponse> onResponse = r =>
+        {
+            // First response wins; subsequent refreshes (if any) are no-ops on the TCS.
+            tcs.TrySetResult(r.TTL > 0);
+        };
         try
         {
-            await client.LeaseTimeToLiveAsync(new LeaseTimeToLiveRequest { ID = leaseId }, null, default, cancellationToken)
-                .ConfigureAwait(false);
-            // Single-shot keep-alive: refreshing the TTL by writing a no-op via the
-            // dotnet-etcd LeaseKeepAlive API requires a long-running stream. For
-            // OrionLock's polling renew shape, we re-grant on demand via the dispatcher's
-            // call back through TryRenewAsync. The LeaseTimeToLive call ABOVE confirms the
-            // lease still exists; if etcd returns an error we treat it as lease-lost.
-            return true;
+            await client.LeaseKeepAlive(
+                new[] { new LeaseKeepAliveRequest { ID = leaseId } },
+                new[] { onResponse },
+                cancellationToken).ConfigureAwait(false);
         }
-        catch
+        catch (Grpc.Core.RpcException rpc) when (rpc.StatusCode == Grpc.Core.StatusCode.NotFound)
         {
+            // gRPC NotFound is the conventional "lease not found" mapping from etcd; treat
+            // as confirmed lease-loss so the OrionLock watchdog can react.
             return false;
         }
+        // The keep-alive call returned without throwing, but the callback fires
+        // asynchronously. Resolve the TCS with the captured outcome, or fall back to
+        // "false" when the server completed the stream without writing any response.
+        tcs.TrySetResult(false);
+        return await tcs.Task.ConfigureAwait(false);
+        // Other exceptions (transient gRPC errors, cancellation) bubble up so the caller's
+        // core watchdog retries the renew instead of misclassifying a temporary backend
+        // fault as confirmed lease loss.
     }
 
     /// <inheritdoc />
