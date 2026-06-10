@@ -10,12 +10,29 @@ using global::org.apache.zookeeper;
 public sealed class DefaultZooKeeperClientAdapter : IZooKeeperClientAdapter
 {
     private readonly ZooKeeper client;
+    private readonly IZooKeeperAclFactory aclFactory;
 
-    /// <summary>Construct with an already-connected ZooKeeper client.</summary>
+    /// <summary>
+    /// v0.3.7 source-compatible 1-arg ctor. Defaults the ACL factory to
+    /// <see cref="OpenZooKeeperAclFactory"/> so compiled v0.3.7 callers keep the
+    /// <c>OPEN_ACL_UNSAFE</c> behaviour.
+    /// </summary>
     public DefaultZooKeeperClientAdapter(ZooKeeper client)
+        : this(client, new OpenZooKeeperAclFactory())
+    {
+    }
+
+    /// <summary>
+    /// v0.3.8 ctor with explicit <see cref="IZooKeeperAclFactory"/>. Wire
+    /// <see cref="DigestZooKeeperAclFactory"/> here for authenticated ACLs on
+    /// multi-tenant ensembles.
+    /// </summary>
+    public DefaultZooKeeperClientAdapter(ZooKeeper client, IZooKeeperAclFactory aclFactory)
     {
         ArgumentNullException.ThrowIfNull(client);
+        ArgumentNullException.ThrowIfNull(aclFactory);
         this.client = client;
+        this.aclFactory = aclFactory;
     }
 
     /// <inheritdoc />
@@ -35,7 +52,7 @@ public sealed class DefaultZooKeeperClientAdapter : IZooKeeperClientAdapter
                     await client.createAsync(
                         current,
                         Array.Empty<byte>(),
-                        ZooDefs.Ids.OPEN_ACL_UNSAFE,
+                        aclFactory.CreatePersistentParentAcl(current),
                         CreateMode.PERSISTENT).ConfigureAwait(false);
                 }
             }
@@ -51,10 +68,11 @@ public sealed class DefaultZooKeeperClientAdapter : IZooKeeperClientAdapter
         string parentPath, string childPrefix, byte[] data, CancellationToken cancellationToken)
     {
         cancellationToken.ThrowIfCancellationRequested();
+        var childPath = $"{parentPath}/{childPrefix}";
         return await client.createAsync(
-            $"{parentPath}/{childPrefix}",
+            childPath,
             data,
-            ZooDefs.Ids.OPEN_ACL_UNSAFE,
+            aclFactory.CreateEphemeralChildAcl(childPath),
             CreateMode.EPHEMERAL_SEQUENTIAL).ConfigureAwait(false);
     }
 

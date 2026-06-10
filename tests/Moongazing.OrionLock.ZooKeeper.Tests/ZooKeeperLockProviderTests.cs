@@ -181,6 +181,60 @@ public sealed class ZooKeeperLockProviderTests
         adapter.Verify(a => a.DeleteAsync("/orionlock/k/lock-0000000007", It.IsAny<CancellationToken>()), Times.Once);
     }
 
+    [Fact]
+    public void OpenZooKeeperAclFactory_returns_OPEN_ACL_UNSAFE_for_both_parent_and_child()
+    {
+        var factory = new OpenZooKeeperAclFactory();
+        var parent = factory.CreatePersistentParentAcl("/orionlock/k");
+        var child = factory.CreateEphemeralChildAcl("/orionlock/k/lock-0000000001");
+        Assert.Same(org.apache.zookeeper.ZooDefs.Ids.OPEN_ACL_UNSAFE, parent);
+        Assert.Same(org.apache.zookeeper.ZooDefs.Ids.OPEN_ACL_UNSAFE, child);
+    }
+
+    [Fact]
+    public void DigestZooKeeperAclFactory_parent_acl_grants_create_and_read_to_digest_identity()
+    {
+        var factory = new DigestZooKeeperAclFactory("svc-lock", "s3cret");
+        var parent = factory.CreatePersistentParentAcl("/orionlock/k");
+        var acl = Assert.Single(parent);
+        Assert.Equal("digest", acl.getId().getScheme());
+        Assert.StartsWith("svc-lock:", acl.getId().getId(), StringComparison.Ordinal);
+        // CREATE (0x4) + READ (0x1) = 0x5; the next acquirer's createAsync on the parent
+        // znode requires CREATE so the bit MUST be present.
+        Assert.Equal(0x5, acl.getPerms());
+    }
+
+    [Fact]
+    public void DigestZooKeeperAclFactory_child_acl_grants_full_holder_permissions()
+    {
+        var factory = new DigestZooKeeperAclFactory("svc-lock", "s3cret");
+        var child = factory.CreateEphemeralChildAcl("/orionlock/k/lock-0000000001");
+        var acl = Assert.Single(child);
+        Assert.Equal("digest", acl.getId().getScheme());
+        Assert.Equal(0x1F, acl.getPerms());
+    }
+
+    [Fact]
+    public void DigestZooKeeperAclFactory_rejects_null_or_empty_credentials()
+    {
+        Assert.Throws<ArgumentException>(() => new DigestZooKeeperAclFactory(string.Empty, "p"));
+        Assert.Throws<ArgumentNullException>(() => new DigestZooKeeperAclFactory(null!, "p"));
+        Assert.Throws<ArgumentNullException>(() => new DigestZooKeeperAclFactory("u", null!));
+    }
+
+    [Fact]
+    public void DigestZooKeeperAclFactory_digest_hash_is_stable_for_same_credentials()
+    {
+        var a = new DigestZooKeeperAclFactory("svc-lock", "s3cret");
+        var b = new DigestZooKeeperAclFactory("svc-lock", "s3cret");
+        var c = new DigestZooKeeperAclFactory("svc-lock", "different");
+        var aId = a.CreatePersistentParentAcl("/x").Single().getId().getId();
+        var bId = b.CreatePersistentParentAcl("/x").Single().getId().getId();
+        var cId = c.CreatePersistentParentAcl("/x").Single().getId().getId();
+        Assert.Equal(aId, bId);
+        Assert.NotEqual(aId, cId);
+    }
+
     private static async Task<(Mock<IZooKeeperClientAdapter> adapter, ZooKeeperLockProvider sut)> AcquireAsync()
     {
         var (adapter, sut) = NewProvider();
