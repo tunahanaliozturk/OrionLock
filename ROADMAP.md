@@ -118,11 +118,12 @@ Ships `IFifoWaiterCoordinator` + `NullFifoWaiterCoordinator` default + `InProces
 - `RedisFifoWaiterOptions` (KeyPrefix, PollInterval, WaiterTtl, Database) + `OrionLockBuilder.UseRedisFifoWaiterCoordinator()` DI helper.
 - Stale-waiter pruning by score on every Enter / Leave call so crashed processes do not block the queue indefinitely.
 
-### v0.3.5 — `OrionLock.Consul` backend *(planned, retargeted from v0.3.4)*
+### v0.3.5 — `OrionLock.Consul` backend *(shipped 2026-06-10)*
 
-- **`OrionLock.Consul`** backend - third-party Consul-managed sessions as an
-  `IDistributedLockProvider`. Brings the HashiCorp Consul .NET SDK as a new top-level
-  dependency and warrants its own release alongside the matching session-TTL design notes.
+- `ConsulLockProvider` implements `IDistributedLockProvider` over Consul session-bound KV semantics.
+- `IConsulClientAdapter` abstraction (`DefaultConsulClientAdapter` over the official Consul.NET client; mocked in unit tests).
+- `ConsulLockOptions` (`KeyPrefix`, `SessionBehavior`, `MinSessionTtl`).
+- `OrionLockBuilder.UseConsul(address, configure?)` + `UseConsul(configure?)` DI helpers.
 
 ---
 

@@ -4,6 +4,33 @@ All notable changes to OrionLock are documented in this file. The format is base
 [Keep a Changelog](https://keepachangelog.com/en/1.0.0/) and this project adheres to
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.3.5] - 2026-06-10
+
+### Added
+
+#### `Moongazing.OrionLock.Consul` (NEW PACKAGE) - HashiCorp Consul backend
+
+Third distributed-lock provider. Lands the v0.3.4 deferral.
+
+- **`ConsulLockProvider`** implements `IDistributedLockProvider` over Consul session-bound KV acquire/release semantics. Each (lockKey, ownerToken) pair gets a Consul session whose TTL is the OrionLock lease duration; `TryAcquireAsync` issues a session-scoped KV acquire, `TryRenewAsync` renews the session, `ReleaseAsync` releases the KV and destroys the session.
+- **Session expiry contract**: when the holder process crashes, Consul's session TTL elapses and applies the configured behaviour (default `release` - the key returns to the pool so blocking waiters see it free on the next polling tick). `delete` is also supported.
+- **`ConsulLockOptions`** carries `KeyPrefix` (default `orionlock/`), `SessionBehavior` (default `release`), and `MinSessionTtl` (default 10 s - Consul rejects shorter TTLs; the provider takes `max(LeaseDuration, MinSessionTtl)`).
+- **`IConsulClientAdapter`** abstraction over the subset of Consul KV / Session operations OrionLock needs. Production wires `DefaultConsulClientAdapter` over the official Consul.NET `IConsulClient`; tests substitute mocks so unit tests don't need a running Consul.
+- **`OrionLockBuilder.UseConsul(address, configure?)`** and **`UseConsul(configure?)`** (over an already-registered `IConsulClient`) DI helpers. Replaces any previously-registered `IDistributedLockProvider`.
+
+### Tests
+
+10 unit facts covering: session create + KV acquire, orphan-session cleanup on lost race, MinSessionTtl floor, TryRenew without active session, TryRenew on healthy session, TryRenew dropping mapping on Consul-side session expiry (and not hitting the adapter again), Release issuing both KV release and session destroy, Release idempotent for unknown owner, `delete` behaviour flowing through, key-prefix namespacing.
+
+### Migration from v0.3.4
+
+Source-compatible. Add-on is opt-in:
+
+```csharp
+services.AddOrionLock()
+    .UseConsul("http://localhost:8500");
+```
+
 ## [0.3.4] - 2026-06-09
 
 ### Added
