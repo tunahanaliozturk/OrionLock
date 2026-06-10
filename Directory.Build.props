@@ -15,6 +15,6 @@
     <RepositoryType>git</RepositoryType>
     <PackageProjectUrl>https://github.com/tunahanaliozturk/OrionLock</PackageProjectUrl>
     <PackageLicenseExpression>MIT</PackageLicenseExpression>
-    <Version>0.3.6</Version>
+    <Version>0.3.7</Version>
   </PropertyGroup>
 </Project>

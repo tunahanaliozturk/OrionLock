@@ -4,6 +4,33 @@ All notable changes to OrionLock are documented in this file. The format is base
 [Keep a Changelog](https://keepachangelog.com/en/1.0.0/) and this project adheres to
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.3.7] - 2026-06-10
+
+### Added
+
+#### `Moongazing.OrionLock.ZooKeeper` (NEW PACKAGE) - Apache ZooKeeper backend
+
+Fifth distributed-lock provider. Implements the canonical ZooKeeper distributed-lock recipe: ephemeral-sequential child znodes under a per-key parent. The holder is the child with the lowest sequence number.
+
+- **`ZooKeeperLockProvider`** implements `IDistributedLockProvider`. `TryAcquireAsync` creates an `EPHEMERAL_SEQUENTIAL` child under the lock-key parent znode (`/orionlock/{key}`) and declares ownership when it holds the lowest sequence; loses the race and self-deletes when another child has lower sequence. `(ownerToken, key)` pair tracking so the same owner can hold multiple keys safely.
+- **Session-expiry contract**: ZooKeeper deletes ephemeral znodes when their owning session closes (process crash, network partition past session timeout). OrionLock therefore inherits the broker's liveness guarantees without a TTL of its own; a crashed holder loses the lock the moment the session expires. `TryRenewAsync` is a liveness check (does the znode still exist) rather than a TTL extension because the ZooKeeper client owns the heartbeat.
+- **`ZooKeeperLockOptions`** carries `RootPath` (default `/orionlock`) with `ValidateAndNormalise()` that rejects an empty path and adds a leading slash if the consumer forgot it.
+- **`IZooKeeperClientAdapter`** abstraction over `EnsurePath` / `CreateEphemeralSequential` / `GetChildren` / `Delete` / `Exists`. Production wires `DefaultZooKeeperClientAdapter` over the official `ZooKeeperNetEx` client; unit tests substitute mocks so the provider can be exercised without a running ZooKeeper ensemble.
+- **`OrionLockBuilder.UseZooKeeper(configure?)`** DI helper. Consumers register the `ZooKeeper` client themselves because the connection requires a `Watcher` instance for session-state callbacks - that contract belongs to the consumer.
+
+### Tests
+
+11 unit facts cover: acquire when child is lowest sequence, lose race when another child has lower sequence (orphan self-delete), TryRenew without active session, TryRenew when znode still exists, TryRenew drops mapping when znode gone (no double adapter hit), Release deletes child, Release idempotent for unknown owner-key pair, Release swallows delete exception (ephemeral auto-cleans on session close), RootPath namespacing, options validation, RootPath normalisation.
+
+### Migration from v0.3.6
+
+Source-compatible. Add-on is opt-in:
+
+```csharp
+services.AddSingleton<ZooKeeper>(_ => new ZooKeeper("localhost:2181", 30_000, new MyWatcher()));
+services.AddOrionLock().UseZooKeeper();
+```
+
 ## [0.3.6] - 2026-06-10
 
 ### Added
