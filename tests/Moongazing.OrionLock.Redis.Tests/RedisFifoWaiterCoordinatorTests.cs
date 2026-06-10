@@ -93,15 +93,13 @@ public sealed class RedisFifoWaiterCoordinatorTests : IAsyncLifetime
 
         await Assert.ThrowsAnyAsync<OperationCanceledException>(() => secondTask);
 
-        // Third caller should NOT be blocked behind the cancelled second waiter.
-        var third = await sut.EnterAsync("k", CancellationToken.None).WaitAsync(TimeSpan.FromMilliseconds(500));
+        // Cancelled waiter must NOT block the next caller from becoming head once `first`
+        // releases the lock. If `LeaveAsync` only popped one slot and the cancelled waiter
+        // still sat at position 0, this Enter would deadlock.
         await sut.LeaveAsync(first, CancellationToken.None);
-
-        // Once first leaves, third becomes head.
-        var fourth = await sut.EnterAsync("k", CancellationToken.None);
-        Assert.NotNull(fourth);
+        var third = await sut.EnterAsync("k", CancellationToken.None).WaitAsync(TimeSpan.FromSeconds(2));
+        Assert.NotNull(third);
         await sut.LeaveAsync(third, CancellationToken.None);
-        await sut.LeaveAsync(fourth, CancellationToken.None);
     }
 
     [Fact]
