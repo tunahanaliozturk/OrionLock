@@ -1,0 +1,14 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <PackageId>OrionLock.Etcd</PackageId>
+    <Description>etcd backend for OrionLock distributed locking. Implements IDistributedLockProvider over etcd v3 lease-bound keys: TryAcquire creates a lease + transactional put-if-absent, TryRenew refreshes the lease, Release revokes it.</Description>
+    <PackageTags>distributed-lock;etcd;orionlock</PackageTags>
+  </PropertyGroup>
+  <ItemGroup>
+    <PackageReference Include="dotnet-etcd" Version="7.0.0" />
+    <PackageReference Include="Microsoft.Extensions.DependencyInjection.Abstractions" Version="9.0.0" />
+  </ItemGroup>
+  <ItemGroup>
+    <ProjectReference Include="..\Moongazing.OrionLock\Moongazing.OrionLock.csproj" />
+  </ItemGroup>
+</Project>
