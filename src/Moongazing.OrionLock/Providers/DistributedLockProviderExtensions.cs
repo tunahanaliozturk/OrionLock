@@ -59,6 +59,15 @@ public static class DistributedLockProviderExtensions
         {
             cancellationToken.ThrowIfCancellationRequested();
 
+            // Re-check the deadline BEFORE every TryAcquire. The previous iteration's
+            // clipped delay can leave just enough time for one final unnecessary
+            // TryAcquire that runs past the requested timeout; this gate ensures the
+            // helper never makes a call after the deadline.
+            if (deadline is not null && DateTime.UtcNow >= deadline.Value)
+            {
+                return false;
+            }
+
             if (await provider.TryAcquireAsync(key, ownerToken, leaseDuration, cancellationToken).ConfigureAwait(false))
             {
                 return true;
