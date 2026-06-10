@@ -27,7 +27,12 @@ using global::org.apache.zookeeper.data;
 public sealed class DigestZooKeeperAclFactory : IZooKeeperAclFactory
 {
     private const int CrdaPermissions = 0x1F;     // CREATE | READ | WRITE | DELETE | ADMIN (CRDA + W)
-    private const int ReadCreatePermissions = 0x3; // CREATE | READ
+    // ZooKeeper permission bits: READ=0x1, WRITE=0x2, CREATE=0x4, DELETE=0x8, ADMIN=0x10.
+    // The next acquirer's createAsync on the parent znode requires CREATE so the parent
+    // ACL MUST include 0x4 - the v0.3.8 initial release used 0x3 (READ|WRITE) which left
+    // the next holder unable to create their ephemeral child, deadlocking acquires under
+    // digest ACLs. CREATE+READ = 0x5.
+    private const int ReadCreatePermissions = 0x5;
     private const string DigestScheme = "digest";
 
     private readonly string identity;

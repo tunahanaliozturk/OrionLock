@@ -199,7 +199,9 @@ public sealed class ZooKeeperLockProviderTests
         var acl = Assert.Single(parent);
         Assert.Equal("digest", acl.getId().getScheme());
         Assert.StartsWith("svc-lock:", acl.getId().getId(), StringComparison.Ordinal);
-        Assert.Equal(0x3, acl.getPerms());
+        // CREATE (0x4) + READ (0x1) = 0x5; the next acquirer's createAsync on the parent
+        // znode requires CREATE so the bit MUST be present.
+        Assert.Equal(0x5, acl.getPerms());
     }
 
     [Fact]
