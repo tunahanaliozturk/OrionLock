@@ -1,0 +1,15 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <PackageId>OrionLock.Consul</PackageId>
+    <Description>HashiCorp Consul backend for OrionLock distributed locking. Implements IDistributedLockProvider over Consul session-bound KV acquire/release semantics; lease renewal maps to Consul session renew so lease loss propagates naturally on node failure.</Description>
+    <PackageTags>distributed-lock;consul;hashicorp;orionlock</PackageTags>
+  </PropertyGroup>
+  <ItemGroup>
+    <PackageReference Include="Consul" Version="1.7.14.6" />
+    <PackageReference Include="Microsoft.Extensions.DependencyInjection.Abstractions" Version="9.0.0" />
+    <PackageReference Include="Microsoft.Extensions.Logging.Abstractions" Version="9.0.0" />
+  </ItemGroup>
+  <ItemGroup>
+    <ProjectReference Include="..\Moongazing.OrionLock\Moongazing.OrionLock.csproj" />
+  </ItemGroup>
+</Project>
