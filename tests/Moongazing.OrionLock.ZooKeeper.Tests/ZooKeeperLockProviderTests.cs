@@ -160,6 +160,27 @@ public sealed class ZooKeeperLockProviderTests
         Assert.Equal("/tenants/acme", opts.RootPath);
     }
 
+    [Fact]
+    public async Task TryAcquireAsync_deletes_created_znode_when_GetChildren_throws()
+    {
+        var adapter = new Mock<IZooKeeperClientAdapter>();
+        var sut = new ZooKeeperLockProvider(adapter.Object);
+        adapter.Setup(a => a.EnsurePathAsync(It.IsAny<string>(), It.IsAny<CancellationToken>()))
+            .Returns(Task.CompletedTask);
+        adapter.Setup(a => a.CreateEphemeralSequentialAsync(
+                It.IsAny<string>(), It.IsAny<string>(), It.IsAny<byte[]>(), It.IsAny<CancellationToken>()))
+            .ReturnsAsync("/orionlock/k/lock-0000000007");
+        adapter.Setup(a => a.GetChildrenAsync(It.IsAny<string>(), It.IsAny<CancellationToken>()))
+            .ThrowsAsync(new InvalidOperationException("network blip"));
+
+        await Assert.ThrowsAsync<InvalidOperationException>(
+            () => sut.TryAcquireAsync("k", "owner-1", Lease, CancellationToken.None));
+
+        // The newly-created ephemeral child MUST be deleted so it does not block other
+        // waiters until session expiry.
+        adapter.Verify(a => a.DeleteAsync("/orionlock/k/lock-0000000007", It.IsAny<CancellationToken>()), Times.Once);
+    }
+
     private static async Task<(Mock<IZooKeeperClientAdapter> adapter, ZooKeeperLockProvider sut)> AcquireAsync()
     {
         var (adapter, sut) = NewProvider();

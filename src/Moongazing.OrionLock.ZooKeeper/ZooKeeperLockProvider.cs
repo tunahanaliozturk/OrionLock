@@ -70,36 +70,44 @@ public sealed class ZooKeeperLockProvider : IDistributedLockProvider
 
         // ZooKeeper's lock recipe: we own the lock when our child znode has the lowest
         // sequence number among all children under the parent. The children list is sorted
-        // lexically, which matches numeric ordering for the 10-digit suffix.
-        var children = await zk.GetChildrenAsync(parent, cancellationToken).ConfigureAwait(false);
-        var ourName = created[(parent.Length + 1)..];
-        var ourIsLowest = children.Count > 0 && children[0] == ourName;
-
-        if (!ourIsLowest)
-        {
-            // Lost the race; delete the orphan child so we do not waste a session slot.
-            try
-            {
-                await zk.DeleteAsync(created, CancellationToken.None).ConfigureAwait(false);
-            }
-            catch
-            {
-                // Best-effort: the znode is ephemeral and will be cleaned up on session
-                // close even if delete fails.
-            }
-            return false;
-        }
-
+        // lexically, which matches numeric ordering for the 10-digit suffix. ALL paths
+        // between successful CreateEphemeralSequential and successful mapping-store MUST
+        // delete the child on failure so a thrown exception (network blip, cancellation,
+        // OOM in the mapping dictionary) does not leak the ephemeral until the session
+        // expires - other waiters would otherwise see our orphan child blocking them.
         try
         {
+            var children = await zk.GetChildrenAsync(parent, cancellationToken).ConfigureAwait(false);
+            var ourName = created[(parent.Length + 1)..];
+            var ourIsLowest = children.Count > 0 && children[0] == ourName;
+
+            if (!ourIsLowest)
+            {
+                await TryDeleteAsync(created).ConfigureAwait(false);
+                return false;
+            }
+
             ownerKeyToNode[(ownerToken, key)] = created;
+            return true;
         }
         catch
         {
-            await zk.DeleteAsync(created, CancellationToken.None).ConfigureAwait(false);
+            await TryDeleteAsync(created).ConfigureAwait(false);
             throw;
         }
-        return true;
+    }
+
+    private async Task TryDeleteAsync(string node)
+    {
+        try
+        {
+            await zk.DeleteAsync(node, CancellationToken.None).ConfigureAwait(false);
+        }
+        catch
+        {
+            // Best-effort: the znode is ephemeral and will be cleaned up on session close
+            // even if delete fails. We never propagate a cleanup failure to the caller.
+        }
     }
 
     /// <inheritdoc />

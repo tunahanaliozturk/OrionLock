@@ -23,6 +23,11 @@ public static class OrionLockZooKeeperBuilderExtensions
 
         var options = new ZooKeeperLockOptions();
         configure?.Invoke(options);
+        // Validate at DI registration time rather than waiting for the provider's ctor
+        // to surface the error during the first acquire. A misconfigured RootPath is a
+        // startup-time mistake; failing here keeps the stack trace pointing at the
+        // consumer's UseZooKeeper(...) call site.
+        options.ValidateAndNormalise();
 
         builder.Services.TryAddSingleton<IZooKeeperClientAdapter>(
             sp => new DefaultZooKeeperClientAdapter(sp.GetRequiredService<ZooKeeper>()));

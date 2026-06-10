@@ -30,8 +30,12 @@ public interface IZooKeeperClientAdapter
     Task<IReadOnlyList<string>> GetChildrenAsync(string parentPath, CancellationToken cancellationToken);
 
     /// <summary>
-    /// Delete the znode at <paramref name="path"/>. Throws when the node does not exist;
-    /// implementations should swallow the NoNodeException as benign during release.
+    /// Delete the znode at <paramref name="path"/>. Implementations MUST treat a
+    /// missing-node failure as benign (the znode may have been auto-cleaned on session
+    /// expiry between the caller's decision to delete and the actual delete call); the
+    /// official ZooKeeper client raises <c>NoNodeException</c> in that case and
+    /// implementations swallow it. Any other failure (network, ACL, etc.) propagates as
+    /// an exception so the caller can react.
     /// </summary>
     Task DeleteAsync(string path, CancellationToken cancellationToken);
 
