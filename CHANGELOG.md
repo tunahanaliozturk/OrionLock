@@ -4,6 +4,28 @@ All notable changes to OrionLock are documented in this file. The format is base
 [Keep a Changelog](https://keepachangelog.com/en/1.0.0/) and this project adheres to
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.3.8] - 2026-06-10
+
+### Added
+
+#### ZooKeeper SASL / digest ACL factory
+
+Closes the v0.3.7 deferral.
+
+- `IZooKeeperAclFactory` abstraction.
+- `OpenZooKeeperAclFactory` default - preserves v0.3.7 `OPEN_ACL_UNSAFE`.
+- `DigestZooKeeperAclFactory` - parent CREATE+READ (0x3), child CRDA+WRITE (0x1F), pre-computed `base64(sha1(user:pass))`.
+- `DefaultZooKeeperClientAdapter` 2-arg ctor (1-arg retained for ABI compat).
+- `OrionLockBuilder.UseDigestAcl(username, password)` DI helper.
+
+### Tests
+
+5 new facts; 17 total.
+
+### Migration from v0.3.7
+
+Source-compatible.
+
 ## [0.3.7] - 2026-06-10
 
 ### Added
