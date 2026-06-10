@@ -4,6 +4,29 @@ All notable changes to OrionLock are documented in this file. The format is base
 [Keep a Changelog](https://keepachangelog.com/en/1.0.0/) and this project adheres to
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.3.9] - 2026-06-11
+
+### Added
+
+#### `IDistributedLockProvider.WaitForAcquireAsync` polling helper
+
+Composes blocking-acquire semantics on top of the single-shot `TryAcquireAsync` primitive without forcing every backend to ship its own polling loop.
+
+- `DistributedLockProviderExtensions.WaitForAcquireAsync(provider, key, owner, lease, acquireTimeout, options?, ct)`.
+- Exponential backoff with jitter: `random(InitialDelay, InitialDelay * 2^attempts)` capped at `MaxDelay`. Default 25 ms initial, 2 s cap. Reduces thundering-herd when many waiters race for the same key.
+- Never sleeps past the deadline.
+- `Timeout.InfiniteTimeSpan` blocks until acquired or cancellation.
+- Returns `false` on timeout; `OperationCanceledException` on cancellation.
+- `WaitForAcquireOptions` with `InitialDelay`, `MaxDelay`, `RandomFactory` (for seeded testing).
+
+### Tests
+
+7 new facts.
+
+### Migration from v0.3.8
+
+Source-compatible.
+
 ## [0.3.8] - 2026-06-10
 
 ### Added
