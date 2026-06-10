@@ -4,6 +4,38 @@ All notable changes to OrionLock are documented in this file. The format is base
 [Keep a Changelog](https://keepachangelog.com/en/1.0.0/) and this project adheres to
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.3.4] - 2026-06-09
+
+### Added
+
+#### `RedisFifoWaiterCoordinator` - distributed cross-process FIFO
+
+The first distributed `IFifoWaiterCoordinator` implementation. Pairs with the v0.3.3 wiring so consumers opt blocking acquires into cross-process arrival-order fairness without changing any other lock backend.
+
+- **`RedisFifoWaiterCoordinator`** ships in the existing `Moongazing.OrionLock.Redis` package. One Redis sorted set per lock key: member = unique waiter id (Guid), score = arrival epoch millisecond. `EnterAsync` ZADD + polls `ZRANGE 0 0` until head; `LeaveAsync` ZREM. Cancellation removes the caller from the queue so it does not block waiters behind it.
+- **`RedisFifoWaiterOptions`** carries `Database`, `KeyPrefix` (default `orionlock:fifo`), `PollInterval` (default 50 ms), `WaiterTtl` (default 5 min). A scan-and-prune pass runs on every Enter / Leave call to remove stale entries by score (crashed process).
+- **`OrionLockBuilder.UseRedisFifoWaiterCoordinator(configure?)`** registers the coordinator as singleton over the already-resolved `IConnectionMultiplexer`. Replaces any previously-registered coordinator (the default `NullFifoWaiterCoordinator` wired by `AddOrionLock`). Consumers still opt in per-acquire via `DistributedLockOptions.UseFifoWaiterCoordinator = true`.
+- `OrionLockDiagnostics.ActivitySource` and `Meter` versions bumped to `0.3.4`.
+
+### Deferred
+
+- `OrionLock.Consul` backend -> v0.3.5 (unchanged)
+
+### Migration from v0.3.3
+
+Source-compatible. Default behaviour unchanged.
+
+```csharp
+services.AddOrionLock()
+    .UseRedis("localhost:6379")
+    .UseRedisFifoWaiterCoordinator();
+
+await lock.AcquireAsync(key, new DistributedLockOptions
+{
+    UseFifoWaiterCoordinator = true,
+});
+```
+
 ## [0.3.3] - 2026-06-09
 
 ### Added
