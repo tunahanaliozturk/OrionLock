@@ -18,13 +18,24 @@ public static class OrionLockDiagnostics
     /// <summary>The tag key used to label the health-check result counter (<c>healthy</c>, <c>degraded</c>, <c>unhealthy</c>).</summary>
     public const string HealthCheckResultTagName = "result";
 
-    internal static readonly ActivitySource ActivitySource = new(ActivitySourceName, "0.3.9");
+    internal static readonly ActivitySource ActivitySource = new(ActivitySourceName, "0.3.11");
 
-    private static readonly Meter Meter = new(MeterName, "0.3.9");
+    private static readonly Meter Meter = new(MeterName, "0.3.11");
 
     internal static readonly Counter<long> Acquisitions = Meter.CreateCounter<long>("orionlock.acquisitions");
     internal static readonly Counter<long> Contentions = Meter.CreateCounter<long>("orionlock.contentions");
     internal static readonly Counter<long> LeasesLost = Meter.CreateCounter<long>("orionlock.lease.lost");
+
+    /// <summary>
+    /// Number of leases the v0.3.10 fairness watchdog surrendered because the
+    /// <see cref="DistributedLockOptions.RenewalFailureGracePeriod"/> elapsed without a
+    /// successful renewal. Distinct from <c>orionlock.lease.lost</c>, which counts ALL
+    /// confirmed losses including provider-side "lease no longer exists" returns. This
+    /// counter is the operational signal that a backend was unreachable long enough to
+    /// trigger the fairness deadline.
+    /// </summary>
+    internal static readonly Counter<long> LeasesGraceExhausted = Meter.CreateCounter<long>(
+        "orionlock.lease.grace_period_exhausted");
 
     /// <summary>End-to-end duration of <c>AcquireAsync</c> including wait/retry, in milliseconds.</summary>
     internal static readonly Histogram<double> AcquireDuration = Meter.CreateHistogram<double>("orionlock.acquire.duration");

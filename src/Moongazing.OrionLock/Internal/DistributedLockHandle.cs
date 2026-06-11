@@ -96,8 +96,12 @@ public sealed class DistributedLockHandle : IDistributedLockHandle
                     // certainly expired by now anyway.
                     if (nowUtc() - lastSuccessfulRenewalUtc > renewalGrace)
                     {
+                        // v0.3.11: distinguish a fairness-watchdog auto-release from a
+                        // backend-confirmed loss by incrementing the
+                        // grace_period_exhausted counter IN ADDITION to leases.lost.
                         isHeld = false;
                         OrionLockDiagnostics.LeasesLost.Add(1);
+                        OrionLockDiagnostics.LeasesGraceExhausted.Add(1);
                         SafeCancelLost();
                         return;
                     }
