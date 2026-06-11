@@ -4,6 +4,25 @@ All notable changes to OrionLock are documented in this file. The format is base
 [Keep a Changelog](https://keepachangelog.com/en/1.0.0/) and this project adheres to
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.3.18] - 2026-06-11
+
+### Added
+
+#### `orionlock.fairness.coordinator_enter_duration` histogram
+
+`Histogram<double>` exposes the wait time for a FIFO ticket before entering the contention loop. Only fires when `UseFifoWaiterCoordinator` is on. Operators graph p99 to spot head-of-line blocks in the FIFO queue.
+
+- Inherits v0.3.12 `WithMetricsLabel` static tags.
+- Isolated from `acquire.duration` / `contention.duration` so operators can distinguish FIFO queueing latency from backend acquisition latency.
+
+### Tests
+
+1 fact.
+
+### Migration from v0.3.17
+
+Source-compatible.
+
 ## [0.3.17] - 2026-06-11
 
 ### Added
