@@ -18,9 +18,9 @@ public static class OrionLockDiagnostics
     /// <summary>The tag key used to label the health-check result counter (<c>healthy</c>, <c>degraded</c>, <c>unhealthy</c>).</summary>
     public const string HealthCheckResultTagName = "result";
 
-    internal static readonly ActivitySource ActivitySource = new(ActivitySourceName, "0.3.17");
+    internal static readonly ActivitySource ActivitySource = new(ActivitySourceName, "0.3.18");
 
-    private static readonly Meter Meter = new(MeterName, "0.3.17");
+    private static readonly Meter Meter = new(MeterName, "0.3.18");
 
     internal static readonly Counter<long> Acquisitions = Meter.CreateCounter<long>("orionlock.acquisitions");
     internal static readonly Counter<long> Contentions = Meter.CreateCounter<long>("orionlock.contentions");
@@ -136,6 +136,21 @@ public static class OrionLockDiagnostics
     {
         if (staticTags.Length == 0) { ReentrancyDepth.Add(-1); return; }
         ReentrancyDepth.Add(-1, staticTags);
+    }
+
+    /// <summary>
+    /// v0.3.18 distribution of how long callers spent waiting for their FIFO ticket
+    /// before entering the contention loop. Only fires when
+    /// <see cref="DistributedLockOptions.UseFifoWaiterCoordinator"/> is enabled. Operators
+    /// graph p99 to size the FIFO queue and spot a head-of-line block.
+    /// </summary>
+    internal static readonly Histogram<double> FifoCoordinatorEnterDuration = Meter.CreateHistogram<double>(
+        "orionlock.fairness.coordinator_enter_duration");
+
+    internal static void RecordFifoCoordinatorEnter(double milliseconds)
+    {
+        if (staticTags.Length == 0) { FifoCoordinatorEnterDuration.Record(milliseconds); return; }
+        FifoCoordinatorEnterDuration.Record(milliseconds, staticTags);
     }
 
     /// <summary>
