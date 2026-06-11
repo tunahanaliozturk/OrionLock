@@ -18,9 +18,9 @@ public static class OrionLockDiagnostics
     /// <summary>The tag key used to label the health-check result counter (<c>healthy</c>, <c>degraded</c>, <c>unhealthy</c>).</summary>
     public const string HealthCheckResultTagName = "result";
 
-    internal static readonly ActivitySource ActivitySource = new(ActivitySourceName, "0.3.13");
+    internal static readonly ActivitySource ActivitySource = new(ActivitySourceName, "0.3.14");
 
-    private static readonly Meter Meter = new(MeterName, "0.3.13");
+    private static readonly Meter Meter = new(MeterName, "0.3.14");
 
     internal static readonly Counter<long> Acquisitions = Meter.CreateCounter<long>("orionlock.acquisitions");
     internal static readonly Counter<long> Contentions = Meter.CreateCounter<long>("orionlock.contentions");
@@ -90,6 +90,21 @@ public static class OrionLockDiagnostics
     /// </summary>
     internal static readonly UpDownCounter<long> LeasesHeldConcurrent = Meter.CreateUpDownCounter<long>(
         "orionlock.leases.held_concurrent");
+
+    /// <summary>
+    /// v0.3.14 distribution of how long each lease was held between acquire and dispose.
+    /// Pairs with the v0.3.13 held_concurrent gauge to answer "are leases held briefly or
+    /// for an unusually long time?" - the gauge alone cannot distinguish steady churn from
+    /// a stuck holder. Tags inherited from v0.3.12 WithMetricsLabel.
+    /// </summary>
+    internal static readonly Histogram<double> HandleHoldingDuration = Meter.CreateHistogram<double>(
+        "orionlock.handle.holding_duration");
+
+    internal static void RecordHandleHoldingDuration(double milliseconds)
+    {
+        if (staticTags.Length == 0) { HandleHoldingDuration.Record(milliseconds); return; }
+        HandleHoldingDuration.Record(milliseconds, staticTags);
+    }
 
     internal static void IncrementLeasesHeld()
     {

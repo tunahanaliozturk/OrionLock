@@ -25,6 +25,9 @@ public sealed class DistributedLockHandle : IDistributedLockHandle
     // Both DisposeAsync AND the watchdog loss paths call DecrementOnceIfHeld; Interlocked
     // ensures exactly-once decrement regardless of who runs first.
     private int decremented;
+    // v0.3.14: capture acquire time so the holding-duration histogram can be recorded
+    // exactly once when the handle's lifecycle ends.
+    private readonly long acquireTimestamp = System.Diagnostics.Stopwatch.GetTimestamp();
 
     /// <summary>Creates a handle and, when <see cref="DistributedLockOptions.AutoRenew"/> is set, starts the watchdog.</summary>
     public DistributedLockHandle(
@@ -175,6 +178,11 @@ public sealed class DistributedLockHandle : IDistributedLockHandle
         if (Interlocked.Exchange(ref decremented, 1) == 0)
         {
             OrionLockDiagnostics.DecrementLeasesHeld();
+            // v0.3.14: emit the held duration alongside the decrement so the histogram
+            // captures BOTH normal-dispose and watchdog-loss lifecycles. Stopwatch ticks
+            // avoid clock-adjust skew that DateTime.UtcNow would introduce on long holds.
+            var elapsed = System.Diagnostics.Stopwatch.GetElapsedTime(acquireTimestamp);
+            OrionLockDiagnostics.RecordHandleHoldingDuration(elapsed.TotalMilliseconds);
         }
     }
 }

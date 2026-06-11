@@ -4,6 +4,27 @@ All notable changes to OrionLock are documented in this file. The format is base
 [Keep a Changelog](https://keepachangelog.com/en/1.0.0/) and this project adheres to
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.3.14] - 2026-06-11
+
+### Added
+
+#### `orionlock.handle.holding_duration` histogram
+
+`Histogram<double>` exposing the distribution of how long each lease was held between acquire and dispose. Pairs with the v0.3.13 `held_concurrent` gauge to answer "are leases held briefly or for an unusually long time?" - the gauge alone cannot distinguish steady churn from a stuck holder.
+
+- Emitted in `DistributedLockHandle.DecrementOnceIfHeld`, so both normal dispose AND watchdog-loss paths produce a sample.
+- Stopwatch ticks (`GetElapsedTime`) used instead of `DateTime.UtcNow` so clock adjustment during a long hold cannot skew the measurement.
+- Inherits v0.3.12 `WithMetricsLabel` static tags.
+- Exactly-once via the same Interlocked guard as the decrement: dispose-twice or watchdog-loss-then-dispose still record only ONE sample.
+
+### Tests
+
+2 new facts.
+
+### Migration from v0.3.13
+
+Source-compatible.
+
 ## [0.3.13] - 2026-06-11
 
 ### Added
