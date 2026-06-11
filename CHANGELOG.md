@@ -4,6 +4,26 @@ All notable changes to OrionLock are documented in this file. The format is base
 [Keep a Changelog](https://keepachangelog.com/en/1.0.0/) and this project adheres to
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.3.19] - 2026-06-11
+
+### Added
+
+#### `orionlock.lease.renewal_failures_consecutive` histogram
+
+`Histogram<int>` of consecutive renewal failures observed per handle before the handle either recovers (success after N failures) or surrenders (lease lost / grace exhausted). Operators graph p99 to size `RenewalFailureGracePeriod` against actual backend flakiness rather than guessing.
+
+- Recorded on three paths: successful renewal after a failure streak (recovery), lease-lost surrender, grace-exhausted surrender.
+- Zero/negative inputs are ignored at the helper level.
+- Inherits v0.3.12 `WithMetricsLabel` static tags.
+
+### Tests
+
+2 facts.
+
+### Migration from v0.3.18
+
+Source-compatible.
+
 ## [0.3.18] - 2026-06-11
 
 ### Added
