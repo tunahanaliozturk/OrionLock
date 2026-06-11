@@ -89,6 +89,7 @@ public sealed class DistributedLock : IDistributedLock
         try
         {
             var deadline = Stopwatch.StartNew();
+            var contended = false;
             while (true)
             {
                 var handle = await TryAcquireAsync(key, options, cancellationToken).ConfigureAwait(false);
@@ -97,9 +98,17 @@ public sealed class DistributedLock : IDistributedLock
                     activity?.SetTag("orionlock.outcome", "acquired");
                     OrionLockDiagnostics.RecordAcquisition();
                     OrionLockDiagnostics.RecordAcquireDuration(deadline.Elapsed.TotalMilliseconds);
+                    // v0.3.15: only contended acquires emit on the contention histogram
+                    // so its p99 reflects actual contention pressure rather than being
+                    // diluted by uncontested happy paths.
+                    if (contended)
+                    {
+                        OrionLockDiagnostics.RecordContentionDuration(deadline.Elapsed.TotalMilliseconds);
+                    }
                     return handle;
                 }
 
+                contended = true;
                 OrionLockDiagnostics.RecordContention();
 
                 if (deadline.Elapsed >= options.WaitTimeout)
