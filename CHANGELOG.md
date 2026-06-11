@@ -4,6 +4,26 @@ All notable changes to OrionLock are documented in this file. The format is base
 [Keep a Changelog](https://keepachangelog.com/en/1.0.0/) and this project adheres to
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.3.16] - 2026-06-11
+
+### Added
+
+#### `orionlock.acquire.timeout` counter
+
+`Counter<long>` that increments each time `DistributedLock.AcquireAsync` throws `LockAcquisitionTimeoutException` because the contention loop exceeded `WaitTimeout`. Distinct from `orionlock.contentions` which counts EVERY contended `TryAcquireAsync` miss; this counter only fires when the caller gave up.
+
+- Emitted inside `AcquireAsync` before the throw so a panicking caller cannot miss the metric.
+- Inherits v0.3.12 `WithMetricsLabel` static tags via the `RecordAcquireTimeout` helper.
+- Pairs with `acquire.duration` (success p99) and `contention.duration` (contended p99) to give operators a three-way view: how often timeouts happen, how long contended waits take, how long successful acquires take.
+
+### Tests
+
+2 new facts.
+
+### Migration from v0.3.15
+
+Source-compatible.
+
 ## [0.3.15] - 2026-06-11
 
 ### Added
