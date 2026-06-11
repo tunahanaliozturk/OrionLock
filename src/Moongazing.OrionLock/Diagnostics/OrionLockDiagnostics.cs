@@ -77,6 +77,12 @@ public static class OrionLockDiagnostics
         LeasesGraceExhausted.Add(1, staticTags);
     }
 
+    internal static void RecordAcquireDuration(double milliseconds)
+    {
+        if (staticTags.Length == 0) { AcquireDuration.Record(milliseconds); return; }
+        AcquireDuration.Record(milliseconds, staticTags);
+    }
+
     /// <summary>
     /// Number of leases the v0.3.10 fairness watchdog surrendered because the
     /// <see cref="DistributedLockOptions.RenewalFailureGracePeriod"/> elapsed without a
