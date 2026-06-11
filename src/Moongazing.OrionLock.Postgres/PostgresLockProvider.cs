@@ -16,6 +16,15 @@ namespace Moongazing.OrionLock.Postgres;
 [BackendName("postgres")]
 public sealed class PostgresLockProvider : IDistributedLockProvider, IDisposable
 {
+    /// <inheritdoc />
+    /// <remarks>
+    /// PostgreSQL advisory locks are session-scoped: they are released only when the
+    /// owning session ends, regardless of the supplied <c>leaseDuration</c>. v0.3.21
+    /// expired-before-release diagnostics are suppressed for this provider so a caller
+    /// that legitimately holds the lock past <c>LeaseDuration</c> is not flagged.
+    /// </remarks>
+    public bool LeaseDurationIsTtl => false;
+
     private readonly string connectionString;
     private readonly PostgresLockOptions options;
     private readonly ConcurrentDictionary<string, SessionEntry> sessions = new();

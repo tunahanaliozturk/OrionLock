@@ -4,6 +4,25 @@ All notable changes to OrionLock are documented in this file. The format is base
 [Keep a Changelog](https://keepachangelog.com/en/1.0.0/) and this project adheres to
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.3.21] - 2026-06-11
+
+### Added
+
+#### `orionlock.lease.expired_before_release` counter
+
+`Counter<long>` increments when `DisposeAsync` runs but the handle's lease wall clock has already elapsed since the last successful renewal. Distinct from `orionlock.lease.lost` (confirmed backend-side loss via renewal returning false). Operators graph the rate to spot 'holders too slow for the configured LeaseDuration' situations the lost counter alone cannot diagnose.
+
+- Inherits v0.3.12 `WithMetricsLabel` static tags.
+- Recorded BEFORE the dispose mutates `isHeld` so the staleness check reads a coherent state.
+
+### Tests
+
+1 fact.
+
+### Migration from v0.3.20
+
+Source-compatible.
+
 ## [0.3.20] - 2026-06-11
 
 ### Added

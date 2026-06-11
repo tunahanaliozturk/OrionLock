@@ -15,6 +15,16 @@ namespace Moongazing.OrionLock.SqlServer;
 [BackendName("sqlserver")]
 public sealed class SqlServerLockProvider : IDistributedLockProvider, IDisposable
 {
+    /// <inheritdoc />
+    /// <remarks>
+    /// SQL Server <c>sp_getapplock</c> is session-scoped: locks release when the owning
+    /// session/transaction ends, regardless of the supplied <c>leaseDuration</c>.
+    /// v0.3.21 expired-before-release diagnostics are suppressed for this provider so
+    /// a caller that legitimately holds the lock past <c>LeaseDuration</c> is not
+    /// flagged.
+    /// </remarks>
+    public bool LeaseDurationIsTtl => false;
+
     private const int MaxResourceLength = 240;
 
     private readonly string connectionString;
