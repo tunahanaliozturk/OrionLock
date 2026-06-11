@@ -82,6 +82,7 @@ public sealed class OrionLockHealthCheck : IHealthCheck
                 // Sentinel was held by another owner for the full WaitTimeout - the backend is reachable
                 // but contended. Same outcome shape as an explicit LockAcquisitionTimeoutException further down.
                 OrionLockDiagnostics.RecordHealthCheckResult("degraded");
+                OrionLockDiagnostics.RecordHealthCheckCompleted(DateTime.UtcNow);
                 data["elapsed_ms"] = deadline.Elapsed.TotalMilliseconds;
                 return new HealthCheckResult(
                     HealthStatus.Degraded,
@@ -99,6 +100,7 @@ public sealed class OrionLockHealthCheck : IHealthCheck
             }
 
             OrionLockDiagnostics.RecordHealthCheckResult("healthy");
+            OrionLockDiagnostics.RecordHealthCheckCompleted(DateTime.UtcNow);
             data["elapsed_ms"] = deadline.Elapsed.TotalMilliseconds;
             return new HealthCheckResult(
                 HealthStatus.Healthy,
@@ -108,6 +110,7 @@ public sealed class OrionLockHealthCheck : IHealthCheck
         catch (LockAcquisitionTimeoutException ex)
         {
             OrionLockDiagnostics.RecordHealthCheckResult("degraded");
+            OrionLockDiagnostics.RecordHealthCheckCompleted(DateTime.UtcNow);
             data["error"] = ex.Message;
             return new HealthCheckResult(
                 HealthStatus.Degraded,
@@ -127,6 +130,7 @@ public sealed class OrionLockHealthCheck : IHealthCheck
             // transient errors) without forking this code. The metric label tracks the chosen
             // semantic.
             OrionLockDiagnostics.RecordHealthCheckResult(FailureMetricLabel(context));
+            OrionLockDiagnostics.RecordHealthCheckCompleted(DateTime.UtcNow);
             data["error"] = ex.Message;
             return new HealthCheckResult(
                 context.Registration.FailureStatus,
