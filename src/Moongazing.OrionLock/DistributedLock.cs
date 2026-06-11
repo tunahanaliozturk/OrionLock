@@ -59,6 +59,11 @@ public sealed class DistributedLock : IDistributedLock
         }
 
         var real = new DistributedLockHandle(provider, key, ownerToken, options);
+        // v0.3.13: increment the held-concurrent gauge ONLY when a real backend lease is
+        // taken. Reentrant nested acquisitions (returned above) and contention path
+        // returns (null) are excluded. The handle's DisposeAsync / watchdog-loss paths
+        // decrement exactly once via DecrementOnceIfHeld.
+        OrionLockDiagnostics.IncrementLeasesHeld();
         return reentrancy.Register(key, real);
     }
 
@@ -92,7 +97,6 @@ public sealed class DistributedLock : IDistributedLock
                     activity?.SetTag("orionlock.outcome", "acquired");
                     OrionLockDiagnostics.RecordAcquisition();
                     OrionLockDiagnostics.RecordAcquireDuration(deadline.Elapsed.TotalMilliseconds);
-                    OrionLockDiagnostics.IncrementLeasesHeld();
                     return handle;
                 }
 
