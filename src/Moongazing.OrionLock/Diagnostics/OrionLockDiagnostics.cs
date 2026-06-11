@@ -18,9 +18,9 @@ public static class OrionLockDiagnostics
     /// <summary>The tag key used to label the health-check result counter (<c>healthy</c>, <c>degraded</c>, <c>unhealthy</c>).</summary>
     public const string HealthCheckResultTagName = "result";
 
-    internal static readonly ActivitySource ActivitySource = new(ActivitySourceName, "0.3.21");
+    internal static readonly ActivitySource ActivitySource = new(ActivitySourceName, "0.3.22");
 
-    private static readonly Meter Meter = new(MeterName, "0.3.21");
+    private static readonly Meter Meter = new(MeterName, "0.3.22");
 
     internal static readonly Counter<long> Acquisitions = Meter.CreateCounter<long>("orionlock.acquisitions");
     internal static readonly Counter<long> Contentions = Meter.CreateCounter<long>("orionlock.contentions");
@@ -212,6 +212,27 @@ public static class OrionLockDiagnostics
     {
         if (staticTags.Length == 0) { LeasesExpiredBeforeRelease.Add(1); return; }
         LeasesExpiredBeforeRelease.Add(1, staticTags);
+    }
+
+    /// <summary>
+    /// v0.3.22 distribution of <c>TryAcquireAsync</c> attempts per <c>AcquireAsync</c>
+    /// call. Operators graph p99 to size <c>RetryInterval</c> against actual
+    /// contention shape: many attempts but quick acquire = polling too aggressively;
+    /// few attempts but slow acquire = polling cadence is fine but backend / FIFO
+    /// queue is slow. Emits only when the acquire eventually succeeded (cancelled or
+    /// timed-out acquires do not pollute the distribution).
+    /// </summary>
+    internal static readonly Histogram<int> AcquireAttemptCount = Meter.CreateHistogram<int>(
+        "orionlock.acquire.attempt_count");
+
+    internal static void RecordAcquireAttemptCount(int count)
+    {
+        if (count <= 0)
+        {
+            return;
+        }
+        if (staticTags.Length == 0) { AcquireAttemptCount.Record(count); return; }
+        AcquireAttemptCount.Record(count, staticTags);
     }
 
     /// <summary>

@@ -95,14 +95,20 @@ public sealed class DistributedLock : IDistributedLock
         {
             var deadline = Stopwatch.StartNew();
             var contended = false;
+            int attempts = 0;
             while (true)
             {
+                attempts++;
                 var handle = await TryAcquireAsync(key, options, cancellationToken).ConfigureAwait(false);
                 if (handle is not null)
                 {
                     activity?.SetTag("orionlock.outcome", "acquired");
                     OrionLockDiagnostics.RecordAcquisition();
                     OrionLockDiagnostics.RecordAcquireDuration(deadline.Elapsed.TotalMilliseconds);
+                    // v0.3.22: per-acquire attempt count for retry-interval sizing.
+                    // Only successful acquires emit so cancelled / timed-out paths do
+                    // not skew the distribution.
+                    OrionLockDiagnostics.RecordAcquireAttemptCount(attempts);
                     // v0.3.15: only contended acquires emit on the contention histogram
                     // so its p99 reflects actual contention pressure rather than being
                     // diluted by uncontested happy paths.
