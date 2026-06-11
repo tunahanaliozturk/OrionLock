@@ -18,13 +18,64 @@ public static class OrionLockDiagnostics
     /// <summary>The tag key used to label the health-check result counter (<c>healthy</c>, <c>degraded</c>, <c>unhealthy</c>).</summary>
     public const string HealthCheckResultTagName = "result";
 
-    internal static readonly ActivitySource ActivitySource = new(ActivitySourceName, "0.3.11");
+    internal static readonly ActivitySource ActivitySource = new(ActivitySourceName, "0.3.12");
 
-    private static readonly Meter Meter = new(MeterName, "0.3.11");
+    private static readonly Meter Meter = new(MeterName, "0.3.12");
 
     internal static readonly Counter<long> Acquisitions = Meter.CreateCounter<long>("orionlock.acquisitions");
     internal static readonly Counter<long> Contentions = Meter.CreateCounter<long>("orionlock.contentions");
     internal static readonly Counter<long> LeasesLost = Meter.CreateCounter<long>("orionlock.lease.lost");
+
+    /// <summary>
+    /// v0.3.12 static tags appended to every counter / histogram emitted by OrionLock.
+    /// Set once at <c>AddOrionLock(...).WithMetricsLabel(...)</c>. Multi-tenant deployments
+    /// use this to split dashboards by tenant / region without registering a separate Meter.
+    /// </summary>
+    /// <remarks>
+    /// Mutation is single-threaded at startup; the field is exposed as a snapshot to the
+    /// emission sites so a measurement does not see a half-built array. Tags configured
+    /// AFTER the host starts emitting do NOT retroactively apply to previously-emitted
+    /// measurements.
+    /// </remarks>
+    private static KeyValuePair<string, object?>[] staticTags = Array.Empty<KeyValuePair<string, object?>>();
+
+    internal static KeyValuePair<string, object?>[] StaticTags => staticTags;
+
+    internal static void SetStaticTags(IReadOnlyDictionary<string, string> tags)
+    {
+        ArgumentNullException.ThrowIfNull(tags);
+        var snapshot = new KeyValuePair<string, object?>[tags.Count];
+        var i = 0;
+        foreach (var (k, v) in tags)
+        {
+            snapshot[i++] = new KeyValuePair<string, object?>(k, v);
+        }
+        staticTags = snapshot;
+    }
+
+    internal static void RecordAcquisition()
+    {
+        if (staticTags.Length == 0) { Acquisitions.Add(1); return; }
+        Acquisitions.Add(1, staticTags);
+    }
+
+    internal static void RecordContention()
+    {
+        if (staticTags.Length == 0) { Contentions.Add(1); return; }
+        Contentions.Add(1, staticTags);
+    }
+
+    internal static void RecordLeaseLost()
+    {
+        if (staticTags.Length == 0) { LeasesLost.Add(1); return; }
+        LeasesLost.Add(1, staticTags);
+    }
+
+    internal static void RecordLeaseGraceExhausted()
+    {
+        if (staticTags.Length == 0) { LeasesGraceExhausted.Add(1); return; }
+        LeasesGraceExhausted.Add(1, staticTags);
+    }
 
     /// <summary>
     /// Number of leases the v0.3.10 fairness watchdog surrendered because the
