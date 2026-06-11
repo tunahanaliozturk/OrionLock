@@ -4,6 +4,27 @@ All notable changes to OrionLock are documented in this file. The format is base
 [Keep a Changelog](https://keepachangelog.com/en/1.0.0/) and this project adheres to
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.3.12] - 2026-06-11
+
+### Added
+
+#### `OrionLockBuilder.WithMetricsLabel` static metrics tags
+
+Multi-tenant deployments running OrionLock across several tenants on one host need a way to split dashboards by tenant / region / shard without registering a separate `Meter`. v0.3.12 adds a static-tag stamping hook that gets applied to every counter the library emits.
+
+- `OrionLockBuilder.WithMetricsLabel(string key, string value)` adds one tag.
+- `OrionLockBuilder.WithMetricsLabels(IReadOnlyDictionary<string, string> tags)` adds many; later keys override earlier ones.
+- Tags stamp on `orionlock.acquisitions`, `orionlock.contentions`, `orionlock.lease.lost`, `orionlock.lease.grace_period_exhausted` (the per-backend tag on `acquire.latency` / `lease_renewal.duration` / `lease_renewal.failures` is preserved unchanged - the static tag is ADDED alongside).
+- Mutation is single-threaded at startup; the tag array is snapshotted into a single field that emission sites read atomically.
+
+### Tests
+
+4 new facts.
+
+### Migration from v0.3.11
+
+Source-compatible.
+
 ## [0.3.11] - 2026-06-11
 
 ### Added
