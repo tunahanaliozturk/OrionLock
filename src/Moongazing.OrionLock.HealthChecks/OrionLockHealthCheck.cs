@@ -141,6 +141,7 @@ public sealed class OrionLockHealthCheck : IHealthCheck
         catch (Exception ex)
         {
             OrionLockDiagnostics.RecordHealthCheckResult(FailureMetricLabel(context));
+            OrionLockDiagnostics.RecordHealthCheckCompleted(DateTime.UtcNow);
             data["error"] = ex.Message;
             return new HealthCheckResult(
                 context.Registration.FailureStatus,
