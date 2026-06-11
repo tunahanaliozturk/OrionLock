@@ -4,6 +4,25 @@ All notable changes to OrionLock are documented in this file. The format is base
 [Keep a Changelog](https://keepachangelog.com/en/1.0.0/) and this project adheres to
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.3.20] - 2026-06-11
+
+### Added
+
+#### `orionlock.health.last_check_at_unix_seconds` ObservableGauge
+
+Gauge of the Unix seconds at which the OrionLock health check last completed. `0` until the first run; operators query `(now() - last_check_at) > N` to flag a stuck check loop separately from a backend that is actually unhealthy.
+
+- Recorded on every backend-side completion path (healthy, degraded, unhealthy, backend failure). NOT recorded on caller-driven cancellation (same semantics as the existing health-check result counter).
+- Atomic `Interlocked.Exchange` write prevents torn reads.
+
+### Tests
+
+1 fact.
+
+### Migration from v0.3.19
+
+Source-compatible.
+
 ## [0.3.19] - 2026-06-11
 
 ### Added

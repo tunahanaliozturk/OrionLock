@@ -18,9 +18,9 @@ public static class OrionLockDiagnostics
     /// <summary>The tag key used to label the health-check result counter (<c>healthy</c>, <c>degraded</c>, <c>unhealthy</c>).</summary>
     public const string HealthCheckResultTagName = "result";
 
-    internal static readonly ActivitySource ActivitySource = new(ActivitySourceName, "0.3.19");
+    internal static readonly ActivitySource ActivitySource = new(ActivitySourceName, "0.3.20");
 
-    private static readonly Meter Meter = new(MeterName, "0.3.19");
+    private static readonly Meter Meter = new(MeterName, "0.3.20");
 
     internal static readonly Counter<long> Acquisitions = Meter.CreateCounter<long>("orionlock.acquisitions");
     internal static readonly Counter<long> Contentions = Meter.CreateCounter<long>("orionlock.contentions");
@@ -170,6 +170,29 @@ public static class OrionLockDiagnostics
         }
         if (staticTags.Length == 0) { ConsecutiveRenewalFailures.Record(count); return; }
         ConsecutiveRenewalFailures.Record(count, staticTags);
+    }
+
+    /// <summary>
+    /// v0.3.20 last health-check completion Unix seconds. <c>0</c> until the health
+    /// check fires once. Operators query <c>(now() - last_check_at) &gt; N</c> to flag a
+    /// stuck check loop separately from a backend that is actually unhealthy.
+    /// </summary>
+    private static long lastHealthCheckAtUnixSeconds;
+
+    internal static readonly ObservableGauge<long> HealthCheckLastCheckAt = Meter.CreateObservableGauge<long>(
+        "orionlock.health.last_check_at_unix_seconds",
+        () => Interlocked.Read(ref lastHealthCheckAtUnixSeconds),
+        unit: "s",
+        description: "Unix seconds at which the OrionLock health check last completed (0 = never).");
+
+    /// <summary>
+    /// Record that the health check completed at <paramref name="utcNow"/>. Atomic write
+    /// keeps the gauge observer free of torn reads when racing the writer.
+    /// </summary>
+    public static void RecordHealthCheckCompleted(DateTime utcNow)
+    {
+        var stamp = new DateTimeOffset(utcNow, TimeSpan.Zero).ToUnixTimeSeconds();
+        Interlocked.Exchange(ref lastHealthCheckAtUnixSeconds, stamp);
     }
 
     /// <summary>
