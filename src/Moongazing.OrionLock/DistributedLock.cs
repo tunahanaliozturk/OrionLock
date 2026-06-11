@@ -83,7 +83,12 @@ public sealed class DistributedLock : IDistributedLock
         Fairness.IFifoWaiterTicket? ticket = null;
         if (options.UseFifoWaiterCoordinator)
         {
+            var fifoSw = Stopwatch.StartNew();
             ticket = await fifoCoordinator.EnterAsync(key, cancellationToken).ConfigureAwait(false);
+            fifoSw.Stop();
+            // v0.3.18: record only the FIFO ticket wait so operators can isolate
+            // head-of-line block latency from the backend acquisition latency.
+            OrionLockDiagnostics.RecordFifoCoordinatorEnter(fifoSw.Elapsed.TotalMilliseconds);
         }
 
         try
