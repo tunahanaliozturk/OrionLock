@@ -90,12 +90,12 @@ public sealed class DistributedLock : IDistributedLock
                 if (handle is not null)
                 {
                     activity?.SetTag("orionlock.outcome", "acquired");
-                    OrionLockDiagnostics.Acquisitions.Add(1);
-                    OrionLockDiagnostics.AcquireDuration.Record(deadline.Elapsed.TotalMilliseconds);
+                    OrionLockDiagnostics.RecordAcquisition();
+                    OrionLockDiagnostics.RecordAcquireDuration(deadline.Elapsed.TotalMilliseconds);
                     return handle;
                 }
 
-                OrionLockDiagnostics.Contentions.Add(1);
+                OrionLockDiagnostics.RecordContention();
 
                 if (deadline.Elapsed >= options.WaitTimeout)
                 {

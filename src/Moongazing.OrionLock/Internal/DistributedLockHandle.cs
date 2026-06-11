@@ -100,8 +100,8 @@ public sealed class DistributedLockHandle : IDistributedLockHandle
                         // backend-confirmed loss by incrementing the
                         // grace_period_exhausted counter IN ADDITION to leases.lost.
                         isHeld = false;
-                        OrionLockDiagnostics.LeasesLost.Add(1);
-                        OrionLockDiagnostics.LeasesGraceExhausted.Add(1);
+                        OrionLockDiagnostics.RecordLeaseLost();
+                        OrionLockDiagnostics.RecordLeaseGraceExhausted();
                         SafeCancelLost();
                         return;
                     }
@@ -111,7 +111,7 @@ public sealed class DistributedLockHandle : IDistributedLockHandle
                 if (!renewed)
                 {
                     isHeld = false;
-                    OrionLockDiagnostics.LeasesLost.Add(1);
+                    OrionLockDiagnostics.RecordLeaseLost();
                     SafeCancelLost();
                     return;
                 }
