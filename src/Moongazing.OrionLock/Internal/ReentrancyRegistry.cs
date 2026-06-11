@@ -1,4 +1,5 @@
 using System.Collections.Concurrent;
+using Moongazing.OrionLock.Diagnostics;
 
 namespace Moongazing.OrionLock.Internal;
 
@@ -30,6 +31,11 @@ public sealed class ReentrancyRegistry
             if (held.TryGetValue(key, out var entry))
             {
                 entry.Count++;
+                // v0.3.17: only nested re-entries increment the depth gauge. The
+                // outermost entry's depth is established by Register and is reset on
+                // the final Exit; depth therefore answers 'how many NESTED handles are
+                // outstanding right now', not 'how many keys are held'.
+                OrionLockDiagnostics.IncrementReentrancyDepth();
                 return new ReentrantLockHandle(this, key, entry.RealHandle);
             }
             return null;
@@ -63,6 +69,10 @@ public sealed class ReentrancyRegistry
                     held.TryRemove(key, out _);
                     return true;
                 }
+                // v0.3.17: a non-terminal Exit corresponds to a nested handle's
+                // dispose; decrement the depth gauge to match the IncrementReentrancyDepth
+                // in TryEnter.
+                OrionLockDiagnostics.DecrementReentrancyDepth();
             }
             return false;
         }
