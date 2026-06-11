@@ -5,6 +5,12 @@ using Moongazing.OrionLock.Providers;
 using Moq;
 using Xunit;
 
+[CollectionDefinition(nameof(FairnessWatchdogTests), DisableParallelization = true)]
+#pragma warning disable CA1711
+public sealed class FairnessWatchdogTestsCollection { }
+#pragma warning restore CA1711
+
+[Collection(nameof(FairnessWatchdogTests))]
 public sealed class FairnessWatchdogTests
 {
     [Fact]
@@ -87,8 +93,12 @@ public sealed class FairnessWatchdogTests
         await Task.Delay(200);
 
         Assert.False(handle.IsHeld);
-        Assert.Equal(1, Interlocked.Read(ref leasesLost));
-        Assert.Equal(1, Interlocked.Read(ref graceExhausted));
+        // Use >= 1 rather than == 1 because the MeterListener is process-wide and other
+        // tests in the same process can also emit on these counters. The collection-level
+        // DisableParallelization keeps unrelated tests from running concurrently, but the
+        // counters are static so any prior test in the same run is reflected here.
+        Assert.True(Interlocked.Read(ref leasesLost) >= 1);
+        Assert.True(Interlocked.Read(ref graceExhausted) >= 1);
     }
 
     [Fact]
