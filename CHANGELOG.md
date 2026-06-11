@@ -4,6 +4,26 @@ All notable changes to OrionLock are documented in this file. The format is base
 [Keep a Changelog](https://keepachangelog.com/en/1.0.0/) and this project adheres to
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.3.15] - 2026-06-11
+
+### Added
+
+#### `orionlock.contention.duration` histogram
+
+`Histogram<double>` exposing how long contended acquires spent waiting. Only contended attempts (those that hit at least one `TryAcquireAsync` miss before success) emit so the histogram tail is not diluted by the zero-contention happy path.
+
+- Recorded inside `DistributedLock.AcquireAsync` after the eventual handle is produced, gated by a local `contended` flag.
+- Distinct from the existing `orionlock.acquire.duration` histogram which records EVERY successful acquire; together they answer "what is the contention pressure" vs "what is the steady-state acquire latency".
+- Inherits v0.3.12 `WithMetricsLabel` static tags via the `RecordContentionDuration` helper.
+
+### Tests
+
+2 new facts.
+
+### Migration from v0.3.14
+
+Source-compatible.
+
 ## [0.3.14] - 2026-06-11
 
 ### Added
