@@ -4,6 +4,27 @@ All notable changes to OrionLock are documented in this file. The format is base
 [Keep a Changelog](https://keepachangelog.com/en/1.0.0/) and this project adheres to
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.3.11] - 2026-06-11
+
+### Added
+
+#### `orionlock.lease.grace_period_exhausted` fairness metric
+
+Extends the v0.3.10 fairness watchdog. v0.3.10 incremented `orionlock.lease.lost` on both confirmed losses and fairness auto-releases - dashboards could not distinguish a healthy lease expiry (the backend returned `false` from TryRenew) from a stuck-backend release (the watchdog gave up after the grace period). v0.3.11 splits them:
+
+- `orionlock.lease.lost` still counts ALL confirmed losses (including the fairness path so existing alerts continue firing).
+- `orionlock.lease.grace_period_exhausted` is the NEW counter that increments ONLY when the fairness watchdog surrenders due to renewal grace period exhaustion.
+
+A spike in `grace_period_exhausted` signals backend instability, while a steady `lost` rate without `grace_period_exhausted` is normal lease churn.
+
+### Tests
+
+1 new fact verifying both counters increment via a `MeterListener`.
+
+### Migration from v0.3.10
+
+Source-compatible.
+
 ## [0.3.10] - 2026-06-11
 
 ### Added
