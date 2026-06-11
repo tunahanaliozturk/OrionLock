@@ -4,6 +4,27 @@ All notable changes to OrionLock are documented in this file. The format is base
 [Keep a Changelog](https://keepachangelog.com/en/1.0.0/) and this project adheres to
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.3.22] - 2026-06-11
+
+### Added
+
+#### `orionlock.acquire.attempt_count` histogram
+
+`Histogram<int>` of `TryAcquireAsync` attempts per `AcquireAsync` call (successful acquires only). Operators graph p99 to size `RetryInterval` against actual contention shape:
+
+- Many attempts but quick acquire = polling too aggressively; raise `RetryInterval` to relieve backend.
+- Few attempts but slow acquire = polling cadence is fine but backend / FIFO queue is slow.
+
+Emits only when the acquire eventually succeeded so cancelled or timed-out paths do not pollute the distribution. Inherits v0.3.12 `WithMetricsLabel` static tags.
+
+### Tests
+
+2 facts.
+
+### Migration from v0.3.21
+
+Source-compatible.
+
 ## [0.3.21] - 2026-06-11
 
 ### Added
