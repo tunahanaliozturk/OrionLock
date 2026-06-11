@@ -18,9 +18,9 @@ public static class OrionLockDiagnostics
     /// <summary>The tag key used to label the health-check result counter (<c>healthy</c>, <c>degraded</c>, <c>unhealthy</c>).</summary>
     public const string HealthCheckResultTagName = "result";
 
-    internal static readonly ActivitySource ActivitySource = new(ActivitySourceName, "0.3.15");
+    internal static readonly ActivitySource ActivitySource = new(ActivitySourceName, "0.3.16");
 
-    private static readonly Meter Meter = new(MeterName, "0.3.15");
+    private static readonly Meter Meter = new(MeterName, "0.3.16");
 
     internal static readonly Counter<long> Acquisitions = Meter.CreateCounter<long>("orionlock.acquisitions");
     internal static readonly Counter<long> Contentions = Meter.CreateCounter<long>("orionlock.contentions");
@@ -96,6 +96,23 @@ public static class OrionLockDiagnostics
     {
         if (staticTags.Length == 0) { ContentionDuration.Record(milliseconds); return; }
         ContentionDuration.Record(milliseconds, staticTags);
+    }
+
+    /// <summary>
+    /// v0.3.16 acquire-timeout counter. Increments each time
+    /// <c>DistributedLock.AcquireAsync</c> throws <c>LockAcquisitionTimeoutException</c>
+    /// because the contention loop exceeded <c>WaitTimeout</c>. Distinct from
+    /// <c>orionlock.contentions</c> which counts EVERY contended TryAcquireAsync miss
+    /// even when the acquire eventually succeeds; this counter only fires when the
+    /// caller gave up.
+    /// </summary>
+    internal static readonly Counter<long> AcquireTimeouts = Meter.CreateCounter<long>(
+        "orionlock.acquire.timeout");
+
+    internal static void RecordAcquireTimeout()
+    {
+        if (staticTags.Length == 0) { AcquireTimeouts.Add(1); return; }
+        AcquireTimeouts.Add(1, staticTags);
     }
 
     /// <summary>
