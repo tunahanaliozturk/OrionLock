@@ -164,6 +164,14 @@ public sealed class DistributedLockHandle : IDistributedLockHandle
             return;
         }
 
+        // v0.3.21 expired_before_release detection: if the handle's lease has elapsed
+        // by the time DisposeAsync runs, the caller held it longer than the configured
+        // lease (or the watchdog stopped renewing for any reason). Fire the counter
+        // BEFORE we mutate isHeld so the read is meaningful.
+        if (isHeld && nowUtc() - lastSuccessfulRenewalUtc > leaseDuration)
+        {
+            OrionLockDiagnostics.RecordLeaseExpiredBeforeRelease();
+        }
         isHeld = false;
         DecrementOnceIfHeld();
 

@@ -18,9 +18,9 @@ public static class OrionLockDiagnostics
     /// <summary>The tag key used to label the health-check result counter (<c>healthy</c>, <c>degraded</c>, <c>unhealthy</c>).</summary>
     public const string HealthCheckResultTagName = "result";
 
-    internal static readonly ActivitySource ActivitySource = new(ActivitySourceName, "0.3.20");
+    internal static readonly ActivitySource ActivitySource = new(ActivitySourceName, "0.3.21");
 
-    private static readonly Meter Meter = new(MeterName, "0.3.20");
+    private static readonly Meter Meter = new(MeterName, "0.3.21");
 
     internal static readonly Counter<long> Acquisitions = Meter.CreateCounter<long>("orionlock.acquisitions");
     internal static readonly Counter<long> Contentions = Meter.CreateCounter<long>("orionlock.contentions");
@@ -193,6 +193,25 @@ public static class OrionLockDiagnostics
     {
         var stamp = new DateTimeOffset(utcNow, TimeSpan.Zero).ToUnixTimeSeconds();
         Interlocked.Exchange(ref lastHealthCheckAtUnixSeconds, stamp);
+    }
+
+    /// <summary>
+    /// v0.3.21 counter: lease expired before the caller disposed the handle. Distinct
+    /// from <c>orionlock.lease.lost</c> which fires on a confirmed backend-side loss
+    /// (a renewal returning false). This counter fires when the handle's lease wall
+    /// clock has elapsed before <c>DisposeAsync</c> ran — typically the caller held
+    /// the handle longer than the configured lease (Application-layer slow-path) or
+    /// the watchdog stopped running for any reason. Operators graph the rate to spot
+    /// 'holders too slow for the configured LeaseDuration' situations the lost
+    /// counter alone cannot diagnose.
+    /// </summary>
+    internal static readonly Counter<long> LeasesExpiredBeforeRelease = Meter.CreateCounter<long>(
+        "orionlock.lease.expired_before_release");
+
+    internal static void RecordLeaseExpiredBeforeRelease()
+    {
+        if (staticTags.Length == 0) { LeasesExpiredBeforeRelease.Add(1); return; }
+        LeasesExpiredBeforeRelease.Add(1, staticTags);
     }
 
     /// <summary>
