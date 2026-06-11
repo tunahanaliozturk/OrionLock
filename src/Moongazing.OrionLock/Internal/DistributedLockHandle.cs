@@ -19,6 +19,11 @@ public sealed class DistributedLockHandle : IDistributedLockHandle
     private readonly Task? watchdog;
     private readonly Func<DateTime> nowUtc;
     private DateTime lastSuccessfulRenewalUtc;
+    // v0.3.19 streak of consecutive renewal failures since the last successful renewal.
+    // Recorded as a histogram sample when the streak ends (either by a successful
+    // renewal OR by surrender) so operators see the FULL distribution of backend
+    // flakiness shape.
+    private int consecutiveRenewalFailures;
     private int disposed;
     private volatile bool isHeld = true;
     // v0.3.13 single-decrement guard for the orionlock.leases.held_concurrent gauge.
@@ -101,11 +106,15 @@ public sealed class DistributedLockHandle : IDistributedLockHandle
                     // confirmed lost so a stuck backend cannot perpetually deny new waiters
                     // by leaving the lease unreleasable. The backend's TTL has almost
                     // certainly expired by now anyway.
+                    consecutiveRenewalFailures++;
                     if (nowUtc() - lastSuccessfulRenewalUtc > renewalGrace)
                     {
                         // v0.3.11: distinguish a fairness-watchdog auto-release from a
                         // backend-confirmed loss by incrementing the
                         // grace_period_exhausted counter IN ADDITION to leases.lost.
+                        // v0.3.19: record the final streak length so operators see how
+                        // many failures preceded the surrender.
+                        OrionLockDiagnostics.RecordConsecutiveRenewalFailures(consecutiveRenewalFailures);
                         isHeld = false;
                         OrionLockDiagnostics.RecordLeaseLost();
                         OrionLockDiagnostics.RecordLeaseGraceExhausted();
@@ -118,11 +127,19 @@ public sealed class DistributedLockHandle : IDistributedLockHandle
 
                 if (!renewed)
                 {
+                    // v0.3.19: surrender path - record the streak length.
+                    OrionLockDiagnostics.RecordConsecutiveRenewalFailures(consecutiveRenewalFailures + 1);
                     isHeld = false;
                     OrionLockDiagnostics.RecordLeaseLost();
                     DecrementOnceIfHeld();
                     SafeCancelLost();
                     return;
+                }
+                // v0.3.19: success path - record the recovered streak (if any) and reset.
+                if (consecutiveRenewalFailures > 0)
+                {
+                    OrionLockDiagnostics.RecordConsecutiveRenewalFailures(consecutiveRenewalFailures);
+                    consecutiveRenewalFailures = 0;
                 }
                 lastSuccessfulRenewalUtc = nowUtc();
             }
