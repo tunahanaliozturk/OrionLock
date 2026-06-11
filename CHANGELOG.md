@@ -4,6 +4,27 @@ All notable changes to OrionLock are documented in this file. The format is base
 [Keep a Changelog](https://keepachangelog.com/en/1.0.0/) and this project adheres to
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.3.13] - 2026-06-11
+
+### Added
+
+#### `orionlock.leases.held_concurrent` gauge
+
+UpDownCounter that operators graph to see in real time how many leases this process currently holds. Useful for spotting handle leaks, holds-longer-than-expected, or load concentration on a small set of keys.
+
+- Increment in `DistributedLock.AcquireAsync` (success path).
+- Decrement in `DistributedLockHandle.DisposeAsync` AND in both fairness-watchdog loss paths (grace-period exhausted, single-renewal failure).
+- Exactly-once guarantee via Interlocked.Exchange on a per-handle `decremented` flag - dispose-after-loss or dispose-twice still nets to zero.
+- Inherits static metrics tags from v0.3.12 `WithMetricsLabel`.
+
+### Tests
+
+2 new facts.
+
+### Migration from v0.3.12
+
+Source-compatible.
+
 ## [0.3.12] - 2026-06-11
 
 ### Added
