@@ -92,6 +92,7 @@ public sealed class DistributedLock : IDistributedLock
                     activity?.SetTag("orionlock.outcome", "acquired");
                     OrionLockDiagnostics.RecordAcquisition();
                     OrionLockDiagnostics.RecordAcquireDuration(deadline.Elapsed.TotalMilliseconds);
+                    OrionLockDiagnostics.IncrementLeasesHeld();
                     return handle;
                 }
 

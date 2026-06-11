@@ -18,9 +18,9 @@ public static class OrionLockDiagnostics
     /// <summary>The tag key used to label the health-check result counter (<c>healthy</c>, <c>degraded</c>, <c>unhealthy</c>).</summary>
     public const string HealthCheckResultTagName = "result";
 
-    internal static readonly ActivitySource ActivitySource = new(ActivitySourceName, "0.3.12");
+    internal static readonly ActivitySource ActivitySource = new(ActivitySourceName, "0.3.13");
 
-    private static readonly Meter Meter = new(MeterName, "0.3.12");
+    private static readonly Meter Meter = new(MeterName, "0.3.13");
 
     internal static readonly Counter<long> Acquisitions = Meter.CreateCounter<long>("orionlock.acquisitions");
     internal static readonly Counter<long> Contentions = Meter.CreateCounter<long>("orionlock.contentions");
@@ -81,6 +81,26 @@ public static class OrionLockDiagnostics
     {
         if (staticTags.Length == 0) { AcquireDuration.Record(milliseconds); return; }
         AcquireDuration.Record(milliseconds, staticTags);
+    }
+
+    /// <summary>
+    /// v0.3.13 gauge-like counter: how many leases this process currently holds. Operators
+    /// graph this to see in real time whether a host is leaking handles, holding leases
+    /// longer than expected, or whether load is concentrated on a small set of keys.
+    /// </summary>
+    internal static readonly UpDownCounter<long> LeasesHeldConcurrent = Meter.CreateUpDownCounter<long>(
+        "orionlock.leases.held_concurrent");
+
+    internal static void IncrementLeasesHeld()
+    {
+        if (staticTags.Length == 0) { LeasesHeldConcurrent.Add(1); return; }
+        LeasesHeldConcurrent.Add(1, staticTags);
+    }
+
+    internal static void DecrementLeasesHeld()
+    {
+        if (staticTags.Length == 0) { LeasesHeldConcurrent.Add(-1); return; }
+        LeasesHeldConcurrent.Add(-1, staticTags);
     }
 
     /// <summary>

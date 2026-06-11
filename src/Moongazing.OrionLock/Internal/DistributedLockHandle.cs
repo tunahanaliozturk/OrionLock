@@ -21,6 +21,10 @@ public sealed class DistributedLockHandle : IDistributedLockHandle
     private DateTime lastSuccessfulRenewalUtc;
     private int disposed;
     private volatile bool isHeld = true;
+    // v0.3.13 single-decrement guard for the orionlock.leases.held_concurrent gauge.
+    // Both DisposeAsync AND the watchdog loss paths call DecrementOnceIfHeld; Interlocked
+    // ensures exactly-once decrement regardless of who runs first.
+    private int decremented;
 
     /// <summary>Creates a handle and, when <see cref="DistributedLockOptions.AutoRenew"/> is set, starts the watchdog.</summary>
     public DistributedLockHandle(
@@ -102,6 +106,7 @@ public sealed class DistributedLockHandle : IDistributedLockHandle
                         isHeld = false;
                         OrionLockDiagnostics.RecordLeaseLost();
                         OrionLockDiagnostics.RecordLeaseGraceExhausted();
+                        DecrementOnceIfHeld();
                         SafeCancelLost();
                         return;
                     }
@@ -112,6 +117,7 @@ public sealed class DistributedLockHandle : IDistributedLockHandle
                 {
                     isHeld = false;
                     OrionLockDiagnostics.RecordLeaseLost();
+                    DecrementOnceIfHeld();
                     SafeCancelLost();
                     return;
                 }
@@ -139,6 +145,7 @@ public sealed class DistributedLockHandle : IDistributedLockHandle
         }
 
         isHeld = false;
+        DecrementOnceIfHeld();
 
         if (watchdogCts is not null)
         {
@@ -161,5 +168,13 @@ public sealed class DistributedLockHandle : IDistributedLockHandle
         }
 
         lostCts.Dispose();
+    }
+
+    private void DecrementOnceIfHeld()
+    {
+        if (Interlocked.Exchange(ref decremented, 1) == 0)
+        {
+            OrionLockDiagnostics.DecrementLeasesHeld();
+        }
     }
 }
