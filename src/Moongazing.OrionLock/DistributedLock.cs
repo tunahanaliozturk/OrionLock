@@ -114,6 +114,7 @@ public sealed class DistributedLock : IDistributedLock
                 if (deadline.Elapsed >= options.WaitTimeout)
                 {
                     activity?.SetTag("orionlock.outcome", "timeout");
+                    OrionLockDiagnostics.RecordAcquireTimeout();
                     throw new LockAcquisitionTimeoutException(key, deadline.Elapsed);
                 }
 
