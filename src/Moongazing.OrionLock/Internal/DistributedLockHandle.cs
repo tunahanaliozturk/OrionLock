@@ -167,8 +167,13 @@ public sealed class DistributedLockHandle : IDistributedLockHandle
         // v0.3.21 expired_before_release detection: if the handle's lease has elapsed
         // by the time DisposeAsync runs, the caller held it longer than the configured
         // lease (or the watchdog stopped renewing for any reason). Fire the counter
-        // BEFORE we mutate isHeld so the read is meaningful.
-        if (isHeld && nowUtc() - lastSuccessfulRenewalUtc > leaseDuration)
+        // BEFORE we mutate isHeld so the read is meaningful. Suppressed for session-
+        // scoped backends (Postgres advisory locks, SQL Server sp_getapplock) where
+        // lease duration is not a wall-clock TTL - holding past LeaseDuration is
+        // legitimate on those providers, so emitting would produce false positives.
+        if (isHeld
+            && provider.LeaseDurationIsTtl
+            && nowUtc() - lastSuccessfulRenewalUtc > leaseDuration)
         {
             OrionLockDiagnostics.RecordLeaseExpiredBeforeRelease();
         }

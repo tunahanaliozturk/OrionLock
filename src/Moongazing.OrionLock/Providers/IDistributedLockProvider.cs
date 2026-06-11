@@ -14,4 +14,15 @@ public interface IDistributedLockProvider
 
     /// <summary>Releases the lock if and only if <paramref name="ownerToken"/> still owns it.</summary>
     Task ReleaseAsync(string key, string ownerToken, CancellationToken cancellationToken);
+
+    /// <summary>
+    /// v0.3.21: True when the backend honours <c>leaseDuration</c> as a wall-clock TTL
+    /// (Redis, in-memory). False when the backend holds the lock for the lifetime of an
+    /// open session/transaction regardless of the supplied duration (PostgreSQL
+    /// advisory locks, SQL Server sp_getapplock). Lease-expiration diagnostics
+    /// (<c>orionlock.lease.expired_before_release</c>) are gated on this so
+    /// session-scoped backends do not produce false positives when a caller legitimately
+    /// holds the lock longer than the configured <c>LeaseDuration</c>.
+    /// </summary>
+    bool LeaseDurationIsTtl => true;
 }
