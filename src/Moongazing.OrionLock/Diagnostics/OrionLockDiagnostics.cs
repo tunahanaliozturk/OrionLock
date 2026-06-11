@@ -18,9 +18,9 @@ public static class OrionLockDiagnostics
     /// <summary>The tag key used to label the health-check result counter (<c>healthy</c>, <c>degraded</c>, <c>unhealthy</c>).</summary>
     public const string HealthCheckResultTagName = "result";
 
-    internal static readonly ActivitySource ActivitySource = new(ActivitySourceName, "0.3.16");
+    internal static readonly ActivitySource ActivitySource = new(ActivitySourceName, "0.3.17");
 
-    private static readonly Meter Meter = new(MeterName, "0.3.16");
+    private static readonly Meter Meter = new(MeterName, "0.3.17");
 
     internal static readonly Counter<long> Acquisitions = Meter.CreateCounter<long>("orionlock.acquisitions");
     internal static readonly Counter<long> Contentions = Meter.CreateCounter<long>("orionlock.contentions");
@@ -113,6 +113,29 @@ public static class OrionLockDiagnostics
     {
         if (staticTags.Length == 0) { AcquireTimeouts.Add(1); return; }
         AcquireTimeouts.Add(1, staticTags);
+    }
+
+    /// <summary>
+    /// v0.3.17 reentrancy depth gauge: how many nested reentrant handles this process
+    /// currently holds across all keys. Operators graph this alongside
+    /// <c>orionlock.leases.held_concurrent</c> to answer "are leases held with deep
+    /// re-entry (nested calls re-acquiring the same key)?" - a non-zero reentrancy
+    /// gauge while held_concurrent is steady reveals nested-call patterns that would
+    /// otherwise look like simple long holds.
+    /// </summary>
+    internal static readonly UpDownCounter<long> ReentrancyDepth = Meter.CreateUpDownCounter<long>(
+        "orionlock.reentrancy.depth");
+
+    internal static void IncrementReentrancyDepth()
+    {
+        if (staticTags.Length == 0) { ReentrancyDepth.Add(1); return; }
+        ReentrancyDepth.Add(1, staticTags);
+    }
+
+    internal static void DecrementReentrancyDepth()
+    {
+        if (staticTags.Length == 0) { ReentrancyDepth.Add(-1); return; }
+        ReentrancyDepth.Add(-1, staticTags);
     }
 
     /// <summary>
