@@ -18,9 +18,9 @@ public static class OrionLockDiagnostics
     /// <summary>The tag key used to label the health-check result counter (<c>healthy</c>, <c>degraded</c>, <c>unhealthy</c>).</summary>
     public const string HealthCheckResultTagName = "result";
 
-    internal static readonly ActivitySource ActivitySource = new(ActivitySourceName, "0.3.14");
+    internal static readonly ActivitySource ActivitySource = new(ActivitySourceName, "0.3.15");
 
-    private static readonly Meter Meter = new(MeterName, "0.3.14");
+    private static readonly Meter Meter = new(MeterName, "0.3.15");
 
     internal static readonly Counter<long> Acquisitions = Meter.CreateCounter<long>("orionlock.acquisitions");
     internal static readonly Counter<long> Contentions = Meter.CreateCounter<long>("orionlock.contentions");
@@ -81,6 +81,21 @@ public static class OrionLockDiagnostics
     {
         if (staticTags.Length == 0) { AcquireDuration.Record(milliseconds); return; }
         AcquireDuration.Record(milliseconds, staticTags);
+    }
+
+    /// <summary>
+    /// v0.3.15 distribution of how long contended acquires spent waiting. Only contended
+    /// attempts (acquires that hit at least one TryAcquireAsync miss before success) emit
+    /// here so the histogram tail is not diluted by zero-contention happy paths. Separate
+    /// from AcquireDuration which records EVERY successful acquire.
+    /// </summary>
+    internal static readonly Histogram<double> ContentionDuration = Meter.CreateHistogram<double>(
+        "orionlock.contention.duration");
+
+    internal static void RecordContentionDuration(double milliseconds)
+    {
+        if (staticTags.Length == 0) { ContentionDuration.Record(milliseconds); return; }
+        ContentionDuration.Record(milliseconds, staticTags);
     }
 
     /// <summary>
