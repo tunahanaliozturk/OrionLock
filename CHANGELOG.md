@@ -4,6 +4,26 @@ All notable changes to OrionLock are documented in this file. The format is base
 [Keep a Changelog](https://keepachangelog.com/en/1.0.0/) and this project adheres to
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.3.17] - 2026-06-11
+
+### Added
+
+#### `orionlock.reentrancy.depth` UpDownCounter
+
+Gauge of how many nested reentrant handles this process currently holds across all keys. Operators graph alongside `orionlock.leases.held_concurrent` to spot nested-call patterns that look like simple long holds in the leases gauge alone.
+
+- Only NESTED re-entries are counted; the outermost acquire does not move the gauge.
+- `ReentrancyRegistry.TryEnter` increments per nested entry; the non-terminal `Exit` decrements; the terminal `Exit` (count = 0) does NOT decrement (the outermost was never incremented).
+- Inherits v0.3.12 `WithMetricsLabel` static tags.
+
+### Tests
+
+1 fact.
+
+### Migration from v0.3.16
+
+Source-compatible.
+
 ## [0.3.16] - 2026-06-11
 
 ### Added
