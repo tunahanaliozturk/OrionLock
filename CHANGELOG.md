@@ -4,6 +4,26 @@ All notable changes to OrionLock are documented in this file. The format is base
 [Keep a Changelog](https://keepachangelog.com/en/1.0.0/) and this project adheres to
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.3.24] - 2026-06-12
+
+### Added
+
+#### `ILockEventObserver` extensibility
+
+Consumer-supplied observer for lock lifecycle events. Useful for application audit trails of distributed lock acquisition (compliance / incident triage) without coupling the audit logic to the load-bearing acquire/release path.
+
+- `ILockEventObserver` interface with `OnAcquired`, `OnAcquireTimedOut`, `OnLeaseLost`, `OnReleased` callbacks.
+- `NullLockEventObserver` default.
+- The contract is the same null-or-Null convention used by v0.2.18+ Patch / Vault / Guard observers: `null` and `NullLockEventObserver` both treated as 'no observer'.
+
+### Tests
+
+2 facts.
+
+### Migration from v0.3.23
+
+Source-compatible.
+
 ## [0.3.23] - 2026-06-12
 
 ### Added
