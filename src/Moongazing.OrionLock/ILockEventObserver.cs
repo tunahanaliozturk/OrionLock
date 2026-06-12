@@ -14,11 +14,13 @@ using System;
 /// audit-side outage cannot disrupt the lock path.
 /// </para>
 /// <para>
-/// No observer is registered by default. Consumers wire one via
-/// <c>services.AddSingleton&lt;ILockEventObserver, MyObserver&gt;()</c>. The default
-/// <see cref="NullLockEventObserver"/> is used when no consumer registration is
-/// present; the observer field treats <c>NullLockEventObserver</c> as 'no observer' to
-/// skip the call site entirely.
+/// <b>v0.3.24 SHIPS THE CONTRACT SURFACE ONLY.</b> The interface and
+/// <see cref="NullLockEventObserver"/> default are available so consumer code can be
+/// written against a stable API, but DI wiring into <c>DistributedLock</c> and
+/// <c>DistributedLockHandle</c> ships in a subsequent release. Registering an
+/// observer via <c>services.AddSingleton&lt;ILockEventObserver, MyObserver&gt;()</c>
+/// in v0.3.24 is a no-op at the lock pipeline; v0.3.25 wires the emission sites to
+/// invoke the observer.
 /// </para>
 /// </remarks>
 public interface ILockEventObserver
