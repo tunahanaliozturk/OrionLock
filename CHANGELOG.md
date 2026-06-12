@@ -4,6 +4,28 @@ All notable changes to OrionLock are documented in this file. The format is base
 [Keep a Changelog](https://keepachangelog.com/en/1.0.0/) and this project adheres to
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.3.25] - 2026-06-12
+
+### Added
+
+#### `ILockEventObserver` emission-site wire-up
+
+The v0.3.24 contract is now fully wired:
+
+- `DistributedLock` gains a 3-arg ctor accepting the optional observer; fires `OnAcquired` (success path of `AcquireAsync`) and `OnAcquireTimedOut` (before the timeout throw).
+- `DistributedLockHandle` gains a 5-arg public ctor; fires `OnLeaseLost` on both surrender paths (backend-confirmed loss AND grace-exhausted watchdog surrender) and `OnReleased` on normal `DisposeAsync` while still held.
+- `AddOrionLock` resolves `ILockEventObserver` from DI explicitly (`sp.GetService<ILockEventObserver>()`), so `services.AddSingleton<ILockEventObserver, MyObserver>()` now works as documented.
+- All invocations go through safe-invoke wrappers that swallow observer faults - audit-side outages cannot disrupt the lock path.
+- Watchdog-loss and dispose paths cannot double-fire: `OnReleased` only fires while `isHeld` is still true, and loss paths flip `isHeld` before dispose runs.
+
+### Tests
+
+2 integration facts (DI-registered observer receives acquired + released; timeout fires OnAcquireTimedOut under real contention).
+
+### Migration from v0.3.24
+
+Source-compatible. Observers registered in v0.3.24 (no-op then) start receiving callbacks after this upgrade.
+
 ## [0.3.24] - 2026-06-12
 
 ### Added

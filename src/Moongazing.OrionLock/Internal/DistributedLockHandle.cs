@@ -24,6 +24,8 @@ public sealed class DistributedLockHandle : IDistributedLockHandle
     // renewal OR by surrender) so operators see the FULL distribution of backend
     // flakiness shape.
     private int consecutiveRenewalFailures;
+    // v0.3.25 optional lifecycle observer; null when no consumer registration.
+    private readonly ILockEventObserver? eventObserver;
     private int disposed;
     private volatile bool isHeld = true;
     // v0.3.13 single-decrement guard for the orionlock.leases.held_concurrent gauge.
@@ -37,18 +39,29 @@ public sealed class DistributedLockHandle : IDistributedLockHandle
     /// <summary>Creates a handle and, when <see cref="DistributedLockOptions.AutoRenew"/> is set, starts the watchdog.</summary>
     public DistributedLockHandle(
         IDistributedLockProvider provider, string key, string ownerToken, DistributedLockOptions options)
-        : this(provider, key, ownerToken, options, nowUtc: null)
+        : this(provider, key, ownerToken, options, nowUtc: null, eventObserver: null)
+    {
+    }
+
+    /// <summary>
+    /// v0.3.25 overload that wires the optional <see cref="ILockEventObserver"/> so the
+    /// handle can fire <c>OnLeaseLost</c> / <c>OnReleased</c> lifecycle callbacks.
+    /// </summary>
+    public DistributedLockHandle(
+        IDistributedLockProvider provider, string key, string ownerToken, DistributedLockOptions options,
+        ILockEventObserver? eventObserver)
+        : this(provider, key, ownerToken, options, nowUtc: null, eventObserver)
     {
     }
 
     /// <summary>
     /// Test-only ctor exposing a clock hook so the fairness watchdog grace period can be
-    /// driven deterministically. Production code uses the 4-arg overload which binds the
+    /// driven deterministically. Production code uses the public overloads which bind the
     /// clock to <see cref="DateTime.UtcNow"/>.
     /// </summary>
     internal DistributedLockHandle(
         IDistributedLockProvider provider, string key, string ownerToken, DistributedLockOptions options,
-        Func<DateTime>? nowUtc)
+        Func<DateTime>? nowUtc, ILockEventObserver? eventObserver = null)
     {
         ArgumentNullException.ThrowIfNull(provider);
         ArgumentNullException.ThrowIfNull(options);
@@ -58,6 +71,7 @@ public sealed class DistributedLockHandle : IDistributedLockHandle
         leaseDuration = options.LeaseDuration;
         renewalGrace = options.RenewalFailureGracePeriod ?? options.LeaseDuration;
         this.nowUtc = nowUtc ?? (() => DateTime.UtcNow);
+        this.eventObserver = eventObserver is NullLockEventObserver ? null : eventObserver;
         lastSuccessfulRenewalUtc = this.nowUtc();
 
         if (options.AutoRenew)
@@ -118,6 +132,9 @@ public sealed class DistributedLockHandle : IDistributedLockHandle
                         isHeld = false;
                         OrionLockDiagnostics.RecordLeaseLost();
                         OrionLockDiagnostics.RecordLeaseGraceExhausted();
+                        // v0.3.25: lifecycle observer - grace-exhausted surrender IS a
+                        // lease loss from the consumer's perspective.
+                        eventObserver.SafeOnLeaseLost(Key);
                         DecrementOnceIfHeld();
                         SafeCancelLost();
                         return;
@@ -131,6 +148,8 @@ public sealed class DistributedLockHandle : IDistributedLockHandle
                     OrionLockDiagnostics.RecordConsecutiveRenewalFailures(consecutiveRenewalFailures + 1);
                     isHeld = false;
                     OrionLockDiagnostics.RecordLeaseLost();
+                    // v0.3.25: lifecycle observer - backend-confirmed loss.
+                    eventObserver.SafeOnLeaseLost(Key);
                     DecrementOnceIfHeld();
                     SafeCancelLost();
                     return;
@@ -176,6 +195,13 @@ public sealed class DistributedLockHandle : IDistributedLockHandle
             && nowUtc() - lastSuccessfulRenewalUtc > leaseDuration)
         {
             OrionLockDiagnostics.RecordLeaseExpiredBeforeRelease();
+        }
+        // v0.3.25: lifecycle observer - a normal dispose while still held is a
+        // 'released' event from the consumer's perspective. Watchdog-loss paths fired
+        // OnLeaseLost already and flipped isHeld, so this branch will not double-fire.
+        if (isHeld)
+        {
+            eventObserver.SafeOnReleased(Key);
         }
         isHeld = false;
         DecrementOnceIfHeld();

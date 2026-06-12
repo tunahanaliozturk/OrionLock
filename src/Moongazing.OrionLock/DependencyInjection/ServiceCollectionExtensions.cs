@@ -33,7 +33,12 @@ public static class ServiceCollectionExtensions
             var raw = sp.GetRequiredService<IDistributedLockProvider>();
             var measured = raw is MeasuringLockProvider ? raw : new MeasuringLockProvider(raw);
             var fifo = sp.GetRequiredService<IFifoWaiterCoordinator>();
-            return new DistributedLock(measured, fifo);
+            // v0.3.25: explicit GetService for the optional observer so consumer
+            // registration is honoured (the ActivatorUtilities longest-ctor trap from
+            // v0.2.20 OrionPatch / v6.5.23 OrionGuard does not apply here because we
+            // construct explicitly, but GetService must still be threaded by hand).
+            var observer = sp.GetService<ILockEventObserver>();
+            return new DistributedLock(measured, fifo, observer);
         });
 
         return new OrionLockBuilder(services);
