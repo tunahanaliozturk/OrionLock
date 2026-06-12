@@ -18,9 +18,9 @@ public static class OrionLockDiagnostics
     /// <summary>The tag key used to label the health-check result counter (<c>healthy</c>, <c>degraded</c>, <c>unhealthy</c>).</summary>
     public const string HealthCheckResultTagName = "result";
 
-    internal static readonly ActivitySource ActivitySource = new(ActivitySourceName, "0.3.22");
+    internal static readonly ActivitySource ActivitySource = new(ActivitySourceName, "0.3.23");
 
-    private static readonly Meter Meter = new(MeterName, "0.3.22");
+    private static readonly Meter Meter = new(MeterName, "0.3.23");
 
     internal static readonly Counter<long> Acquisitions = Meter.CreateCounter<long>("orionlock.acquisitions");
     internal static readonly Counter<long> Contentions = Meter.CreateCounter<long>("orionlock.contentions");
@@ -113,6 +113,52 @@ public static class OrionLockDiagnostics
     {
         if (staticTags.Length == 0) { AcquireTimeouts.Add(1); return; }
         AcquireTimeouts.Add(1, staticTags);
+    }
+
+    /// <summary>
+    /// v0.3.23 cardinality-bucketed key hash for top-N hot-key analysis. Operators
+    /// query <c>topk(10, sum by (key_hash)(orionlock_acquire_timeout_total))</c> to find
+    /// the buckets producing the most timeouts without exploding metric cardinality
+    /// on raw key strings (a multi-tenant deployment may have millions of unique
+    /// keys). Uses 64 buckets so the cardinality stays bounded regardless of input
+    /// key cardinality.
+    /// </summary>
+    private const int KeyHashBucketCount = 64;
+
+    /// <summary>v0.3.23: bucket a key string into one of 64 hash slots for top-N analysis.</summary>
+    public static string HashKeyToBucket(string key)
+    {
+        if (string.IsNullOrEmpty(key))
+        {
+            return "0";
+        }
+        // FNV-1a over UTF-16 char bytes - cheap and deterministic across processes
+        // (string.GetHashCode is randomized per AppDomain, unsuitable for metrics
+        // that need cross-process bucket alignment).
+        uint hash = 2166136261u;
+        for (int i = 0; i < key.Length; i++)
+        {
+            hash ^= key[i];
+            hash *= 16777619u;
+        }
+        return ((int)(hash % KeyHashBucketCount)).ToString(System.Globalization.CultureInfo.InvariantCulture);
+    }
+
+    /// <summary>v0.3.23: record an acquire timeout tagged with the key's hash bucket.</summary>
+    internal static void RecordAcquireTimeout(string key)
+    {
+        var bucket = HashKeyToBucket(key);
+        var keyTag = new KeyValuePair<string, object?>("key_hash", bucket);
+        if (staticTags.Length == 0)
+        {
+            AcquireTimeouts.Add(1, keyTag);
+            return;
+        }
+        // Combined tags array; allocation is fine on the timeout path (rare event).
+        var combined = new KeyValuePair<string, object?>[staticTags.Length + 1];
+        System.Array.Copy(staticTags, combined, staticTags.Length);
+        combined[staticTags.Length] = keyTag;
+        AcquireTimeouts.Add(1, combined);
     }
 
     /// <summary>

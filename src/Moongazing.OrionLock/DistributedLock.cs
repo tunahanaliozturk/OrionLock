@@ -125,7 +125,9 @@ public sealed class DistributedLock : IDistributedLock
                 if (deadline.Elapsed >= options.WaitTimeout)
                 {
                     activity?.SetTag("orionlock.outcome", "timeout");
-                    OrionLockDiagnostics.RecordAcquireTimeout();
+                    // v0.3.23: emit timeout with the hashed-bucket key tag so operators
+                    // can use topk() to find the keys driving the most timeouts.
+                    OrionLockDiagnostics.RecordAcquireTimeout(key);
                     throw new LockAcquisitionTimeoutException(key, deadline.Elapsed);
                 }
 

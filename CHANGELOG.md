@@ -4,6 +4,26 @@ All notable changes to OrionLock are documented in this file. The format is base
 [Keep a Changelog](https://keepachangelog.com/en/1.0.0/) and this project adheres to
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.3.23] - 2026-06-12
+
+### Added
+
+#### `key_hash` cardinality-bucketed tag on `orionlock.acquire.timeout`
+
+The `orionlock.acquire.timeout` counter now emits with a `key_hash` tag (64 buckets) so operators can run `topk(10, sum by (key_hash)(orionlock_acquire_timeout_total))` to find the buckets driving the most timeouts without exploding metric cardinality on raw key strings (a multi-tenant deployment may have millions of unique keys).
+
+- Uses FNV-1a hash over UTF-16 chars - cheap, deterministic across processes (`string.GetHashCode` is randomized per AppDomain).
+- Public `OrionLockDiagnostics.HashKeyToBucket(string)` so dashboards / log lines can compute the same bucket.
+- Inherits v0.3.12 `WithMetricsLabel` static tags.
+
+### Tests
+
+4 facts.
+
+### Migration from v0.3.22
+
+Source-compatible.
+
 ## [0.3.22] - 2026-06-11
 
 ### Added
