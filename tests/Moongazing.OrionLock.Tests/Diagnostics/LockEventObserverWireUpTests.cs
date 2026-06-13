@@ -39,6 +39,34 @@ public sealed class LockEventObserverWireUpTests
     }
 
     [Fact]
+    public async Task Dispose_after_acquire_fires_exactly_one_terminal_event()
+    {
+        // v0.3.25 codex P2 / coderabbit Major regression guard: a single handle's
+        // lifecycle must produce exactly ONE terminal event (released OR lost), never
+        // both, even though the happy path goes acquired -> released.
+        var observer = new CapturingObserver();
+        var services = new ServiceCollection();
+        services.AddSingleton<ILockEventObserver>(observer);
+        services.AddOrionLock().UseInMemory();
+        await using var sp = services.BuildServiceProvider();
+        var sut = sp.GetRequiredService<IDistributedLock>();
+
+        var handle = await sut.AcquireAsync("terminal-once",
+            new DistributedLockOptions { LeaseDuration = System.TimeSpan.FromSeconds(5), AutoRenew = false });
+        await handle.DisposeAsync();
+        // Second dispose must be idempotent and NOT fire another terminal event.
+        await handle.DisposeAsync();
+
+        lock (observer.Events)
+        {
+            var terminal = observer.Events.FindAll(e => e.StartsWith("released:terminal-once", System.StringComparison.Ordinal)
+                                                     || e.StartsWith("lost:terminal-once", System.StringComparison.Ordinal));
+            Assert.Single(terminal);
+            Assert.Equal("released:terminal-once", terminal[0]);
+        }
+    }
+
+    [Fact]
     public async Task Timeout_fires_OnAcquireTimedOut_via_DI_registration()
     {
         var observer = new CapturingObserver();

@@ -32,9 +32,41 @@ public sealed class DistributedLockHandle : IDistributedLockHandle
     // Both DisposeAsync AND the watchdog loss paths call DecrementOnceIfHeld; Interlocked
     // ensures exactly-once decrement regardless of who runs first.
     private int decremented;
+    // v0.3.25 fix (codex P2 + coderabbit Major): single-fire guard for the terminal
+    // lifecycle observer callbacks (OnReleased / OnLeaseLost). Under an AutoRenew
+    // dispose-vs-watchdog race, DisposeAsync could read isHeld=true and fire OnReleased
+    // while the watchdog concurrently observed renewal=false and fired OnLeaseLost for
+    // the SAME handle. Interlocked.Exchange ensures exactly ONE terminal event wins,
+    // mirroring the decremented guard which only protected metrics.
+    private int terminalFired;
     // v0.3.14: capture acquire time so the holding-duration histogram can be recorded
     // exactly once when the handle's lifecycle ends.
     private readonly long acquireTimestamp = System.Diagnostics.Stopwatch.GetTimestamp();
+
+    /// <summary>
+    /// v0.3.25: fire the terminal lifecycle observer callback exactly once. Returns
+    /// true when this caller won the race (and the callback was invoked); false when a
+    /// concurrent path already fired a terminal event for this handle.
+    /// </summary>
+    private bool TryFireTerminalReleased()
+    {
+        if (Interlocked.Exchange(ref terminalFired, 1) != 0)
+        {
+            return false;
+        }
+        eventObserver.SafeOnReleased(Key);
+        return true;
+    }
+
+    private bool TryFireTerminalLost()
+    {
+        if (Interlocked.Exchange(ref terminalFired, 1) != 0)
+        {
+            return false;
+        }
+        eventObserver.SafeOnLeaseLost(Key);
+        return true;
+    }
 
     /// <summary>Creates a handle and, when <see cref="DistributedLockOptions.AutoRenew"/> is set, starts the watchdog.</summary>
     public DistributedLockHandle(
@@ -133,8 +165,9 @@ public sealed class DistributedLockHandle : IDistributedLockHandle
                         OrionLockDiagnostics.RecordLeaseLost();
                         OrionLockDiagnostics.RecordLeaseGraceExhausted();
                         // v0.3.25: lifecycle observer - grace-exhausted surrender IS a
-                        // lease loss from the consumer's perspective.
-                        eventObserver.SafeOnLeaseLost(Key);
+                        // lease loss. Single-fire guard prevents a released+lost
+                        // double-fire under a dispose race.
+                        TryFireTerminalLost();
                         DecrementOnceIfHeld();
                         SafeCancelLost();
                         return;
@@ -148,8 +181,9 @@ public sealed class DistributedLockHandle : IDistributedLockHandle
                     OrionLockDiagnostics.RecordConsecutiveRenewalFailures(consecutiveRenewalFailures + 1);
                     isHeld = false;
                     OrionLockDiagnostics.RecordLeaseLost();
-                    // v0.3.25: lifecycle observer - backend-confirmed loss.
-                    eventObserver.SafeOnLeaseLost(Key);
+                    // v0.3.25: lifecycle observer - backend-confirmed loss. Single-fire
+                    // guard prevents a released+lost double-fire under a dispose race.
+                    TryFireTerminalLost();
                     DecrementOnceIfHeld();
                     SafeCancelLost();
                     return;
@@ -197,11 +231,14 @@ public sealed class DistributedLockHandle : IDistributedLockHandle
             OrionLockDiagnostics.RecordLeaseExpiredBeforeRelease();
         }
         // v0.3.25: lifecycle observer - a normal dispose while still held is a
-        // 'released' event from the consumer's perspective. Watchdog-loss paths fired
-        // OnLeaseLost already and flipped isHeld, so this branch will not double-fire.
+        // 'released' event. The single-fire guard (TryFireTerminalReleased) makes this
+        // mutually exclusive with the watchdog's OnLeaseLost: if the watchdog already
+        // surrendered the lease (even mid-dispose race), terminalFired is already set
+        // and this is a no-op. Conversely if dispose wins, a subsequent watchdog loss
+        // observation is suppressed. Exactly one terminal event per handle.
         if (isHeld)
         {
-            eventObserver.SafeOnReleased(Key);
+            TryFireTerminalReleased();
         }
         isHeld = false;
         DecrementOnceIfHeld();
