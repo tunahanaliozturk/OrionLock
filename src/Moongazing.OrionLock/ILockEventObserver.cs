@@ -14,13 +14,13 @@ using System;
 /// audit-side outage cannot disrupt the lock path.
 /// </para>
 /// <para>
-/// <b>v0.3.24 SHIPS THE CONTRACT SURFACE ONLY.</b> The interface and
-/// <see cref="NullLockEventObserver"/> default are available so consumer code can be
-/// written against a stable API, but DI wiring into <c>DistributedLock</c> and
-/// <c>DistributedLockHandle</c> ships in a subsequent release. Registering an
-/// observer via <c>services.AddSingleton&lt;ILockEventObserver, MyObserver&gt;()</c>
-/// in v0.3.24 is a no-op at the lock pipeline; v0.3.25 wires the emission sites to
-/// invoke the observer.
+/// Since v0.3.25 the observer is fully wired: <c>AddOrionLock</c> resolves a consumer
+/// registration via <c>services.AddSingleton&lt;ILockEventObserver, MyObserver&gt;()</c>
+/// and threads it through <c>DistributedLock</c> (OnAcquired / OnAcquireTimedOut) and
+/// every <c>DistributedLockHandle</c> it creates (OnLeaseLost / OnReleased). The default
+/// <see cref="NullLockEventObserver"/> and <see langword="null"/> are both treated as
+/// 'no observer' so the call sites are skipped entirely when nothing is registered.
+/// v0.3.24 shipped this interface as contract-surface-only; v0.3.25 added the wiring.
 /// </para>
 /// </remarks>
 public interface ILockEventObserver

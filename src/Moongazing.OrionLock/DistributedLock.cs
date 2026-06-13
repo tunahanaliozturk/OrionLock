@@ -14,10 +14,13 @@ public sealed class DistributedLock : IDistributedLock
     private readonly IDistributedLockProvider provider;
     private readonly Fairness.IFifoWaiterCoordinator fifoCoordinator;
     private readonly ReentrancyRegistry reentrancy = new();
+    // v0.3.25 optional consumer-registered lifecycle observer. Null and
+    // NullLockEventObserver are both treated as 'no observer'.
+    private readonly ILockEventObserver? eventObserver;
 
     /// <summary>Creates a lock over the given backend provider.</summary>
     public DistributedLock(IDistributedLockProvider provider)
-        : this(provider, fifoCoordinator: null)
+        : this(provider, fifoCoordinator: null, eventObserver: null)
     {
     }
 
@@ -29,10 +32,25 @@ public sealed class DistributedLock : IDistributedLock
     /// <see cref="DistributedLockOptions.UseFifoWaiterCoordinator"/>.
     /// </summary>
     public DistributedLock(IDistributedLockProvider provider, Fairness.IFifoWaiterCoordinator? fifoCoordinator)
+        : this(provider, fifoCoordinator, eventObserver: null)
+    {
+    }
+
+    /// <summary>
+    /// v0.3.25 ctor overload that also wires the optional
+    /// <see cref="ILockEventObserver"/> announced (contract-only) in v0.3.24. The
+    /// observer receives OnAcquired / OnAcquireTimedOut from this class and
+    /// OnLeaseLost / OnReleased from the handles it creates.
+    /// </summary>
+    public DistributedLock(
+        IDistributedLockProvider provider,
+        Fairness.IFifoWaiterCoordinator? fifoCoordinator,
+        ILockEventObserver? eventObserver)
     {
         ArgumentNullException.ThrowIfNull(provider);
         this.provider = provider;
         this.fifoCoordinator = fifoCoordinator ?? new Fairness.NullFifoWaiterCoordinator();
+        this.eventObserver = eventObserver is NullLockEventObserver ? null : eventObserver;
     }
 
     /// <inheritdoc />
@@ -58,7 +76,9 @@ public sealed class DistributedLock : IDistributedLock
             return null;
         }
 
-        var real = new DistributedLockHandle(provider, key, ownerToken, options);
+        // v0.3.25: thread the lifecycle observer into the handle so it can fire
+        // OnLeaseLost / OnReleased.
+        var real = new DistributedLockHandle(provider, key, ownerToken, options, eventObserver);
         // v0.3.13: increment the held-concurrent gauge ONLY when a real backend lease is
         // taken. Reentrant nested acquisitions (returned above) and contention path
         // returns (null) are excluded. The handle's DisposeAsync / watchdog-loss paths
@@ -116,6 +136,9 @@ public sealed class DistributedLock : IDistributedLock
                     {
                         OrionLockDiagnostics.RecordContentionDuration(deadline.Elapsed.TotalMilliseconds);
                     }
+                    // v0.3.25: wire-up of the v0.3.24 contract. Safe-invoke swallows
+                    // observer faults so audit-side outages cannot break acquires.
+                    eventObserver.SafeOnAcquired(key, deadline.Elapsed.TotalMilliseconds);
                     return handle;
                 }
 
@@ -128,6 +151,9 @@ public sealed class DistributedLock : IDistributedLock
                     // v0.3.23: emit timeout with the hashed-bucket key tag so operators
                     // can use topk() to find the keys driving the most timeouts.
                     OrionLockDiagnostics.RecordAcquireTimeout(key);
+                    // v0.3.25: notify the observer BEFORE the throw (mirrors the
+                    // counter ordering above).
+                    eventObserver.SafeOnAcquireTimedOut(key, deadline.Elapsed.TotalMilliseconds);
                     throw new LockAcquisitionTimeoutException(key, deadline.Elapsed);
                 }
 
