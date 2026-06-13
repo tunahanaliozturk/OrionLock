@@ -4,6 +4,26 @@ All notable changes to OrionLock are documented in this file. The format is base
 [Keep a Changelog](https://keepachangelog.com/en/1.0.0/) and this project adheres to
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.3.26] - 2026-06-13
+
+### Added
+
+#### `orionlock.reentrancy.max_depth` histogram
+
+`Histogram<int>` of the DEEPEST reentrancy depth reached per hold lifetime (the high-water mark of nested re-acquisitions of the same key before the outermost handle is disposed). Distinct from the v0.3.17 `reentrancy.depth` gauge which shows the instantaneous outstanding count; this histogram's p99 reveals how deep real-world re-entry actually goes - helping operators spot accidental deep recursion that re-acquires a lock it already holds.
+
+- A hold with no re-entry emits a sample of 1 (full distribution visible, not just outliers).
+- Recorded once on the final (outermost) Exit.
+- Inherits v0.3.12 `WithMetricsLabel` static tags.
+
+### Tests
+
+2 facts.
+
+### Migration from v0.3.25
+
+Source-compatible.
+
 ## [0.3.25] - 2026-06-12
 
 ### Added

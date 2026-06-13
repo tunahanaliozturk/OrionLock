@@ -18,9 +18,9 @@ public static class OrionLockDiagnostics
     /// <summary>The tag key used to label the health-check result counter (<c>healthy</c>, <c>degraded</c>, <c>unhealthy</c>).</summary>
     public const string HealthCheckResultTagName = "result";
 
-    internal static readonly ActivitySource ActivitySource = new(ActivitySourceName, "0.3.25");
+    internal static readonly ActivitySource ActivitySource = new(ActivitySourceName, "0.3.26");
 
-    private static readonly Meter Meter = new(MeterName, "0.3.25");
+    private static readonly Meter Meter = new(MeterName, "0.3.26");
 
     internal static readonly Counter<long> Acquisitions = Meter.CreateCounter<long>("orionlock.acquisitions");
     internal static readonly Counter<long> Contentions = Meter.CreateCounter<long>("orionlock.contentions");
@@ -216,6 +216,29 @@ public static class OrionLockDiagnostics
         }
         if (staticTags.Length == 0) { ConsecutiveRenewalFailures.Record(count); return; }
         ConsecutiveRenewalFailures.Record(count, staticTags);
+    }
+
+    /// <summary>
+    /// v0.3.26 distribution of the DEEPEST reentrancy depth reached per hold lifetime
+    /// (the high-water mark of nested re-acquisitions of the same key before the
+    /// outermost handle is disposed). Distinct from the v0.3.17 reentrancy.depth gauge
+    /// which shows the instantaneous outstanding count; this histogram's p99 reveals
+    /// how deep real-world re-entry actually goes, helping operators spot accidental
+    /// deep recursion that re-acquires a lock it already holds. A hold with no re-entry
+    /// emits a sample of 1 so the full distribution (not just deep-nesting outliers) is
+    /// visible.
+    /// </summary>
+    internal static readonly Histogram<int> ReentrancyMaxDepth = Meter.CreateHistogram<int>(
+        "orionlock.reentrancy.max_depth");
+
+    internal static void RecordReentrancyMaxDepth(int maxDepth)
+    {
+        if (maxDepth <= 0)
+        {
+            return;
+        }
+        if (staticTags.Length == 0) { ReentrancyMaxDepth.Record(maxDepth); return; }
+        ReentrancyMaxDepth.Record(maxDepth, staticTags);
     }
 
     /// <summary>
