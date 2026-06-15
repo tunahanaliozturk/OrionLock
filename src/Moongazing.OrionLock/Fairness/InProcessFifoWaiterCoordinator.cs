@@ -26,13 +26,19 @@ public sealed class InProcessFifoWaiterCoordinator : IFifoWaiterCoordinator
 
         var ticket = new WaiterTicket(key);
         bool head;
+        int waitersAhead;
 
         lock (gate)
         {
             var queue = queues.GetOrAdd(key, _ => new Queue<WaiterTicket>());
-            head = queue.Count == 0;
+            // v0.3.29: waiters already in line BEFORE this enqueue = the depth this candidate
+            // joins behind (0 = it becomes the head). Captured under the lock; emitted after.
+            waitersAhead = queue.Count;
+            head = waitersAhead == 0;
             queue.Enqueue(ticket);
         }
+
+        Diagnostics.OrionLockDiagnostics.RecordFifoQueueDepth(waitersAhead);
 
         if (head)
         {

@@ -18,9 +18,9 @@ public static class OrionLockDiagnostics
     /// <summary>The tag key used to label the health-check result counter (<c>healthy</c>, <c>degraded</c>, <c>unhealthy</c>).</summary>
     public const string HealthCheckResultTagName = "result";
 
-    internal static readonly ActivitySource ActivitySource = new(ActivitySourceName, "0.3.28");
+    internal static readonly ActivitySource ActivitySource = new(ActivitySourceName, "0.3.29");
 
-    private static readonly Meter Meter = new(MeterName, "0.3.28");
+    private static readonly Meter Meter = new(MeterName, "0.3.29");
 
     internal static readonly Counter<long> Acquisitions = Meter.CreateCounter<long>("orionlock.acquisitions");
     internal static readonly Counter<long> Contentions = Meter.CreateCounter<long>("orionlock.contentions");
@@ -214,6 +214,27 @@ public static class OrionLockDiagnostics
     {
         if (staticTags.Length == 0) { FifoCoordinatorEnterDuration.Record(milliseconds); return; }
         FifoCoordinatorEnterDuration.Record(milliseconds, staticTags);
+    }
+
+    /// <summary>
+    /// v0.3.29 distribution of how many waiters were already ahead in the FIFO queue at the moment
+    /// a new candidate entered (the depth it joined behind: 0 = it became the head with no wait).
+    /// Only fires when <see cref="DistributedLockOptions.UseFifoWaiterCoordinator"/> is enabled.
+    /// Where the v0.3.18 <c>coordinator_enter_duration</c> measures the EFFECT (time spent waiting
+    /// for the ticket), this measures the CAUSE - the concurrent contention depth. Operators graph
+    /// p99 to see how deep the fair-lock queue gets under load and to size the waiter pool; a rising
+    /// depth that is not matched by rising enter_duration points at fast lock turnover, while both
+    /// rising together points at long hold times. The zero sample IS recorded: the fraction of
+    /// uncontended (head-of-queue) entries is itself the signal. Tags inherited from v0.3.12.
+    /// </summary>
+    internal static readonly Histogram<int> FifoQueueDepth = Meter.CreateHistogram<int>(
+        "orionlock.fairness.queue_depth");
+
+    internal static void RecordFifoQueueDepth(int waitersAhead)
+    {
+        var value = waitersAhead < 0 ? 0 : waitersAhead;
+        if (staticTags.Length == 0) { FifoQueueDepth.Record(value); return; }
+        FifoQueueDepth.Record(value, staticTags);
     }
 
     /// <summary>

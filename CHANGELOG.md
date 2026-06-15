@@ -4,6 +4,26 @@ All notable changes to OrionLock are documented in this file. The format is base
 [Keep a Changelog](https://keepachangelog.com/en/1.0.0/) and this project adheres to
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.3.29] - 2026-06-16
+
+### Added
+
+#### `orionlock.fairness.queue_depth` histogram
+
+`Histogram<int>` records how many waiters were already ahead in the FIFO queue at the moment a new candidate entered (the depth it joined behind: 0 = it became the head with no wait). Only emitted when `UseFifoWaiterCoordinator` is enabled.
+
+- Where the v0.3.18 `coordinator_enter_duration` measures the EFFECT (time spent waiting for the ticket), this measures the CAUSE - the concurrent contention depth. A rising depth not matched by rising `enter_duration` points at fast lock turnover; both rising together points at long hold times.
+- The zero sample IS recorded: the fraction of uncontended (head-of-queue) entries is itself the signal.
+- Inherits the v0.3.12 `WithMetricsLabel` static tags.
+
+### Changed
+
+- `OrionLockDiagnostics` `ActivitySource` / `Meter` version strings bumped to 0.3.29 to match the release, per the established per-release convention.
+
+### Tests
+
+- `FifoQueueDepthTests`: the helper emits the value and clamps negatives; `EnterAsync` records depth 0 for the head and depth 1 for the next candidate.
+
 ## [0.3.28] - 2026-06-15
 
 ### Added
