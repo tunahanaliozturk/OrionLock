@@ -28,6 +28,9 @@ public sealed class DistributedLockHandle : IDistributedLockHandle
     // watchdog loop only; read once at release/loss via Volatile.Read because DisposeAsync can
     // run concurrently with the watchdog under the dispose-vs-loss race.
     private int successfulRenewals;
+    // v0.3.27 single-fire guard so the renewals_per_hold sample is emitted exactly once across
+    // the dispose path and the watchdog-loss path.
+    private int renewalsEmitted;
     // v0.3.25 optional lifecycle observer; null when no consumer registration.
     private readonly ILockEventObserver? eventObserver;
     private int disposed;
@@ -189,6 +192,9 @@ public sealed class DistributedLockHandle : IDistributedLockHandle
                     // guard prevents a released+lost double-fire under a dispose race.
                     TryFireTerminalLost();
                     DecrementOnceIfHeld();
+                    // v0.3.27: surrendering here - successfulRenewals is final (no further
+                    // increments after this return), so emit the renewal count now.
+                    EmitRenewalsPerHoldOnce();
                     SafeCancelLost();
                     return;
                 }
@@ -261,6 +267,11 @@ public sealed class DistributedLockHandle : IDistributedLockHandle
             watchdogCts.Dispose();
         }
 
+        // v0.3.27: the watchdog is now fully stopped (or there was none), so successfulRenewals
+        // is final and the renewal count cannot under-report a last-moment renewal. No-op if the
+        // watchdog-loss path already emitted under a dispose-vs-loss race.
+        EmitRenewalsPerHoldOnce();
+
         try
         {
             await provider.ReleaseAsync(Key, ownerToken, CancellationToken.None).ConfigureAwait(false);
@@ -283,8 +294,18 @@ public sealed class DistributedLockHandle : IDistributedLockHandle
             // avoid clock-adjust skew that DateTime.UtcNow would introduce on long holds.
             var elapsed = System.Diagnostics.Stopwatch.GetElapsedTime(acquireTimestamp);
             OrionLockDiagnostics.RecordHandleHoldingDuration(elapsed.TotalMilliseconds);
-            // v0.3.27: emit the successful-renewal count for this hold alongside the duration so
-            // both lifecycles (normal dispose AND watchdog loss) contribute a sample.
+        }
+    }
+
+    // v0.3.27: emit the successful-renewal count exactly once per handle. Kept separate from
+    // DecrementOnceIfHeld (which the dispose path calls BEFORE the watchdog is stopped) so the
+    // read always observes the FINAL count: the watchdog-loss path emits at surrender (after its
+    // last increment), and the dispose path emits only after the watchdog is cancelled and
+    // awaited. A handle disposed mid-renewal therefore no longer under-reports by one.
+    private void EmitRenewalsPerHoldOnce()
+    {
+        if (Interlocked.Exchange(ref renewalsEmitted, 1) == 0)
+        {
             OrionLockDiagnostics.RecordRenewalsPerHold(Volatile.Read(ref successfulRenewals));
         }
     }

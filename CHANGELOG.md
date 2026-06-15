@@ -14,8 +14,9 @@ All notable changes to OrionLock are documented in this file. The format is base
 
 - Operators graph p99 to find critical sections that hold a lock across many renewal cycles (lock-hold hot spots) and to size renewal load on the lock backend.
 - The zero sample IS recorded: a short hold or an `AutoRenew`-off handle legitimately renews zero times, and the fraction of zero-renewal holds is itself the signal.
-- Recorded on BOTH lifecycles via `DecrementOnceIfHeld` (normal dispose AND watchdog loss); the per-handle counter is incremented under `Interlocked` by the watchdog and read with `Volatile.Read` at release to stay correct under the dispose-vs-loss race.
+- Emitted exactly once per handle via a dedicated single-fire `EmitRenewalsPerHoldOnce`: the watchdog-loss path emits at surrender (its count is final), and the dispose path emits only AFTER the watchdog is cancelled and awaited, so a handle disposed mid-renewal cannot under-report the last renewal by one (codex/CodeRabbit P2). The counter is incremented under `Interlocked` by the watchdog and read with `Volatile.Read`.
 - Tags inherited from the v0.3.12 `WithMetricsLabel` static-tag set.
+- `OrionLockDiagnostics` `ActivitySource` / `Meter` version strings bumped to 0.3.27 to match the release, per the established per-release convention (CodeRabbit).
 
 ### Tests
 
