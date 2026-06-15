@@ -4,6 +4,24 @@ All notable changes to OrionLock are documented in this file. The format is base
 [Keep a Changelog](https://keepachangelog.com/en/1.0.0/) and this project adheres to
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.3.27] - 2026-06-15
+
+### Added
+
+#### `orionlock.handle.renewals_per_hold` histogram
+
+`Histogram<int>` records how many successful lease renewals each handle performed during its hold, emitted once at release/loss alongside the v0.3.14 `holding_duration`. Where `holding_duration` is wall-clock, this is the discrete count of background renewal round-trips a lock cost the backend; the two diverge when renewals fail (the v0.3.19 failure-streak histogram) or the lease interval jitters.
+
+- Operators graph p99 to find critical sections that hold a lock across many renewal cycles (lock-hold hot spots) and to size renewal load on the lock backend.
+- The zero sample IS recorded: a short hold or an `AutoRenew`-off handle legitimately renews zero times, and the fraction of zero-renewal holds is itself the signal.
+- Emitted exactly once per handle via a dedicated single-fire `EmitRenewalsPerHoldOnce`: the watchdog-loss path emits at surrender (its count is final), and the dispose path emits only AFTER the watchdog is cancelled and awaited, so a handle disposed mid-renewal cannot under-report the last renewal by one (codex/CodeRabbit P2). The counter is incremented under `Interlocked` by the watchdog and read with `Volatile.Read`.
+- Tags inherited from the v0.3.12 `WithMetricsLabel` static-tag set.
+- `OrionLockDiagnostics` `ActivitySource` / `Meter` version strings bumped to 0.3.27 to match the release, per the established per-release convention (CodeRabbit).
+
+### Tests
+
+- `RenewalsPerHoldTests`: an `AutoRenew`-off hold records 0 on dispose; the helper emits the count and clamps a negative to 0.
+
 ## [0.3.26] - 2026-06-13
 
 ### Added

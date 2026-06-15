@@ -18,9 +18,9 @@ public static class OrionLockDiagnostics
     /// <summary>The tag key used to label the health-check result counter (<c>healthy</c>, <c>degraded</c>, <c>unhealthy</c>).</summary>
     public const string HealthCheckResultTagName = "result";
 
-    internal static readonly ActivitySource ActivitySource = new(ActivitySourceName, "0.3.26");
+    internal static readonly ActivitySource ActivitySource = new(ActivitySourceName, "0.3.27");
 
-    private static readonly Meter Meter = new(MeterName, "0.3.26");
+    private static readonly Meter Meter = new(MeterName, "0.3.27");
 
     internal static readonly Counter<long> Acquisitions = Meter.CreateCounter<long>("orionlock.acquisitions");
     internal static readonly Counter<long> Contentions = Meter.CreateCounter<long>("orionlock.contentions");
@@ -325,6 +325,27 @@ public static class OrionLockDiagnostics
     {
         if (staticTags.Length == 0) { HandleHoldingDuration.Record(milliseconds); return; }
         HandleHoldingDuration.Record(milliseconds, staticTags);
+    }
+
+    /// <summary>
+    /// v0.3.27 distribution of how many successful lease renewals each handle performed during
+    /// its hold, recorded once at release/loss alongside the v0.3.14 holding_duration. Where
+    /// holding_duration is wall-clock, this is the discrete count of background renewal
+    /// round-trips a lock cost the backend: the two diverge when renewals fail (the v0.3.19
+    /// failure-streak histogram) or the lease interval jitters. Operators graph p99 to find
+    /// critical sections that hold a lock across many renewal cycles (lock-hold hot spots) and
+    /// to size renewal load on the lock backend. The zero sample IS recorded: a short hold or an
+    /// AutoRenew-off handle legitimately renews zero times, and the fraction of zero-renewal
+    /// holds is itself the signal. Tags inherited from v0.3.12 WithMetricsLabel.
+    /// </summary>
+    internal static readonly Histogram<int> HandleRenewalsPerHold = Meter.CreateHistogram<int>(
+        "orionlock.handle.renewals_per_hold");
+
+    internal static void RecordRenewalsPerHold(int renewals)
+    {
+        var value = renewals < 0 ? 0 : renewals;
+        if (staticTags.Length == 0) { HandleRenewalsPerHold.Record(value); return; }
+        HandleRenewalsPerHold.Record(value, staticTags);
     }
 
     internal static void IncrementLeasesHeld()
