@@ -24,6 +24,10 @@ public sealed class DistributedLockHandle : IDistributedLockHandle
     // renewal OR by surrender) so operators see the FULL distribution of backend
     // flakiness shape.
     private int consecutiveRenewalFailures;
+    // v0.3.27 total successful lease renewals over this handle's lifetime. Written by the
+    // watchdog loop only; read once at release/loss via Volatile.Read because DisposeAsync can
+    // run concurrently with the watchdog under the dispose-vs-loss race.
+    private int successfulRenewals;
     // v0.3.25 optional lifecycle observer; null when no consumer registration.
     private readonly ILockEventObserver? eventObserver;
     private int disposed;
@@ -194,6 +198,9 @@ public sealed class DistributedLockHandle : IDistributedLockHandle
                     OrionLockDiagnostics.RecordConsecutiveRenewalFailures(consecutiveRenewalFailures);
                     consecutiveRenewalFailures = 0;
                 }
+                // v0.3.27: count this successful renewal for the renewals_per_hold histogram
+                // emitted at release.
+                Interlocked.Increment(ref successfulRenewals);
                 lastSuccessfulRenewalUtc = nowUtc();
             }
         }
@@ -276,6 +283,9 @@ public sealed class DistributedLockHandle : IDistributedLockHandle
             // avoid clock-adjust skew that DateTime.UtcNow would introduce on long holds.
             var elapsed = System.Diagnostics.Stopwatch.GetElapsedTime(acquireTimestamp);
             OrionLockDiagnostics.RecordHandleHoldingDuration(elapsed.TotalMilliseconds);
+            // v0.3.27: emit the successful-renewal count for this hold alongside the duration so
+            // both lifecycles (normal dispose AND watchdog loss) contribute a sample.
+            OrionLockDiagnostics.RecordRenewalsPerHold(Volatile.Read(ref successfulRenewals));
         }
     }
 }
