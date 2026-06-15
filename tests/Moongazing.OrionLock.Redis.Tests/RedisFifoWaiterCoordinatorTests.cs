@@ -1,5 +1,6 @@
 namespace Moongazing.OrionLock.Redis.Tests;
 
+using System.Diagnostics.Metrics;
 using Moongazing.OrionLock.Fairness;
 using Moongazing.OrionLock.Redis;
 using StackExchange.Redis;
@@ -113,6 +114,46 @@ public sealed class RedisFifoWaiterCoordinatorTests : IAsyncLifetime
     }
 
     private sealed record ForeignTicket(string Key) : IFifoWaiterTicket;
+
+    [Fact]
+    public async Task EnterAsync_records_the_live_queue_depth_each_caller_joins_behind()
+    {
+        var samples = new System.Collections.Generic.List<int>();
+        using var listener = new MeterListener();
+        listener.InstrumentPublished = (instrument, l) =>
+        {
+            if (instrument.Meter.Name == "Moongazing.OrionLock"
+                && instrument.Name == "orionlock.fairness.queue_depth")
+            {
+                l.EnableMeasurementEvents(instrument);
+            }
+        };
+        listener.SetMeasurementEventCallback<int>((_, val, _, _) =>
+        {
+            lock (samples) { samples.Add(val); }
+        });
+        listener.Start();
+
+        IFifoWaiterCoordinator sut = NewCoordinator();
+
+        // Head joins an empty sorted set -> depth 0 (ZRANK 0).
+        var first = await sut.EnterAsync("k", CancellationToken.None);
+
+        // Second joins behind the head -> depth 1 (ZRANK 1). The depth is recorded synchronously
+        // at enter, right after the ZADD, before the returned task completes.
+        var secondTask = sut.EnterAsync("k", CancellationToken.None);
+        await Task.Delay(80);
+
+        lock (samples)
+        {
+            Assert.Contains(0, samples);
+            Assert.Contains(1, samples);
+        }
+
+        await sut.LeaveAsync(first, CancellationToken.None);
+        var second = await secondTask.WaitAsync(TimeSpan.FromSeconds(2));
+        await sut.LeaveAsync(second, CancellationToken.None);
+    }
 
     [Fact]
     public async Task Stale_entries_older_than_WaiterTtl_are_pruned()

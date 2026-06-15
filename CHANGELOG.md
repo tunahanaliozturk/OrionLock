@@ -10,10 +10,12 @@ All notable changes to OrionLock are documented in this file. The format is base
 
 #### `orionlock.fairness.queue_depth` histogram
 
-`Histogram<int>` records how many waiters were already ahead in the FIFO queue at the moment a new candidate entered (the depth it joined behind: 0 = it became the head with no wait). Only emitted when `UseFifoWaiterCoordinator` is enabled.
+`Histogram<int>` records how many LIVE waiters were already ahead in the FIFO queue at the moment a new candidate entered (the depth it joined behind: 0 = it became the head with no wait). Only emitted when `UseFifoWaiterCoordinator` is enabled.
 
 - Where the v0.3.18 `coordinator_enter_duration` measures the EFFECT (time spent waiting for the ticket), this measures the CAUSE - the concurrent contention depth. A rising depth not matched by rising `enter_duration` points at fast lock turnover; both rising together points at long hold times.
 - The zero sample IS recorded: the fraction of uncontended (head-of-queue) entries is itself the signal.
+- Recorded by both bundled coordinators. The in-process coordinator counts only not-yet-cancelled tickets, so a non-head waiter that cancels and lingers in the queue (until the head prunes past it) does not inflate the depth tail during a cancellation-heavy shutdown. The Redis coordinator uses the post-`ZADD` `ZRANK`, which is already live-only because every exit path `ZREM`s and the stale-prune pass runs first.
+- `RecordFifoQueueDepth` is public so the Redis coordinator (a separate package) and any third-party `IFifoWaiterCoordinator` can feed the same histogram from inside their own `EnterAsync`.
 - Inherits the v0.3.12 `WithMetricsLabel` static tags.
 
 ### Changed
@@ -22,7 +24,8 @@ All notable changes to OrionLock are documented in this file. The format is base
 
 ### Tests
 
-- `FifoQueueDepthTests`: the helper emits the value and clamps negatives; `EnterAsync` records depth 0 for the head and depth 1 for the next candidate.
+- `FifoQueueDepthTests`: the helper emits the value and clamps negatives; `EnterAsync` records depth 0 for the head and depth 1 for the next candidate; a cancelled-but-lingering waiter is excluded from a later candidate's recorded depth.
+- `RedisFifoWaiterCoordinatorTests`: `EnterAsync` records the live `ZRANK` depth each caller joins behind.
 
 ## [0.3.28] - 2026-06-15
 

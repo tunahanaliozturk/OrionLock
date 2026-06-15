@@ -227,10 +227,23 @@ public static class OrionLockDiagnostics
     /// rising together points at long hold times. The zero sample IS recorded: the fraction of
     /// uncontended (head-of-queue) entries is itself the signal. Tags inherited from v0.3.12.
     /// </summary>
+    /// <remarks>
+    /// Recorded by each <see cref="Fairness.IFifoWaiterCoordinator"/> implementation from inside its own
+    /// EnterAsync, so the helper is public: the in-process coordinator lives in this assembly but
+    /// the Redis coordinator is a separate package, and a custom third-party coordinator is equally
+    /// entitled to feed the same histogram. The recorded value is LIVE waiters ahead only:
+    /// coordinators must exclude already-cancelled waiters still lingering in their queue so a
+    /// cancellation-heavy shutdown does not inflate the depth tail.
+    /// </remarks>
     internal static readonly Histogram<int> FifoQueueDepth = Meter.CreateHistogram<int>(
         "orionlock.fairness.queue_depth");
 
-    internal static void RecordFifoQueueDepth(int waitersAhead)
+    /// <summary>
+    /// Record the number of live waiters a candidate joined behind (0 = it became the head).
+    /// Called by every <see cref="Fairness.IFifoWaiterCoordinator"/> backend from inside EnterAsync; see
+    /// the <see cref="FifoQueueDepth"/> remarks for the live-waiters-only contract.
+    /// </summary>
+    public static void RecordFifoQueueDepth(int waitersAhead)
     {
         var value = waitersAhead < 0 ? 0 : waitersAhead;
         if (staticTags.Length == 0) { FifoQueueDepth.Record(value); return; }

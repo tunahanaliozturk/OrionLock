@@ -1,6 +1,9 @@
 namespace Moongazing.OrionLock.Tests.Diagnostics;
 
+using System.Collections.Generic;
 using System.Diagnostics.Metrics;
+using System.Linq;
+using System.Threading;
 using Moongazing.OrionLock.Diagnostics;
 using Moongazing.OrionLock.Fairness;
 using Xunit;
@@ -75,5 +78,51 @@ public sealed class FifoQueueDepthTests
         await coordinator.LeaveAsync(first, default);
         var second = await secondTask;
         await coordinator.LeaveAsync(second, default);
+    }
+
+    [Fact]
+    public async Task EnterAsync_excludes_cancelled_waiters_from_the_recorded_depth()
+    {
+        var samples = new List<int>();
+        using var listener = StartListener(samples);
+
+        var coordinator = new InProcessFifoWaiterCoordinator();
+
+        // Head of the queue (depth 0).
+        var first = await coordinator.EnterAsync("cancel-key", default);
+
+        // Second joins behind the head (depth 1) but is cancelled while still waiting. Its ticket
+        // is only marked cancelled - it lingers in the queue until the head's LeaveAsync prunes it.
+        using var cts = new CancellationTokenSource();
+        var secondTask = coordinator.EnterAsync("cancel-key", cts.Token);
+
+        // Third joins behind head + second (depth 2).
+        var thirdTask = coordinator.EnterAsync("cancel-key", default);
+
+        cts.Cancel();
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(() => secondTask);
+
+        int before;
+        lock (samples) { before = samples.Count; }
+
+        // Fourth enter: the live waiters ahead are head + third = 2. The cancelled-but-lingering
+        // second must NOT be counted, so the recorded depth is 2, never 3.
+        var fourthTask = coordinator.EnterAsync("cancel-key", default);
+
+        lock (samples)
+        {
+            var fresh = samples.Skip(before).ToList();
+            Assert.Contains(2, fresh);
+            Assert.DoesNotContain(3, fresh);
+        }
+
+        // Drain in queue order: head leaves and prunes the cancelled second, handing the slot to
+        // third; third must leave before fourth can become the head, so await each task only after
+        // the waiter ahead of it has released.
+        await coordinator.LeaveAsync(first, default);
+        var third = await thirdTask;
+        await coordinator.LeaveAsync(third, default);
+        var fourth = await fourthTask;
+        await coordinator.LeaveAsync(fourth, default);
     }
 }

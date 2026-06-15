@@ -75,6 +75,14 @@ public sealed class RedisFifoWaiterCoordinator : IFifoWaiterCoordinator
         var scoreNow = ComputeScore();
         await Db.SortedSetAddAsync(redisKey, waiterId, scoreNow).ConfigureAwait(false);
 
+        // v0.3.29: record the live FIFO depth this candidate joined behind (0 = it landed at the
+        // head). ZRANK is 0-based, so the rank IS the count of members ahead. Cancelled / crashed
+        // waiters never linger here - every exit path ZREMs and PruneStaleAsync ran above - so the
+        // rank is already live-only, matching the in-process coordinator's contract. A null rank
+        // (a racing prune removed us between ZADD and ZRANK) degrades to 0 rather than throwing.
+        var rank = await Db.SortedSetRankAsync(redisKey, waiterId).ConfigureAwait(false);
+        Diagnostics.OrionLockDiagnostics.RecordFifoQueueDepth((int)(rank ?? 0));
+
         // From here on the waiter id is in Redis - ANY exit path must ZREM it, otherwise
         // we strand the slot until the WaiterTtl prune sweep catches it.
         try
