@@ -30,6 +30,23 @@ jobs:
         run: dotnet restore ${{ env.SOLUTION_PATH }}
       - name: Build
         run: dotnet build ${{ env.SOLUTION_PATH }} --no-restore --configuration Release
+      - name: Pre-pull SqlServer test image
+        # The MsSqlBuilder default image lives on mcr.microsoft.com, whose anonymous-pull
+        # quota throttles the shared runner IP pool (toomanyrequests). Testcontainers pulls
+        # it at test time, so a throttle there fails the build. Pulling it here first, with
+        # backoff, gives the registry time to recover and caches the image locally so the
+        # test run does not touch MCR again. Best-effort: if MCR is genuinely down the tests
+        # still run and report the real failure.
+        run: |
+          image=mcr.microsoft.com/mssql/server:2019-CU18-ubuntu-20.04
+          for attempt in 1 2 3 4 5; do
+            if docker pull "$image"; then
+              break
+            fi
+            echo "pull of $image failed (attempt $attempt/5); backing off"
+            sleep $((attempt * 30))
+          done
+        continue-on-error: true
       - name: Test
         run: dotnet test ${{ env.SOLUTION_PATH }} --no-restore --configuration Release --verbosity normal
 

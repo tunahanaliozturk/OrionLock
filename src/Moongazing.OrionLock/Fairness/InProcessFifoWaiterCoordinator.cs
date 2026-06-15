@@ -1,6 +1,7 @@
 namespace Moongazing.OrionLock.Fairness;
 
 using System.Collections.Concurrent;
+using System.Linq;
 
 /// <summary>
 /// In-process FIFO waiter coordination backed by a per-key linked list of
@@ -26,13 +27,22 @@ public sealed class InProcessFifoWaiterCoordinator : IFifoWaiterCoordinator
 
         var ticket = new WaiterTicket(key);
         bool head;
+        int waitersAhead;
 
         lock (gate)
         {
             var queue = queues.GetOrAdd(key, _ => new Queue<WaiterTicket>());
+            // v0.3.29: LIVE waiters already in line BEFORE this enqueue = the depth this candidate
+            // joins behind (0 = it becomes the head). A non-head waiter that has left is only marked
+            // cancelled (its TCS) and lingers in the queue until the head's dequeue prunes past it,
+            // so queue.Count would over-report depth during a cancellation-heavy shutdown. Count only
+            // the not-yet-cancelled tickets. Captured under the lock; emitted after the lock is released.
+            waitersAhead = queue.Count(t => !t.Tcs.Task.IsCanceled);
             head = queue.Count == 0;
             queue.Enqueue(ticket);
         }
+
+        Diagnostics.OrionLockDiagnostics.RecordFifoQueueDepth(waitersAhead);
 
         if (head)
         {
