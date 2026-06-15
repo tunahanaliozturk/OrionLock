@@ -160,6 +160,15 @@ public sealed class DistributedLock : IDistributedLock
                 await Task.Delay(options.RetryInterval, cancellationToken).ConfigureAwait(false);
             }
         }
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+        {
+            // v0.3.28: the caller abandoned the acquire (graceful shutdown / client gave up),
+            // distinct from a WaitTimeout SLO breach. Count it separately so the timeout signal
+            // stays clean for alerting, then let the cancellation propagate unchanged.
+            activity?.SetTag("orionlock.outcome", "cancelled");
+            OrionLockDiagnostics.RecordAcquireCancelled();
+            throw;
+        }
         finally
         {
             if (ticket is not null)

@@ -18,9 +18,9 @@ public static class OrionLockDiagnostics
     /// <summary>The tag key used to label the health-check result counter (<c>healthy</c>, <c>degraded</c>, <c>unhealthy</c>).</summary>
     public const string HealthCheckResultTagName = "result";
 
-    internal static readonly ActivitySource ActivitySource = new(ActivitySourceName, "0.3.27");
+    internal static readonly ActivitySource ActivitySource = new(ActivitySourceName, "0.3.28");
 
-    private static readonly Meter Meter = new(MeterName, "0.3.27");
+    private static readonly Meter Meter = new(MeterName, "0.3.28");
 
     internal static readonly Counter<long> Acquisitions = Meter.CreateCounter<long>("orionlock.acquisitions");
     internal static readonly Counter<long> Contentions = Meter.CreateCounter<long>("orionlock.contentions");
@@ -113,6 +113,23 @@ public static class OrionLockDiagnostics
     {
         if (staticTags.Length == 0) { AcquireTimeouts.Add(1); return; }
         AcquireTimeouts.Add(1, staticTags);
+    }
+
+    /// <summary>
+    /// v0.3.28 acquire-cancelled counter. Increments when <c>DistributedLock.AcquireAsync</c> is
+    /// abandoned via the caller's <see cref="System.Threading.CancellationToken"/> (a graceful
+    /// shutdown, or a client that gave up) rather than by exceeding <c>WaitTimeout</c>. Distinct
+    /// from the v0.3.16 <c>acquire.timeout</c> counter: a timeout is a contention-SLO breach an
+    /// operator may alert on, whereas a cancellation is usually expected (deployments, request
+    /// aborts). Separating them keeps the timeout signal clean for alerting.
+    /// </summary>
+    internal static readonly Counter<long> AcquireCancellations = Meter.CreateCounter<long>(
+        "orionlock.acquire.cancelled");
+
+    internal static void RecordAcquireCancelled()
+    {
+        if (staticTags.Length == 0) { AcquireCancellations.Add(1); return; }
+        AcquireCancellations.Add(1, staticTags);
     }
 
     /// <summary>

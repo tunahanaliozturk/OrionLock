@@ -4,6 +4,26 @@ All notable changes to OrionLock are documented in this file. The format is base
 [Keep a Changelog](https://keepachangelog.com/en/1.0.0/) and this project adheres to
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.3.28] - 2026-06-15
+
+### Added
+
+#### `orionlock.acquire.cancelled` counter
+
+`Counter<long>` increments when `DistributedLock.AcquireAsync` is abandoned via the caller's `CancellationToken` (a graceful shutdown, or a client that gave up) rather than by exceeding `WaitTimeout`.
+
+- Distinct from the v0.3.16 `acquire.timeout` counter: a timeout is a contention-SLO breach an operator may alert on, whereas a cancellation is usually expected (deployments, request aborts). Separating them keeps the timeout signal clean for alerting.
+- Recorded in a `catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)` on the acquire loop; the cancellation then propagates unchanged. The activity is tagged `outcome=cancelled`.
+- Inherits the v0.3.12 `WithMetricsLabel` static tags.
+
+### Changed
+
+- `OrionLockDiagnostics` `ActivitySource` / `Meter` version strings bumped to 0.3.28 to match the release, per the established per-release convention.
+
+### Tests
+
+- `AcquireCancelledCounterTests`: a cancelled acquire against an always-busy backend increments the counter and propagates the cancellation; the helper increments the counter.
+
 ## [0.3.27] - 2026-06-15
 
 ### Added
