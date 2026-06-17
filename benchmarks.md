@@ -1,76 +1,79 @@
 # OrionLock Benchmarks
 
-Latest reference run: 2026-05 on Intel Xeon W-2155 @ 3.30 GHz (synthetic placeholder), .NET 8.0.x, BenchmarkDotNet 0.14.0.
+A BenchmarkDotNet suite that measures the dependency-free hot paths of OrionLock: the core lock
+orchestration, the FIFO fairness coordinator, the metric key-bucketing hash, and same-process
+reentrancy. Every scenario runs entirely in-process. None of them touch Redis, SQL Server, Postgres,
+ZooKeeper, etcd, or any other external service, so the numbers reflect the cost of the OrionLock
+abstraction itself rather than a network or database round-trip.
 
-> **Note.** The numbers below are reference figures, not measured on this hardware. They are inside the order of magnitude we observe on developer laptops and CI runners but you must reproduce locally to get numbers that mean anything for your environment. Reproduce with `dotnet run -c Release --project bench/Moongazing.OrionLock.Benchmarks`. Your hardware will differ.
+The project lives in `benchmarks/Moongazing.OrionLock.Benchmarks` and references only the core
+`Moongazing.OrionLock` library. A tiny in-process `IDistributedLockProvider`
+(`BenchInMemoryLockProvider`) stands in for a real backend so the only thing measured is the
+orchestration around the provider call.
 
 ## Methodology
 
-- BenchmarkDotNet job: short-run defaults (3 warmup + 5 measurement iterations) unless otherwise noted.
-- Memory profiler enabled (`[MemoryDiagnoser]`).
-- All allocations and GC stats reported.
-- Each scenario isolated; no shared state between runs.
-- The in-memory provider is the abstraction-cost baseline. It removes network and database latency so the only thing measured is the `DistributedLock` orchestration (handle allocation, lease bookkeeping, dictionary update).
-- Real backend numbers (Redis, Postgres, SQL Server) are dominated by the round-trip to that backend, not by OrionLock itself. Treat the backend rows as "what does the cheapest possible call to this backend cost" rather than "what does OrionLock cost".
+- Each benchmark class targets three runtimes via `[SimpleJob]`: .NET 8, .NET 9, and .NET 10. This
+  lets you compare the same code path across runtime versions on your own hardware.
+- `[MemoryDiagnoser]` is enabled on every class so allocations and GC stats are reported alongside
+  timing.
+- Scenarios are isolated. The lock-orchestration benchmarks run with `AutoRenew = false` so the
+  background renewal watchdog never starts and does not pollute the steady-state acquire cost.
+- No measured numbers are published here. Run the suite locally to get figures that mean anything for
+  your environment, because results depend heavily on CPU, runtime, and OS.
 
-## Scenarios
+## Benchmark classes
 
-### Uncontended acquire and release (in-memory provider)
+### HashKeyToBucketBenchmarks
 
-This is the harness that ships in `bench/Moongazing.OrionLock.Benchmarks/AcquireBenchmarks.cs`. Single key, single thread, no contention, `AutoRenew = false` so the watchdog is not measured. The point is to put a floor on the abstraction cost.
+Measures `OrionLockDiagnostics.HashKeyToBucket(string)`, the FNV-1a hash that maps a lock key onto
+one of 64 cardinality-bounded metric buckets. This runs on the acquire-timeout path for every
+distinct key, so under a multi-tenant key space of millions of unique strings it must stay
+allocation-light and CPU-cheap. The class parameterizes over a short key, a long realistic key, and
+the empty string. It includes a `Baseline` naive bucketer built on the framework's randomized
+`string.GetHashCode` to anchor the FNV-1a cost against a familiar reference and to make concrete why
+the randomized hash is unfit for purpose (it is not stable across processes, so the same key would
+land in different buckets on different hosts).
 
-| Method                       |   Mean | StdDev | Allocated |
-|------------------------------|-------:|-------:|----------:|
-| UncontendedAcquireRelease    | ~350 ns | ~10 ns | ~120 B    |
+### FifoCoordinatorBenchmarks
 
-Interpretation: the bulk of the time is the dictionary update inside `InMemoryLockProvider` plus the handle allocation. With `AutoRenew = true` add the cost of starting a `PeriodicTimer`-backed watchdog (one allocation, no measurable steady-state CPU).
+Measures the uncontended fast path of `InProcessFifoWaiterCoordinator`. A single caller enters the
+per-key FIFO queue, becomes the head immediately with no wait, then leaves. This is the overhead the
+opt-in fair-lock option adds to every blocking `AcquireAsync` when the queue is empty, which is the
+common case under low contention. It exercises the real Enter/Leave contract end to end (queue
+allocation, head detection, queue-depth metric emission, ticket disposal), so the figure is the floor
+that opting into FIFO ordering imposes before any actual contention exists.
 
-### Uncontended acquire and release (Redis backend) - planned
+### DistributedLockAcquireBenchmarks
 
-A single `SET NX PX` round-trip to a local Redis followed by an owner-checked Lua `DEL`. Numbers are dominated by the network round-trip; expect microseconds rather than nanoseconds.
+Measures the end-to-end uncontended acquire-and-release cost of the real `DistributedLock` over the
+in-process provider. With the backend reduced to a single concurrent-dictionary operation and the
+watchdog disabled, what remains is the orchestration cost: owner-token generation, reentrancy
+registration, handle allocation, the held-concurrent gauge, and disposal. Two methods are measured:
+the non-blocking `TryAcquireAsync` happy path, and the blocking `AcquireAsync` happy path, which
+succeeds on the first attempt but still pays for the Activity span, the acquire-duration and
+attempt-count metrics, and the FIFO no-op that the non-blocking path skips. Together they isolate
+the abstraction floor a caller pays on top of whatever the chosen backend round-trip costs in
+production.
 
-| Method                          |    Mean (planned) | StdDev | Allocated |
-|---------------------------------|------------------:|-------:|----------:|
-| RedisAcquireRelease (loopback)  |          ~60 us   |      - |     ~1 KB |
-| RedisAcquireRelease (LAN, 1ms)  |         ~1.5 ms   |      - |     ~1 KB |
+### ReentrancyBenchmarks
 
-### Uncontended acquire and release (Postgres advisory) - planned
+Measures the same-process reentrancy fast path of `DistributedLock`. The setup holds an outer lease
+for the whole run, so every measured acquire is a nested re-entry on an already-held key that must
+collapse into a counted nested handle in the reentrancy registry rather than issuing a second backend
+call. It quantifies how cheap a recursive critical section is, which matters for code that re-enters a
+held lock deep in a call chain (the very scenario the reentrancy-depth metrics exist to surface).
 
-`pg_try_advisory_lock(hashed_key)` to claim, `pg_advisory_unlock(hashed_key)` to release. Session-scoped so the lock survives connection-pool churn without a clock-based lease.
-
-| Method                          |    Mean (planned) | StdDev | Allocated |
-|---------------------------------|------------------:|-------:|----------:|
-| PgAdvisoryAcquireRelease (LAN)  |         ~1.5 ms   |      - |     ~1 KB |
-
-### Contended acquire (N concurrent waiters) - planned
-
-The interesting question for any distributed lock. How long until the second / fourth / sixteenth waiter wins, and how does that scale with `RetryInterval`?
-
-Planned scenarios:
-
-- 2, 4, 16, 64 concurrent acquirers fighting for the same key.
-- Critical section of fixed 1 ms / 10 ms / 100 ms.
-- Measure: time to first win, time to last win, total throughput in acquisitions per second.
-
-### Watchdog overhead - planned
-
-`AutoRenew = true` versus `AutoRenew = false` on a 30-second lease, measuring the steady-state cost of one renewal every 10 seconds across 1 / 10 / 100 simultaneously held handles.
-
-## How to reproduce
+## Running
 
 ```bash
-cd <repo-root>
-dotnet run -c Release --project bench/Moongazing.OrionLock.Benchmarks
+dotnet run -c Release --project benchmarks/Moongazing.OrionLock.Benchmarks
 ```
 
-Results appear in `BenchmarkDotNet.Artifacts/results/`.
+Pass a filter to run a single class, for example:
 
-## Comparison baselines
+```bash
+dotnet run -c Release --project benchmarks/Moongazing.OrionLock.Benchmarks -- --filter "*HashKeyToBucket*"
+```
 
-We plan to report OrionLock numbers next to honest baselines so readers can place them in context:
-
-- **`DistributedApplicationLock.SqlServer` (community library).** Closest commodity alternative for the SQL Server backend. Establishes how OrionLock's `sp_getapplock` wrapper compares against an existing package readers may already be using.
-- **`Medallion.Threading.Redis` and `Medallion.Threading.Postgres`.** The current de facto distributed-lock libraries in the .NET ecosystem. Establishes whether OrionLock's per-backend numbers are competitive on the same workload.
-- **Raw backend call (`StackExchange.Redis` `SET NX PX` directly, `Npgsql` `pg_try_advisory_lock` directly).** No abstraction at all. Establishes the cost ceiling: the difference between this row and OrionLock's row is the price of the abstraction.
-
-The point of the comparison is to be honest about where OrionLock sits, not to win a chart. If a competitor is faster on a given scenario we will say so and explain why.
+Results are written to `BenchmarkDotNet.Artifacts/results/`.
