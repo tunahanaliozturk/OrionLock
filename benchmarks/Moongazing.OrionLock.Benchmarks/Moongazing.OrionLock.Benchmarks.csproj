@@ -1,0 +1,21 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <!-- The repo Directory.Build.props sets TargetFrameworks (plural), which would make this host
+         a multi-targeted exe. The BenchmarkDotNet host only needs one TFM; it spawns a child
+         process per runtime job itself. Clear the inherited plural value so the single TFM wins. -->
+    <TargetFrameworks></TargetFrameworks>
+    <TargetFramework>net10.0</TargetFramework>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+    <LangVersion>latest</LangVersion>
+    <TreatWarningsAsErrors>false</TreatWarningsAsErrors>
+    <IsPackable>false</IsPackable>
+    <GenerateDocumentationFile>false</GenerateDocumentationFile>
+    <NoWarn>$(NoWarn);CS1591</NoWarn>
+  </PropertyGroup>
+  <ItemGroup>
+    <PackageReference Include="BenchmarkDotNet" Version="0.14.0" />
+    <ProjectReference Include="..\..\src\Moongazing.OrionLock\Moongazing.OrionLock.csproj" />
+  </ItemGroup>
+</Project>
