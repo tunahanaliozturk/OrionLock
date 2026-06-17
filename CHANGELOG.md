@@ -4,6 +4,11 @@ All notable changes to OrionLock are documented in this file. The format is base
 [Keep a Changelog](https://keepachangelog.com/en/1.0.0/) and this project adheres to
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.3.32] - 2026-06-17
+
+### Changed
+- Set the NuGet package icon to the navy Moongazing mark across every sub-package, and the README logo to the white Moongazing mark.
+
 ## [0.3.31] - 2026-06-17
 
 ### Changed
