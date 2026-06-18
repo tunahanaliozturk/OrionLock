@@ -55,6 +55,10 @@ Project("{2150E333-8FDC-42A3-9474-1A3956D46DE8}") = "benchmarks", "benchmarks", 
 EndProject
 Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "Moongazing.OrionLock.Benchmarks", "benchmarks\Moongazing.OrionLock.Benchmarks\Moongazing.OrionLock.Benchmarks.csproj", "{D1A63C25-2E20-40BF-B772-925F83E54C2B}"
 EndProject
+Project("{2150E333-8FDC-42A3-9474-1A3956D46DE8}") = "demo", "demo", "{A39C23D2-F2C0-258D-165A-CF1E7FEE6E7B}"
+EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "Moongazing.OrionLock.Demo", "demo\Moongazing.OrionLock.Demo\Moongazing.OrionLock.Demo.csproj", "{13162207-4D83-4724-AD1A-BCD95DD8EF4B}"
+EndProject
 Global
 	GlobalSection(SolutionConfigurationPlatforms) = preSolution
 		Debug|Any CPU = Debug|Any CPU
@@ -329,6 +333,18 @@ Global
 		{D1A63C25-2E20-40BF-B772-925F83E54C2B}.Release|x64.Build.0 = Release|Any CPU
 		{D1A63C25-2E20-40BF-B772-925F83E54C2B}.Release|x86.ActiveCfg = Release|Any CPU
 		{D1A63C25-2E20-40BF-B772-925F83E54C2B}.Release|x86.Build.0 = Release|Any CPU
+		{13162207-4D83-4724-AD1A-BCD95DD8EF4B}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{13162207-4D83-4724-AD1A-BCD95DD8EF4B}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{13162207-4D83-4724-AD1A-BCD95DD8EF4B}.Debug|x64.ActiveCfg = Debug|Any CPU
+		{13162207-4D83-4724-AD1A-BCD95DD8EF4B}.Debug|x64.Build.0 = Debug|Any CPU
+		{13162207-4D83-4724-AD1A-BCD95DD8EF4B}.Debug|x86.ActiveCfg = Debug|Any CPU
+		{13162207-4D83-4724-AD1A-BCD95DD8EF4B}.Debug|x86.Build.0 = Debug|Any CPU
+		{13162207-4D83-4724-AD1A-BCD95DD8EF4B}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{13162207-4D83-4724-AD1A-BCD95DD8EF4B}.Release|Any CPU.Build.0 = Release|Any CPU
+		{13162207-4D83-4724-AD1A-BCD95DD8EF4B}.Release|x64.ActiveCfg = Release|Any CPU
+		{13162207-4D83-4724-AD1A-BCD95DD8EF4B}.Release|x64.Build.0 = Release|Any CPU
+		{13162207-4D83-4724-AD1A-BCD95DD8EF4B}.Release|x86.ActiveCfg = Release|Any CPU
+		{13162207-4D83-4724-AD1A-BCD95DD8EF4B}.Release|x86.Build.0 = Release|Any CPU
 	EndGlobalSection
 	GlobalSection(SolutionProperties) = preSolution
 		HideSolutionNode = FALSE
@@ -356,5 +372,6 @@ Global
 		{0EBA3F6F-3B36-4D56-B2E1-F716A6EADF9D} = {827E0CD3-B72D-47B6-A68D-7590B98EB39B}
 		{C2CAEF4D-38CA-4151-BD77-CBFD293858E0} = {0AB3BF05-4346-4AA6-1389-037BE0695223}
 		{D1A63C25-2E20-40BF-B772-925F83E54C2B} = {66320409-64EC-F7C5-3DEF-65E7510DAAD1}
+		{13162207-4D83-4724-AD1A-BCD95DD8EF4B} = {A39C23D2-F2C0-258D-165A-CF1E7FEE6E7B}
 	EndGlobalSection
 EndGlobal
