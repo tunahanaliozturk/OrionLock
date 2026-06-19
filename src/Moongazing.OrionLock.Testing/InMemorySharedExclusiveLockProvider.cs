@@ -134,13 +134,14 @@ public sealed class InMemorySharedExclusiveLockProvider : ISharedExclusiveLockPr
             return false;
         }
 
-        // Clear path: take (or refresh) the exclusive hold and clear our reservation if we held one.
+        // Clear path: take (or refresh) the exclusive hold and clear ANY pending-writer reservation.
+        // The granted writer now owns the key exclusively, so no reservation should remain - not even
+        // a DIFFERENT writer's. Clearing only the same owner's reservation would let a stale
+        // reservation from another writer survive past this exclusive release and keep denying new
+        // readers until its lease expired.
         state.ExclusiveOwner = ownerToken;
         state.ExclusiveExpiresUtc = now + leaseDuration;
-        if (state.PendingWriterOwner == ownerToken)
-        {
-            state.PendingWriterOwner = null;
-        }
+        state.PendingWriterOwner = null;
         return true;
     }
 

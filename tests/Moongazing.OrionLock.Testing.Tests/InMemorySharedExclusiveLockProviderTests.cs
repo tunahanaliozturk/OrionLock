@@ -182,6 +182,43 @@ public class InMemorySharedExclusiveLockProviderTests
     }
 
     [Fact]
+    public async Task GrantingExclusive_ClearsAnotherWritersPendingReservation()
+    {
+        var p = new InMemorySharedExclusiveLockProvider();
+        await p.TryAcquireAsync("k", "reader-1", LockMode.Shared, Lease, default);
+
+        // writer-1 fails (reader present) and reserves the key.
+        Assert.False(await p.TryAcquireAsync("k", "writer-1", LockMode.Exclusive, Lease, default));
+
+        // Reader drains. A DIFFERENT writer (writer-2) now wins the exclusive hold.
+        await p.ReleaseAsync("k", "reader-1", LockMode.Shared, default);
+        Assert.True(await p.TryAcquireAsync("k", "writer-2", LockMode.Exclusive, Lease, default));
+
+        // writer-2 releases. No stale writer-1 reservation must survive to deny a new reader.
+        await p.ReleaseAsync("k", "writer-2", LockMode.Exclusive, default);
+        Assert.True(await p.TryAcquireAsync("k", "reader-2", LockMode.Shared, Lease, default));
+    }
+
+    [Fact]
+    public async Task ContendedExclusive_AfterRelease_AllowsImmediateSharedReacquire()
+    {
+        var p = new InMemorySharedExclusiveLockProvider();
+        await p.TryAcquireAsync("k", "reader-1", LockMode.Shared, Lease, default);
+
+        // Same writer retries twice (stable owner token), reserving the key each attempt.
+        Assert.False(await p.TryAcquireAsync("k", "writer-1", LockMode.Exclusive, Lease, default));
+        Assert.False(await p.TryAcquireAsync("k", "writer-1", LockMode.Exclusive, Lease, default));
+
+        // Reader drains; the retrying writer wins and clears its own reservation.
+        await p.ReleaseAsync("k", "reader-1", LockMode.Shared, default);
+        Assert.True(await p.TryAcquireAsync("k", "writer-1", LockMode.Exclusive, Lease, default));
+
+        // After the writer releases, a new reader must succeed immediately - no stale reservation.
+        await p.ReleaseAsync("k", "writer-1", LockMode.Exclusive, default);
+        Assert.True(await p.TryAcquireAsync("k", "reader-2", LockMode.Shared, Lease, default));
+    }
+
+    [Fact]
     public async Task ConcurrentSharedAcquires_AllSucceed()
     {
         var p = new InMemorySharedExclusiveLockProvider();

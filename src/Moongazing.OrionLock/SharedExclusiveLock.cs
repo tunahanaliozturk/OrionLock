@@ -60,13 +60,17 @@ public sealed class SharedExclusiveLock : ISharedExclusiveLock
         string key, DistributedLockOptions? options = null, CancellationToken cancellationToken = default)
         => AcquireAsync(key, LockMode.Exclusive, options, cancellationToken);
 
-    private async Task<IDistributedLockHandle?> TryAcquireAsync(
+    private Task<IDistributedLockHandle?> TryAcquireAsync(
         string key, LockMode mode, DistributedLockOptions? options, CancellationToken cancellationToken)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(key);
         options ??= new DistributedLockOptions();
+        return TryAcquireAsync(key, Guid.NewGuid().ToString("N"), mode, options, cancellationToken);
+    }
 
-        var ownerToken = Guid.NewGuid().ToString("N");
+    private async Task<IDistributedLockHandle?> TryAcquireAsync(
+        string key, string ownerToken, LockMode mode, DistributedLockOptions options, CancellationToken cancellationToken)
+    {
         var acquired = await provider
             .TryAcquireAsync(key, ownerToken, mode, options.LeaseDuration, cancellationToken)
             .ConfigureAwait(false);
@@ -96,11 +100,17 @@ public sealed class SharedExclusiveLock : ISharedExclusiveLock
 
         try
         {
+            // Mint the owner token ONCE and reuse it across every poll attempt of this blocking
+            // acquire. A fresh token per attempt would leak the in-memory provider's pending-writer
+            // reservation: the reservation is keyed by owner token and only the same owner can clear
+            // it on a successful retry, so a per-attempt token would leave a stale reservation that
+            // denies new readers until its lease expires after this writer releases.
+            var ownerToken = Guid.NewGuid().ToString("N");
             var deadline = Stopwatch.StartNew();
             var contended = false;
             while (true)
             {
-                var handle = await TryAcquireAsync(key, mode, options, cancellationToken).ConfigureAwait(false);
+                var handle = await TryAcquireAsync(key, ownerToken, mode, options, cancellationToken).ConfigureAwait(false);
                 if (handle is not null)
                 {
                     activity?.SetTag("orionlock.outcome", "acquired");
@@ -116,14 +126,18 @@ public sealed class SharedExclusiveLock : ISharedExclusiveLock
                 contended = true;
                 OrionLockDiagnostics.RecordContention();
 
-                if (deadline.Elapsed >= options.WaitTimeout)
+                var remaining = options.WaitTimeout - deadline.Elapsed;
+                if (remaining <= TimeSpan.Zero)
                 {
                     activity?.SetTag("orionlock.outcome", "timeout");
                     OrionLockDiagnostics.RecordAcquireTimeout(key);
                     throw new LockAcquisitionTimeoutException(key, deadline.Elapsed);
                 }
 
-                await Task.Delay(options.RetryInterval, cancellationToken).ConfigureAwait(false);
+                // Clamp the poll delay to the time left until WaitTimeout so a full RetryInterval
+                // near the deadline cannot overshoot the caller's wait budget by up to one interval.
+                var delay = options.RetryInterval < remaining ? options.RetryInterval : remaining;
+                await Task.Delay(delay, cancellationToken).ConfigureAwait(false);
             }
         }
         catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)

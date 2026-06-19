@@ -134,6 +134,55 @@ public class SharedExclusiveLockTests
     }
 
     [Fact]
+    public async Task ContendedExclusive_AfterRelease_NewSharedAcquiresImmediately()
+    {
+        var locker = NewLock();
+        var reader = await locker.AcquireSharedAsync("k", Fast());
+
+        // Blocking exclusive acquire that has to retry (reader present). With a stable owner token,
+        // the successful retry clears the writer's own reservation.
+        var writerTask = locker.AcquireExclusiveAsync("k", Fast(TimeSpan.FromSeconds(5)));
+        await reader.DisposeAsync();   // drain the only reader so the retrying writer can win
+        var writer = await writerTask;
+        Assert.True(writer.IsHeld);
+
+        await writer.DisposeAsync();
+
+        // No stale reservation must linger: a new shared acquire succeeds right away (TryAcquire,
+        // single attempt - it would return null if a stale reservation were still denying readers).
+        await using var s = await locker.TryAcquireSharedAsync("k", Fast());
+        Assert.NotNull(s);
+        Assert.True(s!.IsHeld);
+    }
+
+    [Fact]
+    public async Task BlockingWait_DoesNotOvershoot_WaitTimeout()
+    {
+        var locker = NewLock();
+        await using var s = await locker.AcquireSharedAsync("k", Fast());
+
+        var opts = new DistributedLockOptions
+        {
+            LeaseDuration = TimeSpan.FromSeconds(30),
+            WaitTimeout = TimeSpan.FromMilliseconds(250),
+            // A retry interval larger than the wait budget would, unclamped, overshoot by up to one
+            // full interval before the timeout was observed.
+            RetryInterval = TimeSpan.FromMilliseconds(400),
+            AutoRenew = false,
+        };
+
+        var sw = System.Diagnostics.Stopwatch.StartNew();
+        await Assert.ThrowsAsync<LockAcquisitionTimeoutException>(
+            () => locker.AcquireExclusiveAsync("k", opts));
+        sw.Stop();
+
+        // The clamped delay must keep total wait close to WaitTimeout, not WaitTimeout + interval.
+        Assert.True(
+            sw.Elapsed < opts.WaitTimeout + TimeSpan.FromMilliseconds(200),
+            $"blocking wait {sw.ElapsedMilliseconds}ms overshot WaitTimeout {opts.WaitTimeout.TotalMilliseconds}ms by more than the allowed margin");
+    }
+
+    [Fact]
     public async Task NullOrWhitespaceKey_Throws()
     {
         var locker = NewLock();
