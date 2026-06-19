@@ -4,6 +4,27 @@ All notable changes to OrionLock are documented in this file. The format is base
 [Keep a Changelog](https://keepachangelog.com/en/1.0.0/) and this project adheres to
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.4.0] - 2026-06-19
+
+### Added
+
+#### Shared / exclusive (reader-writer) locks
+
+A new opt-in abstraction for reader-writer locking alongside the existing exclusive-only lock. For a given resource key, either any number of `Shared` (read) holders coexist, OR exactly one `Exclusive` (write) holder owns it. Acquire, TTL/lease, lease renewal, release, options, and diagnostics semantics mirror the exclusive `IDistributedLock`.
+
+- `LockMode` enum (`Shared`, `Exclusive`).
+- `ISharedExclusiveLock` with blocking `AcquireSharedAsync` / `AcquireExclusiveAsync` (wait + retry) and non-blocking `TryAcquireSharedAsync` / `TryAcquireExclusiveAsync`, all returning the existing `IDistributedLockHandle`.
+- `ISharedExclusiveLockProvider` — the raw, single-attempt reader-writer primitive a backend implements. Kept separate from `IDistributedLockProvider` so the exclusive-only fast path and its wire format are completely unchanged.
+- `SharedExclusiveLock` core composer (blocking-acquire retry loop, timeout, diagnostics, lease-renewing handles) and `SharedExclusiveLockHandle` (background renewal watchdog renewing at one third of the lease, `IsHeld` / `LostToken`, mode-aware release).
+- `OrionLock.Testing` in-memory backend `InMemorySharedExclusiveLockProvider` with real lease-expiry semantics: many shared holders coexist, a writer waits for shared holders to drain, shared waits for an active writer, and TTL/expiry/release transitions are honoured. `UseInMemory()` now also registers `ISharedExclusiveLockProvider` and `ISharedExclusiveLock`.
+- Writer-starvation mitigation: when an exclusive acquire is blocked by live shared holders, the in-memory backend records a lease-bounded pending-writer reservation that holds off NEW shared arrivals so the existing readers can drain. The reservation itself expires on the writer's lease, so a writer that gives up or crashes mid-wait cannot permanently block readers. This is a best-effort, in-process fairness aid; cross-process fair ordering is a v0.4.x follow-up.
+
+The distributed backends (Redis, EntityFrameworkCore, Postgres, SqlServer, Consul, Etcd, ZooKeeper) do not implement `ISharedExclusiveLockProvider` in this release; only the in-memory testing backend ships one. A correct distributed reader-writer implementation is a documented follow-up.
+
+### Changed
+
+- `OrionLockDiagnostics` `ActivitySource` / `Meter` version strings bumped to 0.4.0 to match the release, per the established per-release convention.
+
 ## [0.3.32] - 2026-06-17
 
 ### Changed
