@@ -5,7 +5,7 @@
 <h1 align="center">OrionLock</h1>
 
 <p align="center">
-  Distributed locking for .NET. A backend-agnostic IDistributedLock with reentrancy and background lease auto-renewal.
+  Distributed locking for .NET. A backend-agnostic IDistributedLock with reentrancy, shared/exclusive (reader-writer) locks, and background lease auto-renewal.
 </p>
 
 <p align="center">
@@ -96,6 +96,32 @@ Each acquired lock carries a lease (default 30s). A background watchdog renews t
 
 A single `DistributedLock` instance (a DI singleton) re-acquiring a key it already holds returns a counted nested handle without touching the backend. The outermost dispose releases. Reentrancy collapses same-process re-acquisition only; it does not cross process boundaries.
 
+## Shared / exclusive (reader-writer) locks
+
+Added in v0.4.0. `ISharedExclusiveLock` is a reader-writer lock for a resource key: any number of `Shared` (read) holders coexist, OR exactly one `Exclusive` (write) holder owns it. Acquire, `WaitTimeout`/`RetryInterval`, lease and renewal, release, and diagnostics semantics mirror the exclusive `IDistributedLock`, and every acquire returns the same `IDistributedLockHandle`.
+
+`UseInMemory()` from `OrionLock.Testing` registers `ISharedExclusiveLock`, so it resolves from DI like the exclusive lock:
+
+```csharp
+var rwLock = serviceProvider.GetRequiredService<ISharedExclusiveLock>();
+
+// Many readers can hold the key at once.
+await using (var read = await rwLock.AcquireSharedAsync("catalog:42"))
+{
+    // shared critical section - read.LostToken trips if the lease is lost
+}
+
+// A single writer excludes all readers and other writers.
+await using (var write = await rwLock.AcquireExclusiveAsync("catalog:42"))
+{
+    // exclusive critical section
+}
+```
+
+Blocking `AcquireSharedAsync` / `AcquireExclusiveAsync` wait up to `WaitTimeout` and throw `LockAcquisitionTimeoutException` on timeout. The non-blocking `TryAcquireSharedAsync` / `TryAcquireExclusiveAsync` make a single attempt and return `null` when the key is held in a conflicting mode.
+
+The reader-writer lock ships in the core package and the in-memory testing backend in this release. The distributed backends (Redis, EntityFrameworkCore, Postgres, SqlServer, Consul, Etcd, ZooKeeper) keep the exclusive lock only; a distributed reader-writer implementation is a documented follow-up. See the runnable section in `demo/Moongazing.OrionLock.Demo`.
+
 ## Backends
 
 - **`OrionLock.Redis`** — `SET NX PX` acquire, owner-checked Lua renew/release. Single Redis endpoint (single-instance lock; multi-master RedLock is post-0.1).
@@ -118,7 +144,7 @@ See [benchmarks.md](benchmarks.md) for the BenchmarkDotNet harness in `bench/Moo
 
 ## Roadmap
 
-Twelve-month forward plan in [ROADMAP.md](ROADMAP.md): v0.2.0 (Q3 2026) multi-master RedLock + `sp_getapplock` + Postgres advisory locks, v0.3.0 (Q4 2026) fairness + observability, v0.4.0 (Q1 2027) opt-in cross-process reentrancy, v0.5.0 (Q1-Q2 2027) more backends + coordination primitives, v1.0.0 (Q2 2027) API freeze. If something on the list matters to you, open an issue with the `roadmap` label.
+The current release is 0.4.0, which adds shared/exclusive (reader-writer) locks in the core package and the in-memory testing backend; a distributed reader-writer implementation is a follow-up. Forward plan in [ROADMAP.md](ROADMAP.md): v0.5.0 (Q1-Q2 2027) more backends + coordination primitives, v1.0.0 (Q2 2027) API freeze. If something on the list matters to you, open an issue with the `roadmap` label.
 
 ## More from the Orion family
 

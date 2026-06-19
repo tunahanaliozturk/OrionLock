@@ -12,6 +12,7 @@ await ReentrancyDemo.RunAsync();
 await FifoFairnessDemo.RunAsync();
 await LeaseRenewalDemo.RunAsync();
 await ObservabilityDemo.RunAsync();
+await SharedExclusiveDemo.RunAsync();
 
 DemoConsole.Banner("All demos completed");
 Console.WriteLine();
