@@ -94,7 +94,13 @@ public sealed class DistributedLock : IDistributedLock
         ArgumentException.ThrowIfNullOrWhiteSpace(key);
         options ??= new DistributedLockOptions();
 
-        using var activity = OrionLockDiagnostics.ActivitySource.StartActivity($"OrionLock.Acquire {key}");
+        // Hot path: only build the interpolated activity name when a listener is actually
+        // subscribed. With no listener StartActivity returns null and the name is never
+        // observed, so the per-acquire string allocation is pure waste. HasListeners() gates
+        // it without changing the activity that a subscribed listener sees.
+        using var activity = OrionLockDiagnostics.ActivitySource.HasListeners()
+            ? OrionLockDiagnostics.ActivitySource.StartActivity($"OrionLock.Acquire {key}")
+            : null;
         activity?.SetTag("orionlock.key", key);
 
         // v0.3.3: opt-in FIFO ordering. When enabled, the caller waits for its turn at the

@@ -94,7 +94,12 @@ public sealed class SharedExclusiveLock : ISharedExclusiveLock
         options ??= new DistributedLockOptions();
 
         var modeTag = mode == LockMode.Shared ? "shared" : "exclusive";
-        using var activity = OrionLockDiagnostics.ActivitySource.StartActivity($"OrionLock.AcquireRW {key}");
+        // Hot path: only build the interpolated activity name when a listener is actually
+        // subscribed. With no listener StartActivity returns null and the name is never
+        // observed, so the per-acquire string allocation is pure waste.
+        using var activity = OrionLockDiagnostics.ActivitySource.HasListeners()
+            ? OrionLockDiagnostics.ActivitySource.StartActivity($"OrionLock.AcquireRW {key}")
+            : null;
         activity?.SetTag("orionlock.key", key);
         activity?.SetTag("orionlock.mode", modeTag);
 
