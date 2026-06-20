@@ -4,6 +4,12 @@ All notable changes to OrionLock are documented in this file. The format is base
 [Keep a Changelog](https://keepachangelog.com/en/1.0.0/) and this project adheres to
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.4.1] - 2026-06-20
+
+### Performance
+
+- Blocking acquire hot path no longer allocates the OpenTelemetry activity display name when no `ActivitySource` listener is subscribed. `DistributedLock.AcquireAsync` and `SharedExclusiveLock` now gate the interpolated `"OrionLock.Acquire {key}"` / `"OrionLock.AcquireRW {key}"` string behind `ActivitySource.HasListeners()`, so the per-acquire string is built only when a tracer is actually attached. With no listener (the production-typical configuration) `StartActivity` returned null and that string was never observed, so the change is behavior-identical; a subscribed listener still sees the exact same activity name. Measured on the uncontested in-memory acquire/release path: steady-state allocation dropped from about 815 to about 743 bytes per acquire (roughly 9 percent). No public API, locking, timeout, or fairness semantics changed.
+
 ## [0.4.0] - 2026-06-19
 
 ### Added
