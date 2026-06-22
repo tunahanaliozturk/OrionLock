@@ -100,7 +100,10 @@ public class TelemetryInstrumentsTests
             new DistributedLockOptions { LeaseDuration = TimeSpan.FromMilliseconds(100) });
         try
         {
-            await Task.Delay(TimeSpan.FromMilliseconds(200));
+            // Observe for ~30 renewal intervals so at least one lease-renewal sample is emitted even if a
+            // loaded CI runner starves the watchdog timer; the earlier 200ms (~6 intervals) could miss
+            // the window entirely under load and assert NotEmpty against an empty bag.
+            await Task.Delay(TimeSpan.FromMilliseconds(1000));
         }
         finally
         {

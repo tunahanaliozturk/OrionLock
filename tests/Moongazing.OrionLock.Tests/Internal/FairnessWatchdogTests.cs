@@ -40,9 +40,12 @@ public sealed class FairnessWatchdogTests
 
         Assert.True(handle.IsHeld);
 
-        // Advance the clock past the grace period and wait for the watchdog tick.
+        // Advance the SIMULATED clock past the grace period, then give the watchdog real time to tick and
+        // observe it. Once the clock has jumped, any tick triggers the loss, so a longer real-time wait
+        // only adds chances - 1000ms (up from 200ms) reliably lets at least one tick land even if a
+        // loaded CI runner starves the timer.
         now = now.AddMilliseconds(200);
-        await Task.Delay(200);
+        await Task.Delay(1000);
 
         Assert.False(handle.IsHeld);
         Assert.True(handle.LostToken.IsCancellationRequested);
@@ -89,8 +92,10 @@ public sealed class FairnessWatchdogTests
             },
             nowUtc: () => Clock());
 
+        // Jump the simulated clock past grace, then allow generous real time for the watchdog tick that
+        // records the loss; 1000ms (up from 200ms) tolerates a starved timer on a loaded CI runner.
         now = now.AddMilliseconds(200);
-        await Task.Delay(200);
+        await Task.Delay(1000);
 
         Assert.False(handle.IsHeld);
         // Use >= 1 rather than == 1 because the MeterListener is process-wide and other
@@ -144,6 +149,13 @@ public sealed class FairnessWatchdogTests
 
         // Flip to failures: the FIRST failure ticks the clock by another 10 ms - well
         // under the 40 ms grace from the most recent success. IsHeld must stay true.
+        //
+        // Determinism note: these two waits are deliberately NOT widened. The PeriodicTimer cannot fire
+        // faster than its 20ms period, so this 30ms window admits at most ~1-2 failed renews (<=20ms of
+        // simulated advance, under the 40ms grace) - and a loaded runner only REDUCES the tick count,
+        // keeping the hold alive. Lengthening this window would let extra failed ticks accumulate enough
+        // simulated advance to exhaust the grace and surrender, which would flip IsHeld and break the
+        // assertion. The margin is bounded by the timer period, not by CPU speed, so it is stable as-is.
         failNext = true;
         await Task.Delay(30);
         Assert.True(handle.IsHeld);

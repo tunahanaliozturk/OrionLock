@@ -1,3 +1,4 @@
+using System.Diagnostics;
 using Moongazing.OrionLock;
 using Moongazing.OrionLock.Redis;
 using StackExchange.Redis;
@@ -11,6 +12,13 @@ namespace Moongazing.OrionLock.Redis.Tests;
 /// far less exposed to transient Docker-daemon blips than creating a fresh container per test; the
 /// tests stay isolated from each other because each uses a unique Guid key, not container isolation.
 /// </summary>
+/// <remarks>
+/// CI resilience: under the three-TFM, six-container parallel load on a single runner, the first
+/// <c>ConnectionMultiplexer.ConnectAsync</c> after the container starts can blip (slow first
+/// handshake) and the Docker daemon can transiently fault the start, either of which would fail the
+/// whole class. The start and the connect+PING warm-up are therefore retried with exponential backoff
+/// under a generous budget; see <see cref="RedisContainerStartup"/>.
+/// </remarks>
 public sealed class RedisContainerFixture : IAsyncLifetime
 {
     private readonly RedisContainer container = new RedisBuilder().Build();
@@ -19,15 +27,82 @@ public sealed class RedisContainerFixture : IAsyncLifetime
     public IConnectionMultiplexer Mux { get; private set; } = default!;
 
     public async Task InitializeAsync()
-    {
-        await container.StartAsync();
-        Mux = await ConnectionMultiplexer.ConnectAsync(container.GetConnectionString());
-    }
+        => Mux = await RedisContainerStartup.StartAndConnectAsync(container).ConfigureAwait(false);
 
     public async Task DisposeAsync()
     {
         await Mux.DisposeAsync();
         await container.DisposeAsync();
+    }
+}
+
+/// <summary>
+/// Starts a Redis container and opens a verified <see cref="IConnectionMultiplexer"/>, retrying both the
+/// container start and the connect+PING warm-up with exponential backoff under an overall budget.
+/// </summary>
+/// <remarks>
+/// This is the single biggest lever against the flaky CI suite: a slow first connection on a loaded
+/// runner is retried rather than failing an entire Redis test class. The container's own module
+/// readiness probe (an in-container PING) is left in place; this only adds tolerance for transient
+/// faults during start and the first out-of-container connection.
+/// </remarks>
+internal static class RedisContainerStartup
+{
+    /// <summary>
+    /// Starts <paramref name="container"/>, connects a multiplexer, and confirms liveness with a real
+    /// <c>PING</c>, retrying the whole sequence on transient failure until it succeeds or the budget is
+    /// exhausted, after which the last error is rethrown. Any partially-built multiplexer from a failed
+    /// attempt is disposed before the next try so connections are not leaked.
+    /// </summary>
+    public static async Task<IConnectionMultiplexer> StartAndConnectAsync(RedisContainer container)
+    {
+        ArgumentNullException.ThrowIfNull(container);
+
+        // Redis itself comes up quickly; the budget exists to ride out daemon/handshake blips under load.
+        var budget = TimeSpan.FromMinutes(2);
+        var sw = Stopwatch.StartNew();
+        var delay = TimeSpan.FromSeconds(1);
+        var maxDelay = TimeSpan.FromSeconds(10);
+        var attempt = 0;
+        Exception? last = null;
+
+        while (sw.Elapsed < budget)
+        {
+            attempt++;
+            using var cts = new CancellationTokenSource(budget - sw.Elapsed);
+            // Concrete type (not the interface) keeps the analyzer happy (CA1859); it upcasts to
+            // IConnectionMultiplexer on return at no cost.
+            ConnectionMultiplexer? mux = null;
+            try
+            {
+                await container.StartAsync(cts.Token).ConfigureAwait(false);
+                mux = await ConnectionMultiplexer.ConnectAsync(container.GetConnectionString()).ConfigureAwait(false);
+                await mux.GetDatabase().PingAsync().ConfigureAwait(false);
+                return mux;
+            }
+            catch (Exception ex) when (ex is not OutOfMemoryException and not StackOverflowException)
+            {
+                last = ex;
+                if (mux is not null)
+                {
+                    await mux.DisposeAsync().ConfigureAwait(false);
+                }
+
+                var remaining = budget - sw.Elapsed;
+                if (remaining <= TimeSpan.Zero)
+                {
+                    break;
+                }
+
+                var wait = delay < remaining ? delay : remaining;
+                await Task.Delay(wait).ConfigureAwait(false);
+                delay = delay + delay < maxDelay ? delay + delay : maxDelay;
+            }
+        }
+
+        throw new InvalidOperationException(
+            $"Redis container '{container.Name}' did not become connectable within {budget.TotalSeconds:N0}s after {attempt} attempt(s).",
+            last);
     }
 }
 
@@ -178,8 +253,10 @@ public sealed class RedisSharedExclusiveLockProviderTests : IClassFixture<RedisC
         Assert.True(await p.TryAcquireAsync(key, "reader-long", LockMode.Shared, TimeSpan.FromSeconds(30), default));
 
         // After the short reader lapses, a writer must STILL be blocked: the long reader holds, and
-        // tracking readers individually means the short one's expiry did not free the set.
-        await Task.Delay(400);
+        // tracking readers individually means the short one's expiry did not free the set. The 1000ms
+        // wait (5x the 200ms short lease) guarantees the short reader has gone on a loaded runner, while
+        // reader-long's 30s lease keeps the negative assertion valid with a wide margin.
+        await Task.Delay(1000);
         Assert.False(await p.TryAcquireAsync(key, "writer-1", LockMode.Exclusive, Lease, default));
 
         // Once the long reader releases too, the writer finally wins.
@@ -195,14 +272,16 @@ public sealed class RedisSharedExclusiveLockProviderTests : IClassFixture<RedisC
         var p = NewProvider();
         var key = NewKey();
 
-        Assert.True(await p.TryAcquireAsync(key, "reader-1", LockMode.Shared, TimeSpan.FromMilliseconds(400), default));
+        Assert.True(await p.TryAcquireAsync(key, "reader-1", LockMode.Shared, TimeSpan.FromMilliseconds(1000), default));
 
-        // Renew to a long lease before the original would lapse.
-        await Task.Delay(150);
+        // Renew to a long lease well before the original would lapse: at 300ms in there is ~700ms of
+        // slack before the 1000ms lease expires, so a loaded CI runner cannot let the renew race the
+        // expiry (the renewal needs far more slack than the original lease, per the de-flake pattern).
+        await Task.Delay(300);
         Assert.True(await p.TryRenewAsync(key, "reader-1", LockMode.Shared, TimeSpan.FromSeconds(30), default));
 
-        // Past the ORIGINAL 400 ms lease, the renewal has kept the reader alive, so a writer is still blocked.
-        await Task.Delay(400);
+        // Past the ORIGINAL 1000 ms lease, the renewal has kept the reader alive, so a writer is still blocked.
+        await Task.Delay(1100);
         Assert.False(await p.TryAcquireAsync(key, "writer-1", LockMode.Exclusive, Lease, default));
     }
 
@@ -212,13 +291,15 @@ public sealed class RedisSharedExclusiveLockProviderTests : IClassFixture<RedisC
         var p = NewProvider();
         var key = NewKey();
 
-        Assert.True(await p.TryAcquireAsync(key, "writer-1", LockMode.Exclusive, TimeSpan.FromMilliseconds(400), default));
+        Assert.True(await p.TryAcquireAsync(key, "writer-1", LockMode.Exclusive, TimeSpan.FromMilliseconds(1000), default));
 
-        await Task.Delay(150);
+        // Renew at 300ms in, ~700ms before the 1000ms lease would lapse, so the renew cannot race the
+        // expiry on a loaded runner.
+        await Task.Delay(300);
         Assert.True(await p.TryRenewAsync(key, "writer-1", LockMode.Exclusive, TimeSpan.FromSeconds(30), default));
 
-        await Task.Delay(400);
-        // Renewal kept the writer alive past its original lease, so a reader is still blocked.
+        await Task.Delay(1100);
+        // Past the ORIGINAL 1000 ms lease, the renewal kept the writer alive, so a reader is still blocked.
         Assert.False(await p.TryAcquireAsync(key, "reader-1", LockMode.Shared, Lease, default));
     }
 
@@ -306,8 +387,8 @@ public sealed class RedisSharedExclusiveLockProviderTests : IClassFixture<RedisC
         var p = NewProvider();
         var key = NewKey();
 
-        Assert.True(await p.TryAcquireAsync(key, "reader-1", LockMode.Shared, TimeSpan.FromMilliseconds(150), default));
-        await Task.Delay(300); // lease lapses
+        Assert.True(await p.TryAcquireAsync(key, "reader-1", LockMode.Shared, TimeSpan.FromMilliseconds(200), default));
+        await Task.Delay(1000); // lease (200ms) lapses with a wide 5x margin for a loaded runner
 
         // Releasing the already-expired share must not throw and must leave the key acquirable.
         await p.ReleaseAsync(key, "reader-1", LockMode.Shared, default);
@@ -320,8 +401,8 @@ public sealed class RedisSharedExclusiveLockProviderTests : IClassFixture<RedisC
         var p = NewProvider();
         var key = NewKey();
 
-        Assert.True(await p.TryAcquireAsync(key, "writer-1", LockMode.Exclusive, TimeSpan.FromMilliseconds(150), default));
-        await Task.Delay(300); // lease lapses
+        Assert.True(await p.TryAcquireAsync(key, "writer-1", LockMode.Exclusive, TimeSpan.FromMilliseconds(200), default));
+        await Task.Delay(1000); // lease (200ms) lapses with a wide 5x margin for a loaded runner
 
         await p.ReleaseAsync(key, "writer-1", LockMode.Exclusive, default);
         Assert.True(await p.TryAcquireAsync(key, "reader-1", LockMode.Shared, Lease, default));

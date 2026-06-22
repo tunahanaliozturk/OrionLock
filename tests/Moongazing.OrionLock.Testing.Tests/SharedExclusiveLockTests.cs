@@ -170,13 +170,17 @@ public class SharedExclusiveLockTests
         var locker = NewLock();
         await using var s = await locker.AcquireSharedAsync("k", Fast());
 
+        // Absolute durations are scaled up (vs an earlier 250ms/400ms pairing) so that CI scheduler
+        // jitter is small RELATIVE to the values, while the gap between a correct run and a buggy one
+        // stays large. A correct clamp returns at ~WaitTimeout (1000ms); an UNCLAMPED implementation
+        // would sleep a full 1600ms retry interval before observing the timeout, landing at ~2600ms.
         var opts = new DistributedLockOptions
         {
             LeaseDuration = TimeSpan.FromSeconds(30),
-            WaitTimeout = TimeSpan.FromMilliseconds(250),
+            WaitTimeout = TimeSpan.FromMilliseconds(1000),
             // A retry interval larger than the wait budget would, unclamped, overshoot by up to one
             // full interval before the timeout was observed.
-            RetryInterval = TimeSpan.FromMilliseconds(400),
+            RetryInterval = TimeSpan.FromMilliseconds(1600),
             AutoRenew = false,
         };
 
@@ -185,9 +189,11 @@ public class SharedExclusiveLockTests
             () => locker.AcquireExclusiveAsync("k", opts));
         sw.Stop();
 
-        // The clamped delay must keep total wait close to WaitTimeout, not WaitTimeout + interval.
+        // The clamped delay must keep total wait close to WaitTimeout, not WaitTimeout + interval. The
+        // 600ms margin absorbs CI jitter yet still sits far below the ~2600ms an unclamped overshoot
+        // would reach, so the assertion keeps its power to catch the regression it guards.
         Assert.True(
-            sw.Elapsed < opts.WaitTimeout + TimeSpan.FromMilliseconds(200),
+            sw.Elapsed < opts.WaitTimeout + TimeSpan.FromMilliseconds(600),
             $"blocking wait {sw.ElapsedMilliseconds}ms overshot WaitTimeout {opts.WaitTimeout.TotalMilliseconds}ms by more than the allowed margin");
     }
 

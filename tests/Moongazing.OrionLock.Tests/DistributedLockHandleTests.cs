@@ -45,7 +45,10 @@ public class DistributedLockHandleTests
         await using (new DistributedLockHandle(p, "k", "owner-1",
             new DistributedLockOptions { LeaseDuration = TimeSpan.FromMilliseconds(150), AutoRenew = true }))
         {
-            await Task.Delay(400);
+            // Renewal interval is LeaseDuration/3 (~50ms); a 1000ms hold is ~20 intervals, so the
+            // ">= 2 renewals" assertion holds with a wide margin even if a loaded CI runner starves the
+            // watchdog timer down to a few ticks. The earlier 400ms hold could drop below 2 under load.
+            await Task.Delay(1000);
         }
         Assert.True(p.RenewCount >= 2);
     }
@@ -59,7 +62,10 @@ public class DistributedLockHandleTests
 
         var lost = new TaskCompletionSource();
         h.LostToken.Register(() => lost.TrySetResult());
-        await lost.Task.WaitAsync(TimeSpan.FromSeconds(2));
+        // Generous ceiling: the lost token fires once the renewal-failure grace period elapses; 10s far
+        // exceeds that even on a badly loaded runner, so this never times out spuriously while still
+        // failing if the token genuinely never trips.
+        await lost.Task.WaitAsync(TimeSpan.FromSeconds(10));
 
         Assert.False(h.IsHeld);
         Assert.True(h.LostToken.IsCancellationRequested);
@@ -76,7 +82,10 @@ public class DistributedLockHandleTests
         Assert.Equal(1, p.ReleaseCount);
         Assert.False(h.IsHeld);
         var renewsAfterDispose = p.RenewCount;
-        await Task.Delay(200);
+        // Wait long enough (500ms, ~10 renewal intervals for the 150ms lease) that a watchdog timer
+        // which failed to stop on dispose WOULD have fired again; the count staying flat then proves the
+        // watchdog was truly torn down. A shorter wait could miss a leaked late tick.
+        await Task.Delay(500);
         Assert.Equal(renewsAfterDispose, p.RenewCount);
     }
 

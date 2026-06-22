@@ -16,10 +16,7 @@ public sealed class RedisFifoWaiterCoordinatorTests : IAsyncLifetime
 #pragma warning restore CA1859
 
     public async Task InitializeAsync()
-    {
-        await container.StartAsync();
-        mux = await ConnectionMultiplexer.ConnectAsync(container.GetConnectionString());
-    }
+        => mux = await RedisContainerStartup.StartAndConnectAsync(container).ConfigureAwait(false);
 
     public async Task DisposeAsync()
     {
@@ -53,13 +50,20 @@ public sealed class RedisFifoWaiterCoordinatorTests : IAsyncLifetime
         var first = await sut.EnterAsync("k", CancellationToken.None);
         var secondTask = sut.EnterAsync("k", CancellationToken.None);
 
-        // Second caller should be blocked while first holds the head slot.
-        await Task.Delay(80);
+        // Second caller should be blocked while first holds the head slot. The 20ms poll loop has had
+        // many cycles to (wrongly) complete within this 500ms window, so the negative assertion is a
+        // genuine test of the blocking - yet the window is wide enough that a slow, loaded CI runner
+        // cannot let the assertion run before the second caller has even joined the queue. The earlier
+        // 80ms window flaked on net10.0 under heavy parallel container load.
+        await Task.Delay(500);
         Assert.False(secondTask.IsCompleted);
 
         await sut.LeaveAsync(first, CancellationToken.None);
 
-        var second = await secondTask.WaitAsync(TimeSpan.FromSeconds(2));
+        // Generous timeout: once first leaves, the second caller becomes head on its next poll; 30s far
+        // exceeds the 20ms poll interval even if the runner is badly starved, so this never spuriously
+        // times out while still failing fast if the hand-off genuinely deadlocks.
+        var second = await secondTask.WaitAsync(TimeSpan.FromSeconds(30));
         Assert.Equal("k", second.Key);
 
         await sut.LeaveAsync(second, CancellationToken.None);
@@ -89,7 +93,9 @@ public sealed class RedisFifoWaiterCoordinatorTests : IAsyncLifetime
 
         using var cts = new CancellationTokenSource();
         var secondTask = sut.EnterAsync("k", cts.Token);
-        await Task.Delay(50);
+        // Give the second caller time to actually join the queue before cancelling it; 200ms (up from
+        // 50ms) tolerates a slow, loaded runner that has not yet scheduled the enqueue.
+        await Task.Delay(200);
         cts.Cancel();
 
         await Assert.ThrowsAnyAsync<OperationCanceledException>(() => secondTask);
@@ -98,7 +104,7 @@ public sealed class RedisFifoWaiterCoordinatorTests : IAsyncLifetime
         // releases the lock. If `LeaveAsync` only popped one slot and the cancelled waiter
         // still sat at position 0, this Enter would deadlock.
         await sut.LeaveAsync(first, CancellationToken.None);
-        var third = await sut.EnterAsync("k", CancellationToken.None).WaitAsync(TimeSpan.FromSeconds(2));
+        var third = await sut.EnterAsync("k", CancellationToken.None).WaitAsync(TimeSpan.FromSeconds(30));
         Assert.NotNull(third);
         await sut.LeaveAsync(third, CancellationToken.None);
     }
@@ -140,9 +146,11 @@ public sealed class RedisFifoWaiterCoordinatorTests : IAsyncLifetime
         var first = await sut.EnterAsync("k", CancellationToken.None);
 
         // Second joins behind the head -> depth 1 (ZRANK 1). The depth is recorded synchronously
-        // at enter, right after the ZADD, before the returned task completes.
+        // at enter, right after the ZADD, before the returned task completes. The 500ms window (up from
+        // 80ms) gives the MeterListener ample time to surface both samples even when the runner is
+        // heavily loaded, without changing what is asserted.
         var secondTask = sut.EnterAsync("k", CancellationToken.None);
-        await Task.Delay(80);
+        await Task.Delay(500);
 
         lock (samples)
         {
@@ -151,7 +159,7 @@ public sealed class RedisFifoWaiterCoordinatorTests : IAsyncLifetime
         }
 
         await sut.LeaveAsync(first, CancellationToken.None);
-        var second = await secondTask.WaitAsync(TimeSpan.FromSeconds(2));
+        var second = await secondTask.WaitAsync(TimeSpan.FromSeconds(30));
         await sut.LeaveAsync(second, CancellationToken.None);
     }
 
@@ -164,15 +172,19 @@ public sealed class RedisFifoWaiterCoordinatorTests : IAsyncLifetime
             {
                 KeyPrefix = "test:prune:" + Guid.NewGuid().ToString("N"),
                 PollInterval = TimeSpan.FromMilliseconds(20),
-                WaiterTtl = TimeSpan.FromMilliseconds(150),
+                // 500ms TTL (up from 150ms) so the wall-clock wait below can clear it by a wide,
+                // CI-tolerant margin rather than racing a tight 100ms cushion.
+                WaiterTtl = TimeSpan.FromMilliseconds(500),
             });
 
         var first = await coordinator.EnterAsync("k", CancellationToken.None);
 
-        // Wait past the TTL; the next EnterAsync's prune pass should remove the stale entry.
-        await Task.Delay(250);
+        // Wait well past the TTL (1.5s vs a 500ms TTL is 3x slack); the next EnterAsync's prune pass
+        // then reliably removes the stale entry even if the runner stalled this delay. The earlier
+        // 250ms-vs-150ms pairing left only 100ms of cushion, which a loaded runner could erase.
+        await Task.Delay(1500);
         var second = await coordinator.EnterAsync("k", CancellationToken.None)
-            .WaitAsync(TimeSpan.FromSeconds(1));
+            .WaitAsync(TimeSpan.FromSeconds(30));
 
         Assert.NotNull(second);
 

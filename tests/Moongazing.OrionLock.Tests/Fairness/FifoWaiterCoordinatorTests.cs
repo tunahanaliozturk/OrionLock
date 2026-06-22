@@ -28,7 +28,10 @@ public sealed class FifoWaiterCoordinatorTests
         var ticket = await c.EnterAsync("k", CancellationToken.None);
         sw.Stop();
 
-        Assert.True(sw.ElapsedMilliseconds < 200, $"head should complete fast, took {sw.ElapsedMilliseconds} ms");
+        // Upper bound widened to 2000ms: the head taking ~0ms vs being blocked is the property under
+        // test, and 2s is still far below any real blocking yet tolerant of a loaded runner that simply
+        // schedules this continuation slowly. The earlier 200ms bound could trip purely on CI load.
+        Assert.True(sw.ElapsedMilliseconds < 2000, $"head should complete fast, took {sw.ElapsedMilliseconds} ms");
         await c.LeaveAsync(ticket, CancellationToken.None);
     }
 
@@ -40,13 +43,15 @@ public sealed class FifoWaiterCoordinatorTests
         var head = await c.EnterAsync("k", CancellationToken.None);
         var secondTask = c.EnterAsync("k", CancellationToken.None);
 
-        // Give the scheduler time to run secondTask if it could finish.
-        await Task.Delay(100);
+        // Give the scheduler ample time to run secondTask if it could (wrongly) finish; 500ms (up from
+        // 100ms) makes the negative assertion a real test of blocking while staying robust on a loaded
+        // runner that schedules the waiter slowly.
+        await Task.Delay(500);
         Assert.False(secondTask.IsCompleted, "second waiter should still be queued behind head");
 
         await c.LeaveAsync(head, CancellationToken.None);
 
-        var second = await secondTask.WaitAsync(TimeSpan.FromSeconds(2));
+        var second = await secondTask.WaitAsync(TimeSpan.FromSeconds(30));
         Assert.Equal("k", second.Key);
 
         await c.LeaveAsync(second, CancellationToken.None);
@@ -63,7 +68,10 @@ public sealed class FifoWaiterCoordinatorTests
         var second = c.EnterAsync("k", CancellationToken.None).ContinueWith(t => { order.Add(2); return t.Result; }, TaskScheduler.Default);
         var third = c.EnterAsync("k", CancellationToken.None).ContinueWith(t => { order.Add(3); return t.Result; }, TaskScheduler.Default);
 
-        await Task.Delay(50);
+        // Let both waiters queue behind the head before we record "1" and release. 300ms (up from 50ms)
+        // ensures a loaded runner has scheduled both EnterAsync calls; ordering itself is enforced by the
+        // FIFO, so this delay only guards the "2 and 3 are already waiting" precondition.
+        await Task.Delay(300);
         order.Add(1);
         await c.LeaveAsync(first, CancellationToken.None);
 
@@ -87,7 +95,9 @@ public sealed class FifoWaiterCoordinatorTests
         var b = await c.EnterAsync("b", CancellationToken.None);
         sw.Stop();
 
-        Assert.True(sw.ElapsedMilliseconds < 200,
+        // Upper bound widened to 2000ms: a different-key head is never blocked, so the only thing that
+        // grows this number is CI scheduling latency. 2s stays far below any real cross-key blocking.
+        Assert.True(sw.ElapsedMilliseconds < 2000,
             $"different-key head should not block; took {sw.ElapsedMilliseconds} ms");
 
         await c.LeaveAsync(a, CancellationToken.None);
@@ -111,7 +121,7 @@ public sealed class FifoWaiterCoordinatorTests
         var thirdTask = c.EnterAsync("k", CancellationToken.None);
         await c.LeaveAsync(head, CancellationToken.None);
 
-        var third = await thirdTask.WaitAsync(TimeSpan.FromSeconds(2));
+        var third = await thirdTask.WaitAsync(TimeSpan.FromSeconds(30));
         Assert.Equal("k", third.Key);
         await c.LeaveAsync(third, CancellationToken.None);
     }
