@@ -4,9 +4,10 @@ This document lists what is shipped, what is actively planned, and what we are d
 *not* building. It is a planning artifact, not a contract — dates slip, priorities reshuffle.
 If an item here matters to you, open a GitHub issue so we can weigh it against everything else.
 
-**Current release: 0.4.1.** Reader-writer (shared/exclusive) locking shipped for the in-memory
+**Current release: 0.4.2.** Reader-writer (shared/exclusive) locking shipped for the in-memory
 backend in 0.4.0; 0.4.1 trimmed an allocation on the acquire hot path and made the diagnostics
-meter version self-deriving. The next milestone is a *distributed* reader-writer provider.
+meter version self-deriving; 0.4.2 shipped the first *distributed* reader-writer provider, backed by
+Redis. The next milestone is the relational (EF Core / Postgres) reader-writer provider.
 
 ## Status legend
 
@@ -200,27 +201,43 @@ reader-writer lock is part of that work.
   (`MeterVersion`) instead of a hand-edited per-release constant, so the long-standing
   per-release version bump no longer needs a manual edit.
 
+### v0.4.2 — Redis distributed reader-writer provider *(shipped 2026-06-22)*
+
+The first distributed `ISharedExclusiveLockProvider`, bringing the v0.4.0 reader-writer seam to a
+real cross-process backend. The public surface was already in place, so this is a new backend
+implementation behind the existing contract, not an API change. The exclusive-only
+`RedisLockProvider` and its wire format are unchanged.
+
+- **`RedisSharedExclusiveLockProvider`** in the existing `Moongazing.OrionLock.Redis` package.
+  Per logical key it keeps three Lua-managed Redis keys: a writer string (`:w`) holding the writer
+  fencing token, a readers sorted set (`:r`) whose members are reader fencing tokens scored by
+  absolute lease-expiry, and a pending-writer string (`:pw`). Every reader/writer transition is a
+  single atomic Lua script, so shared holders coexist while an exclusive acquire fails whenever any
+  reader or another writer is live.
+- Readers are tracked individually in the sorted set (never a bare counter), pruned by score on
+  every acquire / renew / release, so one reader's expiry never frees another's. All lease math uses
+  the Redis server clock via `redis.call('TIME')` so there is no client-clock-skew hazard.
+- Per-mode lease with owner-checked renew/release (a reader by sorted-set membership, a writer by
+  fencing-token equality), matching the exclusive Redis provider's ownership discipline so two
+  processes cannot release each other's hold. Release of an already-expired share is a no-op.
+- Best-effort cross-process writer fairness: a lease-bounded pending-writer marker holds off new
+  reader arrivals while a writer waits, so in-flight readers drain and the writer proceeds; the
+  marker carries the writer's own lease TTL so a crashed writer cannot block readers forever. This
+  is writer-preference, not strict FIFO among writers, and is the distributed analogue of the
+  in-memory reservation. It pays off the v0.4.0 "cross-process fair ordering is a follow-up" note
+  for the reader-writer path.
+- `RedisSharedExclusiveLockOptions` (`KeyPrefix`, `Database`) + the
+  `OrionLockBuilder.UseRedisSharedExclusive()` DI helper, additive to `UseRedis`.
+
 ---
 
 ## v0.4.x — Distributed reader-writer locks *(planned, next)*
 
-The headline follow-up to v0.4.0. The reader-writer abstraction and the in-memory provider
-shipped; the distributed half is the next concrete piece of work. The public surface
-(`ISharedExclusiveLock`, `ISharedExclusiveLockProvider`, `LockMode`) is already in place, so this
-is new backend implementations behind the existing contract, not an API change.
-
-### v0.4.2 — Redis distributed reader-writer provider *(planned, July 2026)*
-
-- A `RedisSharedExclusiveLockProvider` implementing `ISharedExclusiveLockProvider` in the existing
-  `Moongazing.OrionLock.Redis` package. The natural encoding is a small Lua-scripted state per key
-  (a writer marker plus a shared-holder set or counter) so the reader/writer transitions stay
-  atomic under contention: shared holders coexist, an exclusive acquire fails while any shared
-  holder or another writer is live.
-- Per-mode lease with owner-checked renew/release, matching the exclusive Redis provider's
-  ownership discipline so two processes cannot release each other's hold.
-- Best-effort cross-process writer-starvation mitigation (a lease-bounded pending-writer marker
-  that holds off new shared arrivals), the distributed analogue of the in-memory reservation. This
-  pays off the v0.4.0 "cross-process fair ordering is a follow-up" note for the reader-writer path.
+The headline follow-up to v0.4.0. The reader-writer abstraction, the in-memory provider, and the
+Redis distributed provider (v0.4.2 above) shipped; the relational half is the next concrete piece of
+work. The public surface (`ISharedExclusiveLock`, `ISharedExclusiveLockProvider`, `LockMode`) is
+already in place, so this is new backend implementations behind the existing contract, not an API
+change.
 
 ### v0.4.3 — EF Core / Postgres distributed reader-writer provider *(planned, August 2026)*
 

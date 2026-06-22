@@ -4,6 +4,30 @@ All notable changes to OrionLock are documented in this file. The format is base
 [Keep a Changelog](https://keepachangelog.com/en/1.0.0/) and this project adheres to
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.4.2] - 2026-06-22
+
+### Added
+
+#### Redis distributed reader-writer (shared/exclusive) lock
+
+The first distributed `ISharedExclusiveLockProvider`. `RedisSharedExclusiveLockProvider` ships in the existing `OrionLock.Redis` package and brings the v0.4.0 reader-writer seam to a real cross-process backend: for a given key, any number of `Shared` (read) holders coexist, OR exactly one `Exclusive` (write) holder owns it. Every transition is a single atomic Lua script, so mutual exclusion, TTL reclaim, renewal, fencing, and writer fairness never depend on a read-then-write round-trip race. The exclusive-only `RedisLockProvider` and its wire format are unchanged; this is purely additive.
+
+- `RedisSharedExclusiveLockProvider` implementing `ISharedExclusiveLockProvider`. Per logical key it keeps three Redis keys under its own prefix: a writer string (`:w`) holding the writer's fencing token, a readers sorted set (`:r`) whose members are reader fencing tokens scored by absolute lease-expiry, and a pending-writer string (`:pw`) holding a waiting writer's token.
+- Readers are tracked individually in the sorted set, never as a bare counter, so one reader's expiry never frees another's and a leaked decrement cannot corrupt the set. Expired members are pruned by score on every acquire, renew, and release, and the set is given a matching `PEXPIRE` so a fully crashed reader fleet leaves nothing behind.
+- All lease math uses the Redis server clock (`redis.call('TIME')` inside the script), so every process compares expiries against one authoritative clock with no client-clock-skew hazard. This is replication-safe under the default script-effects replication.
+- Per-mode lease with owner-checked renew and release: a reader is verified by sorted-set membership, a writer by string equality on its fencing token, matching the exclusive provider's ownership discipline. A stale client cannot renew or release another holder's share, and releasing an already-expired share is a safe no-op.
+- Best-effort cross-process writer fairness: when an exclusive acquire is blocked by live readers, it plants a lease-bounded pending-writer marker that holds off NEW reader arrivals (an existing reader may still refresh its own hold) so the in-flight readers drain and the waiting writer proceeds. The marker carries the writer's own lease TTL, so a writer that crashes or abandons its wait cannot block readers past that TTL. This is writer-preference, not strict FIFO ordering among competing writers, and is the distributed analogue of the in-memory pending-writer reservation. It pays off the v0.4.0 "cross-process fair ordering is a follow-up" note for the reader-writer path.
+- Multi-key Lua scripts hash-tag all three keys on the logical key, so a clustered deployment routes them to one slot.
+- `RedisSharedExclusiveLockOptions` (`KeyPrefix` defaulting to `orionlock:rw:`, `Database`) and the `OrionLockBuilder.UseRedisSharedExclusive(configure?)` DI helper, which registers the provider and the composed `ISharedExclusiveLock` via `TryAddSingleton` over the already-registered `IConnectionMultiplexer`. Additive to `UseRedis`; both `IDistributedLock` and `ISharedExclusiveLock` can then resolve against Redis.
+
+### Tests
+
+- `RedisSharedExclusiveLockProviderTests` runs the full reader-writer correctness matrix against a real Redis via Testcontainers (the package's established integration-test pattern): many readers acquire concurrently; a writer is blocked while readers are held and acquires once they release; readers are blocked while a writer is held; an expired reader and an expired writer are each reclaimed; one reader's expiry does not free another's; renewal keeps a reader and a writer alive past their original TTL; renew and release are owner-checked so a stale token cannot affect another holder's share; release of an expired share is a no-op; the pending-writer marker blocks new readers so a continuous reader stream cannot starve a waiting writer; the marker itself expires so a crashed writer cannot block readers forever; and granting the writer clears the marker so a later reader still succeeds.
+
+### Changed
+
+- `OrionLockDiagnostics` `ActivitySource` / `Meter` version derives from the assembly version (the v0.4.1 self-deriving `MeterVersion`), so this release needs no manual diagnostics version edit.
+
 ## [0.4.1] - 2026-06-20
 
 ### Performance

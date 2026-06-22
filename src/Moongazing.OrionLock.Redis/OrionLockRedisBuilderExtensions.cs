@@ -64,4 +64,30 @@ public static class OrionLockRedisBuilderExtensions
 
         return builder;
     }
+
+    /// <summary>
+    /// Adds the Redis distributed reader-writer (shared/exclusive) backend (v0.4.2):
+    /// <see cref="RedisSharedExclusiveLockProvider"/> as <see cref="ISharedExclusiveLockProvider"/>
+    /// plus the composed <see cref="ISharedExclusiveLock"/>. Additive to the exclusive-only
+    /// <c>UseRedis</c> registration and over the same already-registered
+    /// <see cref="IConnectionMultiplexer"/>; both <see cref="IDistributedLock"/> and
+    /// <see cref="ISharedExclusiveLock"/> can then resolve against Redis. Uses
+    /// <c>TryAddSingleton</c>, matching the exclusive Redis backend, so a consumer-supplied
+    /// implementation registered earlier wins.
+    /// </summary>
+    public static OrionLockBuilder UseRedisSharedExclusive(
+        this OrionLockBuilder builder, Action<RedisSharedExclusiveLockOptions>? configure = null)
+    {
+        ArgumentNullException.ThrowIfNull(builder);
+
+        var options = new RedisSharedExclusiveLockOptions();
+        configure?.Invoke(options);
+
+        builder.Services.TryAddSingleton<ISharedExclusiveLockProvider>(
+            sp => new RedisSharedExclusiveLockProvider(sp.GetRequiredService<IConnectionMultiplexer>(), options));
+        builder.Services.TryAddSingleton<ISharedExclusiveLock>(
+            sp => new SharedExclusiveLock(sp.GetRequiredService<ISharedExclusiveLockProvider>()));
+
+        return builder;
+    }
 }
