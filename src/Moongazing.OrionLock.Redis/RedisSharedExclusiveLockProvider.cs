@@ -96,14 +96,20 @@ public sealed class RedisSharedExclusiveLockProvider : ISharedExclusiveLockProvi
     // Acquire SHARED. ARGV[1] = reader fencing token, ARGV[2] = lease ms.
     //   Fails (returns 0) if a writer holds the key, or if a pending-writer marker is live AND this
     //   token is not already a member (a NEW reader is held off so in-flight readers can drain; an
-    //   existing reader may refresh). Otherwise upserts the member at now+lease and re-arms :r TTL.
+    //   existing reader may refresh). Otherwise upserts the member at now+lease, then re-arms the :r
+    //   KEY TTL to the FURTHEST live member's expiry via PruneReaders. It must NOT PEXPIRE :r to this
+    //   reader's own lease: a short-lived reader joining after a long-lived one would otherwise shrink
+    //   the whole key's TTL to its short lease, so when it expired Redis would delete the entire :r set
+    //   and evict the still-live long reader, letting a writer acquire while that reader believes it
+    //   still holds - a mutual-exclusion violation. Pruning first also drops any dead member whose
+    //   stale score would otherwise over-extend the key.
     private const string AcquireSharedScript =
         NowMs +
         "if redis.call('EXISTS', KEYS[1]) == 1 then return 0 end; " +
         "if redis.call('EXISTS', KEYS[3]) == 1 and redis.call('ZSCORE', KEYS[2], ARGV[1]) == false then return 0 end; " +
         "local expiry = now + tonumber(ARGV[2]); " +
         "redis.call('ZADD', KEYS[2], expiry, ARGV[1]); " +
-        "redis.call('PEXPIRE', KEYS[2], tonumber(ARGV[2])); " +
+        PruneReaders +
         "return 1;";
 
     // Acquire EXCLUSIVE. ARGV[1] = writer fencing token, ARGV[2] = lease ms.
@@ -130,16 +136,17 @@ public sealed class RedisSharedExclusiveLockProvider : ISharedExclusiveLockProvi
 
     // Renew SHARED. ARGV[1] = reader token, ARGV[2] = lease ms. Owner-checked by membership: only a
     // reader still in the set can extend, and only its own score moves. Prune first so a renew that
-    // races past expiry correctly reports loss (0) instead of resurrecting a dead member.
+    // races past expiry correctly reports loss (0) instead of resurrecting a dead member; after
+    // extending this reader's score, re-arm the :r KEY TTL via PruneReaders so the key always covers
+    // its FURTHEST live member - extending one reader must never shrink the key below another
+    // still-live reader's expiry.
     private const string RenewSharedScript =
         NowMs +
         PruneReaders +
         "if redis.call('ZSCORE', KEYS[2], ARGV[1]) == false then return 0 end; " +
         "local expiry = now + tonumber(ARGV[2]); " +
         "redis.call('ZADD', KEYS[2], expiry, ARGV[1]); " +
-        "local furthest = tonumber(redis.call('ZRANGE', KEYS[2], -1, -1, 'WITHSCORES')[2]); " +
-        "local ttl = furthest - now; if ttl < 1 then ttl = 1 end; " +
-        "redis.call('PEXPIRE', KEYS[2], ttl); " +
+        PruneReaders +
         "return 1;";
 
     // Renew EXCLUSIVE. ARGV[1] = writer token, ARGV[2] = lease ms. Compare-and-extend on :w.
@@ -176,6 +183,36 @@ public sealed class RedisSharedExclusiveLockProvider : ISharedExclusiveLockProvi
 
     private IDatabase Db => multiplexer.GetDatabase(options.Database);
 
+    /// <summary>
+    /// Converts a lease <see cref="TimeSpan"/> to the integer-millisecond <c>PX</c> / score value the
+    /// Lua scripts use, rejecting non-positive leases and never truncating a positive lease to zero.
+    /// </summary>
+    /// <remarks>
+    /// A raw <c>(long)leaseDuration.TotalMilliseconds</c> would floor a positive sub-millisecond lease
+    /// to <c>0</c> (Redis <c>PX 0</c> / a now-relative score that has already passed produces an
+    /// immediately-expired, effectively useless lock) and would silently accept zero or negative
+    /// durations. Rounding up with <see cref="Math.Ceiling(double)"/> guarantees every positive lease
+    /// maps to at least <c>1</c> ms, and the guard makes a non-positive lease a caller error rather
+    /// than a silently broken lock. Every lease-to-ms conversion - shared and exclusive acquire and
+    /// renew, and (transitively, via <c>ARGV[2]</c>) the pending-writer marker TTL - routes through
+    /// here so the normalization can never be bypassed.
+    /// </remarks>
+    /// <param name="leaseDuration">The requested lease duration.</param>
+    /// <returns>The lease length in whole milliseconds, always &gt;= 1.</returns>
+    /// <exception cref="ArgumentOutOfRangeException">
+    /// <paramref name="leaseDuration"/> is less than or equal to <see cref="TimeSpan.Zero"/>.
+    /// </exception>
+    private static long ToLeaseMilliseconds(TimeSpan leaseDuration)
+    {
+        if (leaseDuration <= TimeSpan.Zero)
+        {
+            throw new ArgumentOutOfRangeException(
+                nameof(leaseDuration), leaseDuration, "Lease duration must be positive.");
+        }
+
+        return (long)Math.Ceiling(leaseDuration.TotalMilliseconds);
+    }
+
     // The three physical keys for one logical key. Hash-tagged on the logical key so a clustered
     // deployment routes all three to the same slot, which a multi-key Lua script requires.
     private RedisKey[] KeysFor(string key)
@@ -200,7 +237,7 @@ public sealed class RedisSharedExclusiveLockProvider : ISharedExclusiveLockProvi
         var result = await Db.ScriptEvaluateAsync(
             script,
             KeysFor(key),
-            [ownerToken, (long)leaseDuration.TotalMilliseconds]).ConfigureAwait(false);
+            [ownerToken, ToLeaseMilliseconds(leaseDuration)]).ConfigureAwait(false);
         return (long)result == 1;
     }
 
@@ -215,7 +252,7 @@ public sealed class RedisSharedExclusiveLockProvider : ISharedExclusiveLockProvi
         var result = await Db.ScriptEvaluateAsync(
             script,
             KeysFor(key),
-            [ownerToken, (long)leaseDuration.TotalMilliseconds]).ConfigureAwait(false);
+            [ownerToken, ToLeaseMilliseconds(leaseDuration)]).ConfigureAwait(false);
         return (long)result == 1;
     }
 

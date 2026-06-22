@@ -228,7 +228,7 @@ public sealed class RedisSharedExclusiveLockProviderTests : IClassFixture<RedisC
         var p = NewProvider();
         var key = NewKey();
 
-        await p.TryAcquireAsync(key, "reader-1", LockMode.Shared, Lease, default);
+        Assert.True(await p.TryAcquireAsync(key, "reader-1", LockMode.Shared, Lease, default));
         Assert.True(await p.TryRenewAsync(key, "reader-1", LockMode.Shared, Lease, default));
         Assert.False(await p.TryRenewAsync(key, "reader-2", LockMode.Shared, Lease, default));
     }
@@ -239,7 +239,7 @@ public sealed class RedisSharedExclusiveLockProviderTests : IClassFixture<RedisC
         var p = NewProvider();
         var key = NewKey();
 
-        await p.TryAcquireAsync(key, "writer-1", LockMode.Exclusive, Lease, default);
+        Assert.True(await p.TryAcquireAsync(key, "writer-1", LockMode.Exclusive, Lease, default));
         Assert.True(await p.TryRenewAsync(key, "writer-1", LockMode.Exclusive, Lease, default));
         Assert.False(await p.TryRenewAsync(key, "writer-2", LockMode.Exclusive, Lease, default));
     }
@@ -286,12 +286,15 @@ public sealed class RedisSharedExclusiveLockProviderTests : IClassFixture<RedisC
         var p = NewProvider();
         var key = NewKey();
 
-        await p.TryAcquireAsync(key, "writer-1", LockMode.Exclusive, Lease, default);
+        // Assert the initial acquire succeeded: otherwise the negative renew assertions below would
+        // pass vacuously (a stale token cannot renew a hold that was never taken in the first place),
+        // masking a regression that broke acquire entirely.
+        Assert.True(await p.TryAcquireAsync(key, "writer-1", LockMode.Exclusive, Lease, default));
         Assert.False(await p.TryRenewAsync(key, "writer-bogus", LockMode.Exclusive, Lease, default));
 
         await p.ReleaseAsync(key, "writer-1", LockMode.Exclusive, default);
 
-        await p.TryAcquireAsync(key, "reader-1", LockMode.Shared, Lease, default);
+        Assert.True(await p.TryAcquireAsync(key, "reader-1", LockMode.Shared, Lease, default));
         Assert.False(await p.TryRenewAsync(key, "reader-bogus", LockMode.Shared, Lease, default));
     }
 
