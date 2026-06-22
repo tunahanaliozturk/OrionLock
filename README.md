@@ -120,11 +120,19 @@ await using (var write = await rwLock.AcquireExclusiveAsync("catalog:42"))
 
 Blocking `AcquireSharedAsync` / `AcquireExclusiveAsync` wait up to `WaitTimeout` and throw `LockAcquisitionTimeoutException` on timeout. The non-blocking `TryAcquireSharedAsync` / `TryAcquireExclusiveAsync` make a single attempt and return `null` when the key is held in a conflicting mode.
 
-The reader-writer lock ships in the core package and the in-memory testing backend in this release. The distributed backends (Redis, EntityFrameworkCore, Postgres, SqlServer, Consul, Etcd, ZooKeeper) keep the exclusive lock only; a distributed reader-writer implementation is a documented follow-up. See the runnable section in `demo/Moongazing.OrionLock.Demo`.
+As of v0.4.2, Redis is the first distributed backend for the reader-writer lock. `UseRedisSharedExclusive()` registers `ISharedExclusiveLock` over Redis, additive to the exclusive-only `UseRedis()`:
+
+```csharp
+services.AddOrionLock()
+    .UseRedis("localhost:6379")        // exclusive IDistributedLock
+    .UseRedisSharedExclusive();        // reader-writer ISharedExclusiveLock
+```
+
+The Redis provider keeps a Lua-scripted writer marker, a per-reader sorted set scored by lease expiry (so one reader's expiry never frees another's), and a lease-bounded pending-writer marker that holds off new readers so a waiting writer is not starved. See the `OrionLock.Redis` backend note below. The other distributed backends (EntityFrameworkCore, Postgres, SqlServer, Consul, Etcd, ZooKeeper) keep the exclusive lock only; the relational reader-writer provider is the next milestone. See the runnable section in `demo/Moongazing.OrionLock.Demo`.
 
 ## Backends
 
-- **`OrionLock.Redis`** — `SET NX PX` acquire, owner-checked Lua renew/release. Single Redis endpoint (single-instance lock; multi-master RedLock is post-0.1).
+- **`OrionLock.Redis`** — `SET NX PX` acquire, owner-checked Lua renew/release. Single Redis endpoint (single-instance lock; multi-master RedLock is post-0.1). As of v0.4.2 also ships the distributed reader-writer lock (`UseRedisSharedExclusive()`): a Lua-scripted writer marker plus a per-reader sorted set scored by lease expiry, with a lease-bounded pending-writer marker for writer fairness.
 - **`OrionLock.EntityFrameworkCore`** — provider-agnostic `OrionLock_Locks` table; PostgreSQL, SQL Server, MySQL, SQLite. See [docs/migrations/orionlock-locks-table.md](docs/migrations/orionlock-locks-table.md).
 - **`OrionLock.SqlServer`** — native `sp_getapplock` with session-scope lifetime. Crash-safe (no clock-based expiry; SQL Server releases the lock when the session ends) and faster than the EF Core lock table on SQL Server.
 - **`OrionLock.Postgres`** — native `pg_try_advisory_lock` with session-scope lifetime. Crash-safe with the same rationale as SqlServer.
@@ -144,7 +152,7 @@ See [benchmarks.md](benchmarks.md) for the BenchmarkDotNet harness in `bench/Moo
 
 ## Roadmap
 
-The current release is 0.4.0, which adds shared/exclusive (reader-writer) locks in the core package and the in-memory testing backend; a distributed reader-writer implementation is a follow-up. Forward plan in [ROADMAP.md](ROADMAP.md): v0.5.0 (Q1-Q2 2027) more backends + coordination primitives, v1.0.0 (Q2 2027) API freeze. If something on the list matters to you, open an issue with the `roadmap` label.
+The current release is 0.4.2, which adds the first distributed reader-writer provider (Redis) on top of the v0.4.0 shared/exclusive core and in-memory backend. Forward plan in [ROADMAP.md](ROADMAP.md): v0.4.3 the relational (EF Core / Postgres) reader-writer provider, v0.5.0 (Q4 2026) fairness and coordination primitives, v1.0.0 (Q2 2027) API freeze. If something on the list matters to you, open an issue with the `roadmap` label.
 
 ## More from the Orion family
 

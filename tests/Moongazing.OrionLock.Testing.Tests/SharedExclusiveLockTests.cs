@@ -119,15 +119,24 @@ public class SharedExclusiveLockTests
     public async Task AutoRenew_KeepsExclusiveAlive_BeyondLease()
     {
         var locker = NewLock();
+        // Determinism note: the watchdog renews at LeaseDuration/3 and a non-renewed lease lapses after
+        // LeaseDuration, so the slack a renewal may slip by before the hold dies is (2/3 * LeaseDuration).
+        // With a 120ms lease that slack was only ~80ms, which a slow/overloaded CI runner could blow
+        // past between two Task.Delay-driven renewals - the in-memory provider then prunes the expired
+        // owner, TryRenewAsync returns false, the handle Surrenders, and IsHeld flips, flaking this
+        // assertion. A 1000ms lease widens the renewal slack to ~667ms (an order of magnitude more CI
+        // scheduling tolerance) while staying short enough that, had auto-renew NOT fired, the lease
+        // would have lapsed well within the 1500ms observation window - so the test still genuinely
+        // proves renewal rather than merely outrunning the clock.
         var opts = new DistributedLockOptions
         {
-            LeaseDuration = TimeSpan.FromMilliseconds(120),
+            LeaseDuration = TimeSpan.FromMilliseconds(1000),
             WaitTimeout = TimeSpan.FromMilliseconds(200),
             RetryInterval = TimeSpan.FromMilliseconds(10),
             AutoRenew = true,
         };
         await using var x = await locker.AcquireExclusiveAsync("k", opts);
-        await Task.Delay(300);   // well past the 120ms lease; watchdog should have renewed
+        await Task.Delay(1500);   // well past the 1000ms lease; watchdog (renews ~every 333ms) kept it alive
         Assert.True(x.IsHeld);
         // A reader must still be blocked because the lease was renewed, not expired.
         Assert.Null(await locker.TryAcquireSharedAsync("k", Fast()));
