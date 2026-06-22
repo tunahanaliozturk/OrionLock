@@ -4,6 +4,10 @@ This document lists what is shipped, what is actively planned, and what we are d
 *not* building. It is a planning artifact, not a contract — dates slip, priorities reshuffle.
 If an item here matters to you, open a GitHub issue so we can weigh it against everything else.
 
+**Current release: 0.4.1.** Reader-writer (shared/exclusive) locking shipped for the in-memory
+backend in 0.4.0; 0.4.1 trimmed an allocation on the acquire hot path and made the diagnostics
+meter version self-deriving. The next milestone is a *distributed* reader-writer provider.
+
 ## Status legend
 
 - **Shipped** — in the named release on NuGet.
@@ -92,10 +96,10 @@ harness remain.
 
 ---
 
-## v0.3.x — Remaining v0.3.0-era work *(planned)*
+## v0.3.x — v0.3.0-era follow-ups *(all shipped)*
 
-The two items originally bundled into v0.3.0 ship as follow-up minor versions. Each lands as
-its own release after its own design cycle, mirroring the v0.2.x split.
+The two items originally bundled into v0.3.0 shipped as follow-up minor versions, mirroring the
+v0.2.x split, and the v0.3.x line then kept going well past them. Everything below is released.
 
 ### v0.3.1 — Lease-renewal failure telemetry *(shipped 2026-06-04)*
 
@@ -125,31 +129,147 @@ Ships `IFifoWaiterCoordinator` + `NullFifoWaiterCoordinator` default + `InProces
 - `ConsulLockOptions` (`KeyPrefix`, `SessionBehavior`, `MinSessionTtl`).
 - `OrionLockBuilder.UseConsul(address, configure?)` + `UseConsul(configure?)` DI helpers.
 
+### v0.3.6 / v0.3.7 / v0.3.8 — Etcd and ZooKeeper backends *(shipped 2026-06-10)*
+
+The last two backends in the original v0.5.0 plan landed early, ahead of schedule.
+
+- **`OrionLock.Etcd`** backend over etcd v3 lease-bound keys (lease grant + transactional
+  put-if-absent, keep-alive renewal, compare-and-swap release).
+- **`OrionLock.ZooKeeper`** backend over the canonical ephemeral-sequential znode recipe
+  (lowest sequence number holds the lock; session expiry releases on crash). v0.3.8 adds a
+  SASL/digest ACL factory (`DigestZooKeeperAclFactory`) alongside the default open-ACL one.
+
+### v0.3.9 through v0.3.29 — Telemetry and fairness depth *(shipped 2026-06-11 to 2026-06-16)*
+
+A run of small additive releases on the existing `Moongazing.OrionLock` Meter and the fairness
+path. No public-API breaks; each is source-compatible with the one before. Highlights:
+
+- `WaitForAcquireAsync` polling helper with exponential backoff and jitter.
+- Fairness watchdog: `RenewalFailureGracePeriod`-bounded auto-release on prolonged renewal
+  failure, with a distinct `orionlock.lease.grace_period_exhausted` counter.
+- `WithMetricsLabel` static metric tags for multi-tenant dashboard splitting.
+- A family of acquire/lease/handle/reentrancy/fairness instruments
+  (`acquire.timeout`, `acquire.cancelled`, `acquire.attempt_count`, `contention.duration`,
+  `handle.holding_duration`, `handle.renewals_per_hold`, `leases.held_concurrent`,
+  `reentrancy.depth`, `reentrancy.max_depth`, `lease.expired_before_release`,
+  `lease.renewal_failures_consecutive`, `fairness.coordinator_enter_duration`,
+  `fairness.queue_depth`, plus a `key_hash` cardinality-bucketed tag).
+- `ILockEventObserver` consumer-supplied lifecycle observer (acquired, timed-out, lease-lost,
+  released), fully wired at the emission sites.
+
+See [CHANGELOG.md](CHANGELOG.md) for the per-release detail.
+
+### v0.4.0 — Shared / exclusive (reader-writer) locks *(shipped 2026-06-19)*
+
+The reader-writer primitive, originally a *Considered* item, shipped for the in-memory backend.
+For a given key, either any number of `Shared` (read) holders coexist, OR exactly one
+`Exclusive` (write) holder owns it. Acquire, lease/TTL, renewal, release, options, and
+diagnostics semantics mirror the exclusive `IDistributedLock`.
+
+- `LockMode` enum (`Shared`, `Exclusive`).
+- `ISharedExclusiveLock` with blocking `AcquireSharedAsync` / `AcquireExclusiveAsync` and
+  non-blocking `TryAcquireSharedAsync` / `TryAcquireExclusiveAsync`, all returning the existing
+  `IDistributedLockHandle`.
+- `ISharedExclusiveLockProvider` — the raw single-attempt reader-writer primitive a backend
+  implements. Kept separate from `IDistributedLockProvider` so the exclusive-only fast path and
+  its wire format are unchanged.
+- `SharedExclusiveLock` composer + `SharedExclusiveLockHandle` (background renewal watchdog,
+  `IsHeld` / `LostToken`, mode-aware release).
+- `OrionLock.Testing` `InMemorySharedExclusiveLockProvider` with real lease-expiry semantics and
+  best-effort, in-process writer-starvation mitigation (a lease-bounded pending-writer
+  reservation holds off new shared arrivals so existing readers can drain). `UseInMemory()` now
+  also registers `ISharedExclusiveLockProvider` and `ISharedExclusiveLock`.
+
+The distributed backends (Redis, EntityFrameworkCore, Postgres, SqlServer, Consul, Etcd,
+ZooKeeper) keep the exclusive lock only in this release; a distributed reader-writer
+implementation is the next milestone (see v0.5.0 below). Cross-process fair ordering for the
+reader-writer lock is part of that work.
+
+### v0.4.1 — Acquire-path allocation trim + self-deriving meter version *(shipped 2026-06-20)*
+
+- The blocking acquire hot path no longer builds the OpenTelemetry activity display name when no
+  `ActivitySource` listener is subscribed. `DistributedLock.AcquireAsync` and
+  `SharedExclusiveLock` gate the interpolated activity-name string behind
+  `ActivitySource.HasListeners()`. With no listener (the production-typical case) `StartActivity`
+  returned null and that string was never observed, so the change is behavior-identical; a
+  subscribed listener still sees the exact same activity name. Measured on the uncontested
+  in-memory acquire/release path, steady-state allocation dropped from about 815 to about 743
+  bytes per acquire (roughly 9 percent). No public API, locking, timeout, or fairness semantics
+  changed.
+- The diagnostics `Meter` / `ActivitySource` version now derives from the assembly version
+  (`MeterVersion`) instead of a hand-edited per-release constant, so the long-standing
+  per-release version bump no longer needs a manual edit.
+
 ---
 
-## v0.4.0 — Cross-process reentrancy & owner-token persistence *(planned, Q1 2027)*
+## v0.4.x — Distributed reader-writer locks *(planned, next)*
 
-A carefully-scoped extension to the v0.1.0 reentrancy model.
+The headline follow-up to v0.4.0. The reader-writer abstraction and the in-memory provider
+shipped; the distributed half is the next concrete piece of work. The public surface
+(`ISharedExclusiveLock`, `ISharedExclusiveLockProvider`, `LockMode`) is already in place, so this
+is new backend implementations behind the existing contract, not an API change.
 
-- **Opt-in cross-process reentrancy** via owner-token persistence in the backend. A consumer
-  with a stable owner identity (e.g., a workflow instance id) can reacquire its own held lock
-  across process restarts without dropping the lease. Default behaviour stays process-local;
-  the new mode is explicit `opts.OwnerIdentity = "..."`.
-- **Pluggable owner-token format** — for advanced consumers who need to encode tenant id,
-  correlation id, or other context into the owner token without rewriting backend providers.
-- **Throughput pass** — micro-optimisation of the hot `TryAcquireAsync` path on each backend.
+### v0.4.2 — Redis distributed reader-writer provider *(planned, July 2026)*
+
+- A `RedisSharedExclusiveLockProvider` implementing `ISharedExclusiveLockProvider` in the existing
+  `Moongazing.OrionLock.Redis` package. The natural encoding is a small Lua-scripted state per key
+  (a writer marker plus a shared-holder set or counter) so the reader/writer transitions stay
+  atomic under contention: shared holders coexist, an exclusive acquire fails while any shared
+  holder or another writer is live.
+- Per-mode lease with owner-checked renew/release, matching the exclusive Redis provider's
+  ownership discipline so two processes cannot release each other's hold.
+- Best-effort cross-process writer-starvation mitigation (a lease-bounded pending-writer marker
+  that holds off new shared arrivals), the distributed analogue of the in-memory reservation. This
+  pays off the v0.4.0 "cross-process fair ordering is a follow-up" note for the reader-writer path.
+
+### v0.4.3 — EF Core / Postgres distributed reader-writer provider *(planned, August 2026)*
+
+- A relational `ISharedExclusiveLockProvider` for the SQL backends. The EF Core lock-table model
+  extends cleanly to a mode column plus a shared-holder count, so acquire/renew/release become
+  guarded `UPDATE`s. Postgres can alternatively use shared-vs-exclusive advisory locks
+  (`pg_try_advisory_lock_shared`) where a relational table is not wanted.
+- Documented semantics for which relational backend gives which fairness and crash-safety
+  guarantee, since session-scoped advisory locks and the clock-leased table differ here.
 
 ---
 
-## v0.5.0 — Backends & coordination primitives *(planned, Q1-Q2 2027)*
+## v0.5.0 — Fairness, ergonomics, and coordination primitives *(planned, Q4 2026)*
 
-Round out the backend matrix and add the closest neighbours to "lock" that real consumers ask for.
+With the backend matrix essentially complete (Redis, EF Core, SqlServer, Postgres, Consul, Etcd,
+ZooKeeper all ship), the focus shifts from breadth to depth: fairness, acquire ergonomics, and the
+nearest neighbours to "lock" that real consumers ask for.
 
-- **`OrionLock.ZooKeeper`** backend — for shops that already run ZooKeeper for other coordination.
-- **Distributed counter / sequence primitive** as a sibling abstraction in `OrionLock`, sharing
-  the backend infrastructure. Not a lock per se; the same providers can implement it cheaply.
-- **Connection-pooled provider patterns** — guidance + a sample integration with the
-  `Microsoft.Extensions.ObjectPool` infrastructure for high-throughput services.
+- **`TryAcquireAsync` with a deadline.** Today blocking fairness lives only on `AcquireAsync`, and
+  `TryAcquireAsync` is a single shot. A `TryAcquireAsync(key, deadline, ...)` overload that returns
+  `null` on expiry instead of throwing `LockAcquisitionTimeoutException` closes the gap between
+  "one attempt" and "block-or-throw" without forcing callers to catch a timeout exception for
+  ordinary control flow. The shared/exclusive variants get the same treatment.
+- **Fair queueing beyond opt-in FIFO.** The FIFO coordinator is opt-in and per-acquire. The next
+  step is reusing it (and the Redis sorted-set queue) to give the distributed reader-writer lock a
+  fair writer/reader ordering rather than the best-effort starvation marker, and folding the
+  in-process and Redis coordinators behind one selection point.
+- **Distributed counter / sequence primitive** as a sibling abstraction sharing the backend
+  infrastructure. Not a lock per se; the same providers can implement it cheaply (etcd and Redis
+  in particular).
+- **Connection-pooled provider patterns** — guidance plus a sample integration with
+  `Microsoft.Extensions.ObjectPool` for high-throughput services.
+
+---
+
+## Observability and conformance *(planned, ongoing)*
+
+Cross-cutting work that lands incrementally rather than in one milestone.
+
+- **Reader-writer telemetry parity.** The exclusive lock has a deep instrument set
+  (`acquire.duration`, `contention.duration`, `leases.held_concurrent`, and the rest). The
+  shared/exclusive path needs the same coverage, tagged by `mode` (shared vs exclusive) so
+  operators can read reader/writer contention separately. A `held_concurrent`-style gauge split by
+  mode is the most useful first cut.
+- **Conformance suite coverage for the reader-writer semantics.** The shared backend contract
+  (many readers coexist; a writer excludes all; lease expiry and renewal behave like the exclusive
+  lock) should be expressed as a reusable provider conformance suite, so every new
+  `ISharedExclusiveLockProvider` — the Redis and relational ones above, and any third-party one —
+  is verified against the same behavioural facts rather than per-backend ad hoc tests.
 
 ---
 
@@ -158,21 +278,25 @@ Round out the backend matrix and add the closest neighbours to "lock" that real 
 The 1.0 release is a commitment: we stop changing public types and method signatures inside
 the 1.x line. Anything obsolete by then is removed; everything that remains is stable.
 
-- **API stability** — `IDistributedLock`, `IDistributedLockHandle`, `DistributedLockOptions`,
-  the provider primitive interface, and the four bundled backends freeze. Additions only.
+- **API stability** — `IDistributedLock`, `IDistributedLockHandle`, `DistributedLockOptions`, the
+  provider primitive interfaces (`IDistributedLockProvider`, `ISharedExclusiveLockProvider`),
+  `ISharedExclusiveLock` / `LockMode`, and the bundled backends (Redis, EF Core, SqlServer,
+  Postgres, Consul, Etcd, ZooKeeper, Testing) freeze. Additions only.
 - **Documentation pass** — every public type has a runnable example. Lease/renewal pitfalls
   documented exhaustively. Migration guide from any breaking change introduced in 0.x.
 - **AOT readiness audit** — every reflection path annotated; trimmer-safe by default.
 - **`OrionLock.Testing` polish** — deterministic-lease test helpers, scenario builders for
-  contention and lease loss.
+  contention and lease loss, including the reader-writer modes.
 
 ---
 
 ## Considered (no commitment yet)
 
-- **`OrionLock.Etcd`** backend.
-- **Read/write lock** primitive (multiple readers, single writer).
 - **Hierarchical lock keys** with prefix-based release.
+- **Opt-in cross-process reentrancy** via owner-token persistence. A consumer with a stable owner
+  identity (e.g. a workflow instance id) could reacquire its own held lock across process restarts
+  without dropping the lease. Default behaviour stays process-local; the mode would be an explicit
+  opt-in. Needs a concrete workflow-restart use case before it is scheduled.
 - **`OrionLock.Distributed.Bridge`** — a thin adapter so OrionGuard's outbox dispatcher can run
   on an OrionLock backend without a consumer-written shim. Tracked in the OrionGuard-side
   v0.1.0 spec under "downstream"; will ship when the OrionGuard team is ready to consume it.
