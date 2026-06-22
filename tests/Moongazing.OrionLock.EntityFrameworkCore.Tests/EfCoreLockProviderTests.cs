@@ -58,8 +58,10 @@ public sealed class EfCoreLockProviderTests : IAsyncLifetime, IDisposable
     public async Task TryAcquire_ShouldSucceed_AfterLeaseExpires()
     {
         var p = NewProvider();
-        await p.TryAcquireAsync("k", "owner-1", TimeSpan.FromMilliseconds(50), default);
-        await Task.Delay(150);
+        // Wait (1000ms) comfortably outlasts the lease (200ms) - a 5x cushion - so a loaded CI runner
+        // cannot probe before the stored expiry has passed. Earlier 50ms/150ms left only 100ms slack.
+        await p.TryAcquireAsync("k", "owner-1", TimeSpan.FromMilliseconds(200), default);
+        await Task.Delay(1000);
         Assert.True(await p.TryAcquireAsync("k", "owner-2", TimeSpan.FromSeconds(30), default));
     }
 

@@ -42,13 +42,17 @@ public sealed class HandleHoldingDurationTests
 
         var handle = await sut.AcquireAsync("k",
             new DistributedLockOptions { LeaseDuration = TimeSpan.FromSeconds(5), AutoRenew = false });
-        await Task.Delay(20);
+        // Hold for 100ms and assert >= 50ms: timers never fire EARLY, so the recorded duration is at
+        // least the hold; the gap between the 100ms hold and the 50ms floor absorbs any clock-resolution
+        // rounding without weakening the "a real positive duration was recorded" property. CI load only
+        // lengthens the hold, never shortens it.
+        await Task.Delay(100);
         await handle.DisposeAsync();
 
         lock (samples)
         {
             Assert.Single(samples);
-            Assert.True(samples[0] >= 15, $"Expected >= 15 ms, got {samples[0]}");
+            Assert.True(samples[0] >= 50, $"Expected >= 50 ms, got {samples[0]}");
         }
     }
 

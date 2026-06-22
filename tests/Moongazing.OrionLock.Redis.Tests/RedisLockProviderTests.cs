@@ -12,10 +12,7 @@ public sealed class RedisLockProviderTests : IAsyncLifetime
 #pragma warning restore CA1859
 
     public async Task InitializeAsync()
-    {
-        await container.StartAsync();
-        mux = await ConnectionMultiplexer.ConnectAsync(container.GetConnectionString());
-    }
+        => mux = await RedisContainerStartup.StartAndConnectAsync(container).ConfigureAwait(false);
 
     public async Task DisposeAsync()
     {
@@ -37,8 +34,10 @@ public sealed class RedisLockProviderTests : IAsyncLifetime
     public async Task TryAcquire_ShouldSucceed_AfterLeaseExpires()
     {
         var p = NewProvider();
+        // Wait (1000ms) comfortably outlasts the Redis PX lease (200ms) - a 5x cushion - so a loaded CI
+        // runner cannot probe before the key's TTL has elapsed. Earlier 200ms/400ms left only 2x.
         await p.TryAcquireAsync("k", "owner-1", TimeSpan.FromMilliseconds(200), default);
-        await Task.Delay(400);
+        await Task.Delay(1000);
         Assert.True(await p.TryAcquireAsync("k", "owner-2", TimeSpan.FromSeconds(30), default));
     }
 

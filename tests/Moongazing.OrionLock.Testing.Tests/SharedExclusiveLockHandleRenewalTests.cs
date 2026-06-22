@@ -59,8 +59,10 @@ public class SharedExclusiveLockHandleRenewalTests
         await using var handle = new SharedExclusiveLockHandle(
             provider, "k", ownerToken: "owner-1", LockMode.Exclusive, opts);
 
-        // Give the watchdog time for several renewal intervals (~20ms each).
-        await Task.Delay(150);
+        // Give the watchdog time for MANY renewal intervals (~20ms each). 1000ms is ~50 intervals, so
+        // the "> 1 attempt" assertion holds with a huge margin even if a loaded runner starves the timer
+        // down to a handful of ticks. The earlier 150ms window could yield too few ticks under load.
+        await Task.Delay(1000);
 
         // The unrelated OCE must be treated as a transient renew failure, not a terminal stop:
         // renewals keep being attempted, the handle is still held, and LostToken has not tripped.

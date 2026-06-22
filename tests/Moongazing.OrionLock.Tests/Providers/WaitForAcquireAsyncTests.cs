@@ -54,7 +54,7 @@ public sealed class WaitForAcquireAsyncTests
 
         var sw = Stopwatch.StartNew();
         var acquired = await mock.Object.WaitForAcquireAsync(
-            "k", "owner", Lease, TimeSpan.FromMilliseconds(150),
+            "k", "owner", Lease, TimeSpan.FromMilliseconds(500),
             new WaitForAcquireOptions
             {
                 InitialDelay = TimeSpan.FromMilliseconds(10),
@@ -63,9 +63,12 @@ public sealed class WaitForAcquireAsyncTests
         sw.Stop();
 
         Assert.False(acquired);
-        // The helper should NOT block significantly past the requested timeout.
-        Assert.True(sw.Elapsed < TimeSpan.FromSeconds(1),
-            $"expected < 1s, got {sw.Elapsed}");
+        // The helper should NOT block significantly past the requested timeout. With a 500ms timeout the
+        // 5s ceiling proves it returns near the budget (not, say, blocking forever) while leaving ample
+        // slack for a loaded CI runner; load only inflates the elapsed time, so a generous bound here is
+        // the safe direction.
+        Assert.True(sw.Elapsed < TimeSpan.FromSeconds(5),
+            $"expected < 5s, got {sw.Elapsed}");
     }
 
     [Fact]

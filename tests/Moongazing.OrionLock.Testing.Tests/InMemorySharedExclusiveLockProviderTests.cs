@@ -68,8 +68,10 @@ public class InMemorySharedExclusiveLockProviderTests
     public async Task Shared_Succeeds_AfterExclusiveLeaseExpires()
     {
         var p = new InMemorySharedExclusiveLockProvider();
-        await p.TryAcquireAsync("k", "writer-1", LockMode.Exclusive, TimeSpan.FromMilliseconds(50), default);
-        await Task.Delay(120);
+        // Wait (1000ms) comfortably outlasts the lease (200ms) - a 5x cushion - so a loaded CI runner
+        // cannot probe before the exclusive lease has lapsed. Earlier 50ms/120ms left only 70ms slack.
+        await p.TryAcquireAsync("k", "writer-1", LockMode.Exclusive, TimeSpan.FromMilliseconds(200), default);
+        await Task.Delay(1000);
         Assert.True(await p.TryAcquireAsync("k", "reader-1", LockMode.Shared, Lease, default));
     }
 
@@ -77,9 +79,11 @@ public class InMemorySharedExclusiveLockProviderTests
     public async Task Exclusive_Succeeds_AfterSharedLeasesExpire()
     {
         var p = new InMemorySharedExclusiveLockProvider();
-        await p.TryAcquireAsync("k", "reader-1", LockMode.Shared, TimeSpan.FromMilliseconds(50), default);
-        await p.TryAcquireAsync("k", "reader-2", LockMode.Shared, TimeSpan.FromMilliseconds(50), default);
-        await Task.Delay(120);
+        // Both reader leases (200ms) must lapse before the writer probes; the 1000ms wait gives a 5x
+        // cushion that absorbs CI scheduling jitter. Earlier 50ms/120ms left only 70ms slack.
+        await p.TryAcquireAsync("k", "reader-1", LockMode.Shared, TimeSpan.FromMilliseconds(200), default);
+        await p.TryAcquireAsync("k", "reader-2", LockMode.Shared, TimeSpan.FromMilliseconds(200), default);
+        await Task.Delay(1000);
         Assert.True(await p.TryAcquireAsync("k", "writer-1", LockMode.Exclusive, Lease, default));
     }
 
@@ -105,11 +109,15 @@ public class InMemorySharedExclusiveLockProviderTests
     public async Task Renew_Shared_KeepsHolderAlivePastOriginalLease()
     {
         var p = new InMemorySharedExclusiveLockProvider();
-        await p.TryAcquireAsync("k", "reader-1", LockMode.Shared, TimeSpan.FromMilliseconds(80), default);
-        await Task.Delay(40);
+        // Determinism note: the renewal must land before the original lease lapses. With a 1000ms lease
+        // and the renew issued ~300ms in, a slow or loaded CI runner still has ~700ms of slack before the
+        // lease would expire, so the renew cannot race the expiry. The earlier 80ms-lease-renewed-at-40ms
+        // margin flaked under heavy parallel container load on the release run.
+        await p.TryAcquireAsync("k", "reader-1", LockMode.Shared, TimeSpan.FromMilliseconds(1000), default);
+        await Task.Delay(300);
         Assert.True(await p.TryRenewAsync("k", "reader-1", LockMode.Shared, TimeSpan.FromSeconds(30), default));
-        await Task.Delay(80);
-        // Original lease would have lapsed by now; renewal kept it alive so a writer is still blocked.
+        await Task.Delay(1100);
+        // Original 1000ms lease would have lapsed by now; renewal kept it alive so a writer is still blocked.
         Assert.False(await p.TryAcquireAsync("k", "writer-1", LockMode.Exclusive, Lease, default));
     }
 
@@ -169,13 +177,17 @@ public class InMemorySharedExclusiveLockProviderTests
         var p = new InMemorySharedExclusiveLockProvider();
         await p.TryAcquireAsync("k", "reader-1", LockMode.Shared, Lease, default);
 
-        // Writer reserves with a very short lease, then abandons (never retries).
-        Assert.False(await p.TryAcquireAsync("k", "writer-1", LockMode.Exclusive, TimeSpan.FromMilliseconds(50), default));
+        // Writer reserves with a short lease, then abandons (never retries). The lease is 200ms (up from
+        // 50ms) so the immediate reader-2 check below reliably still sees the reservation alive even on a
+        // slow runner - a 50ms reservation could lapse between these two synchronous calls under load and
+        // flake the negative assertion.
+        Assert.False(await p.TryAcquireAsync("k", "writer-1", LockMode.Exclusive, TimeSpan.FromMilliseconds(200), default));
 
         // New readers are briefly held off...
         Assert.False(await p.TryAcquireAsync("k", "reader-2", LockMode.Shared, Lease, default));
 
-        await Task.Delay(120);
+        // Wait comfortably past the 200ms reservation (1000ms = 5x slack) so it has definitely lapsed.
+        await Task.Delay(1000);
 
         // ...but the reservation lapses, so new readers can proceed again (writer crashed/gave up).
         Assert.True(await p.TryAcquireAsync("k", "reader-3", LockMode.Shared, Lease, default));

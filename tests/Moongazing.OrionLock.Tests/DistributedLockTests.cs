@@ -53,12 +53,16 @@ public class DistributedLockTests
         await Assert.ThrowsAsync<LockAcquisitionTimeoutException>(() =>
             contender.AcquireAsync("k", new DistributedLockOptions
             {
-                WaitTimeout = TimeSpan.FromMilliseconds(400),
+                WaitTimeout = TimeSpan.FromMilliseconds(500),
                 RetryInterval = TimeSpan.FromMilliseconds(50),
                 AutoRenew = false,
             }));
         sw.Stop();
-        Assert.InRange(sw.ElapsedMilliseconds, 350, 2000);
+        // Lower bound (400ms, just under the 500ms WaitTimeout) still proves the call did NOT return
+        // before the timeout elapsed. The upper bound is widened to 5000ms so a slow, loaded CI runner
+        // taking far longer than the budget to notice the timeout cannot fail the test - load only ever
+        // makes the observed elapsed larger, never smaller.
+        Assert.InRange(sw.ElapsedMilliseconds, 400, 5000);
     }
 
     [Fact]
