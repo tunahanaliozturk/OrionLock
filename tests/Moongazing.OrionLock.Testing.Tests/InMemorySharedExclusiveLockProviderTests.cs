@@ -105,11 +105,15 @@ public class InMemorySharedExclusiveLockProviderTests
     public async Task Renew_Shared_KeepsHolderAlivePastOriginalLease()
     {
         var p = new InMemorySharedExclusiveLockProvider();
-        await p.TryAcquireAsync("k", "reader-1", LockMode.Shared, TimeSpan.FromMilliseconds(80), default);
-        await Task.Delay(40);
+        // Determinism note: the renewal must land before the original lease lapses. With a 1000ms lease
+        // and the renew issued ~300ms in, a slow or loaded CI runner still has ~700ms of slack before the
+        // lease would expire, so the renew cannot race the expiry. The earlier 80ms-lease-renewed-at-40ms
+        // margin flaked under heavy parallel container load on the release run.
+        await p.TryAcquireAsync("k", "reader-1", LockMode.Shared, TimeSpan.FromMilliseconds(1000), default);
+        await Task.Delay(300);
         Assert.True(await p.TryRenewAsync("k", "reader-1", LockMode.Shared, TimeSpan.FromSeconds(30), default));
-        await Task.Delay(80);
-        // Original lease would have lapsed by now; renewal kept it alive so a writer is still blocked.
+        await Task.Delay(1100);
+        // Original 1000ms lease would have lapsed by now; renewal kept it alive so a writer is still blocked.
         Assert.False(await p.TryAcquireAsync("k", "writer-1", LockMode.Exclusive, Lease, default));
     }
 
