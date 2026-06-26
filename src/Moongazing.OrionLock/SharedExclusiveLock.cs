@@ -60,6 +60,33 @@ public sealed class SharedExclusiveLock : ISharedExclusiveLock
         string key, DistributedLockOptions? options = null, CancellationToken cancellationToken = default)
         => AcquireAsync(key, LockMode.Exclusive, options, cancellationToken);
 
+    /// <inheritdoc />
+    public Task<IDistributedLockHandle?> TryAcquireSharedAsync(
+        string key, TimeSpan deadline, DistributedLockOptions? options = null, CancellationToken cancellationToken = default)
+        => TryAcquireUntilDeadlineAsync(key, LockMode.Shared, deadline, options, cancellationToken);
+
+    /// <inheritdoc />
+    public Task<IDistributedLockHandle?> TryAcquireExclusiveAsync(
+        string key, TimeSpan deadline, DistributedLockOptions? options = null, CancellationToken cancellationToken = default)
+        => TryAcquireUntilDeadlineAsync(key, LockMode.Exclusive, deadline, options, cancellationToken);
+
+    private Task<IDistributedLockHandle?> TryAcquireUntilDeadlineAsync(
+        string key, LockMode mode, TimeSpan deadline, DistributedLockOptions? options, CancellationToken cancellationToken)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(key);
+        options ??= new DistributedLockOptions();
+
+        // Mint the owner token ONCE and reuse it across every deadline-retry attempt, exactly as the
+        // blocking AcquireAsync loop does. A fresh token per attempt would make each retry a DIFFERENT
+        // logical acquirer: it breaks fencing identity, and it leaks the providers' pending-writer
+        // reservation (keyed by owner token, clearable only by the same owner on a later retry), so a
+        // partially-succeeded attempt would be orphaned under a token no later retry can reclaim.
+        var ownerToken = Guid.NewGuid().ToString("N");
+        return DeadlineAcquire.TryAcquireUntilDeadlineAsync(
+            (k, o, ct) => TryAcquireAsync(k, ownerToken, mode, o!, ct),
+            key, deadline, options, cancellationToken);
+    }
+
     private Task<IDistributedLockHandle?> TryAcquireAsync(
         string key, LockMode mode, DistributedLockOptions? options, CancellationToken cancellationToken)
     {
