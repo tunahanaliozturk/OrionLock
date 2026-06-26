@@ -43,6 +43,13 @@ public interface ISharedExclusiveLock
     /// <see cref="AcquireSharedAsync"/>, for callers that treat "could not acquire in time" as ordinary
     /// control flow rather than an exceptional condition.
     /// </summary>
+    /// <remarks>
+    /// This default composes the single-shot try-acquire, which mints a fresh owner token per attempt, so
+    /// across retries each attempt is a different logical acquirer. The shipped
+    /// <see cref="SharedExclusiveLock"/> overrides this to mint one owner token and reuse it across every
+    /// deadline retry (stable fencing identity, no orphaned pending-writer reservation). A custom
+    /// implementer wanting that property should likewise override rather than rely on this default.
+    /// </remarks>
     /// <param name="key">The resource key.</param>
     /// <param name="deadline">
     /// How long to keep polling before giving up. A non-positive value means a single attempt (no wait).
@@ -61,6 +68,11 @@ public interface ISharedExclusiveLock
     /// <see cref="LockAcquisitionTimeoutException"/>. The exclusive counterpart of
     /// <see cref="TryAcquireSharedAsync(string, TimeSpan, DistributedLockOptions, CancellationToken)"/>.
     /// </summary>
+    /// <remarks>
+    /// As with the shared deadline overload, this default mints a fresh owner token per attempt; the
+    /// shipped <see cref="SharedExclusiveLock"/> overrides it to reuse one owner token across all deadline
+    /// retries. Override this in a custom implementation if you need that stable fencing identity.
+    /// </remarks>
     /// <param name="key">The resource key.</param>
     /// <param name="deadline">
     /// How long to keep polling before giving up. A non-positive value means a single attempt (no wait).

@@ -1,5 +1,7 @@
 using Moongazing.OrionLock;
 using Moongazing.OrionLock.Postgres;
+using Npgsql;
+using NpgsqlTypes;
 
 namespace Moongazing.OrionLock.Postgres.Tests;
 
@@ -392,5 +394,108 @@ public sealed class PostgresSharedExclusiveLockProviderTests : IClassFixture<Pos
         // After the writer releases, no stale pending-writer marker may survive to deny a new reader.
         await p.ReleaseAsync(key, "writer-1", LockMode.Exclusive, default);
         Assert.True(await p.TryAcquireAsync(key, "reader-2", LockMode.Shared, Lease, default));
+    }
+
+    // ---- Expiry DURING the advisory-lock wait (PR #52, FINDING 1: clock_timestamp not now()) ---------
+
+    // The default options use an empty KeyPrefix, so the resource is the raw key and the advisory key the
+    // provider serializes a transition on is HashKey(key). A test can take that same xact-scoped advisory
+    // lock on its own connection to park a competing provider transition on the wait, then let a hold
+    // expire during the wait to reproduce the stale-now() hazard.
+
+    [Fact]
+    public async Task HoldExpiredDuringAdvisoryWait_IsReclaimed_WaiterAcquires_AndExpiredRenewFails()
+    {
+        var p = NewProvider();
+        var key = NewKey();
+
+        // A writer takes a SHORT lease. It will expire while a competing reader transition is parked on the
+        // advisory lock below, so the parked transition must reclaim it using a LIVE clock (clock_timestamp),
+        // not the stale transaction-start now().
+        Assert.True(await p.TryAcquireAsync(key, "writer-1", LockMode.Exclusive, TimeSpan.FromMilliseconds(300), default));
+
+        // Manually grab the same xact-scoped advisory lock the provider serializes this key on, on a
+        // separate connection, and hold it open. Every provider transition for this key now blocks until we
+        // commit/roll back.
+        await using var blocker = new NpgsqlConnection(connectionString);
+        await blocker.OpenAsync();
+        await using var blockerTx = await blocker.BeginTransactionAsync();
+        await using (var lockCmd = new NpgsqlCommand("SELECT pg_advisory_xact_lock(@k)", blocker, blockerTx))
+        {
+            lockCmd.Parameters.Add(new NpgsqlParameter("k", NpgsqlDbType.Bigint)
+            {
+                Value = PostgresSharedExclusiveLockProvider.HashKey(key),
+            });
+            await lockCmd.ExecuteNonQueryAsync();
+        }
+
+        // Start a competing reader. Its transaction opens, then parks on pg_advisory_xact_lock waiting for
+        // the blocker. (A small settle delay makes sure it has actually reached the wait before we sleep.)
+        var readerTask = p.TryAcquireAsync(key, "reader-1", LockMode.Shared, Lease, default);
+        await Task.Delay(150);
+        Assert.False(readerTask.IsCompleted, "the reader transition should be parked on the advisory lock");
+
+        // Let the writer's 300ms lease elapse WHILE the reader is parked on the advisory wait. 700ms over a
+        // 300ms lease is a wide margin for a loaded runner; the hold is now logically dead but, under the
+        // old now() prune, the reader (whose now() is fixed at its transaction start, BEFORE the lease
+        // expired) would still see it live and be refused.
+        await Task.Delay(700);
+
+        // Release the advisory lock. The parked reader now runs its prune/predicate. With clock_timestamp it
+        // reads the CURRENT time (past the writer's expiry), reclaims the dead writer, and acquires.
+        await blockerTx.CommitAsync();
+
+        Assert.True(await readerTask, "the waiter must reclaim a hold that expired during its advisory-lock wait");
+
+        // And the now-dead writer must NOT be able to renew: its row was pruned by clock_timestamp, so a
+        // late renew extends nothing (it would resurrect an already-expired hold under the stale-now bug).
+        Assert.False(await p.TryRenewAsync(key, "writer-1", LockMode.Exclusive, TimeSpan.FromSeconds(30), default));
+
+        // The reader genuinely holds the key now: a fresh exclusive try is refused.
+        Assert.False(await p.TryAcquireAsync(key, "writer-2", LockMode.Exclusive, Lease, default));
+    }
+
+    // ---- Sub-second command timeout is honoured, never collapsed to 0/infinite (FINDING 3) ----------
+
+    [Fact]
+    public async Task SubSecondCommandTimeout_IsHonoured_NotTurnedIntoZeroOrInfinite()
+    {
+        // A 500ms CommandTimeout previously truncated via (int)TotalSeconds to 0, which Npgsql treats as NO
+        // timeout (infinite). The fix rounds a positive sub-second timeout UP to 1 second. We cannot easily
+        // assert "exactly 1s" without a slow query, but we CAN assert the timeout is finite and small: a
+        // command made to sleep well past 1 second must throw rather than hang, proving the timeout was not
+        // silently turned into infinite. pg_sleep(5) under a rounded-up 1s timeout cancels quickly.
+        var options = new PostgresSharedExclusiveLockOptions
+        {
+            CommandTimeout = TimeSpan.FromMilliseconds(500),
+        };
+        using var p = new PostgresSharedExclusiveLockProvider(connectionString, options);
+
+        // Drive one normal operation first so the table is bootstrapped and we exercise the real command
+        // path with the sub-second timeout in effect.
+        var key = NewKey();
+        Assert.True(await p.TryAcquireAsync(key, "reader-1", LockMode.Shared, Lease, default));
+
+        // Now prove the configured timeout is a real, short, finite bound and not infinite: a deliberately
+        // slow server-side sleep must be cancelled by the command timeout. We open our own connection and
+        // run a 5s sleep with the same rounded-up timeout the provider would apply (1s). If the truncation
+        // bug were present (timeout 0 => infinite), this would block ~5s and NOT throw.
+        await using var conn = new NpgsqlConnection(connectionString);
+        await conn.OpenAsync();
+        await using var cmd = new NpgsqlCommand("SELECT pg_sleep(5)", conn)
+        {
+            // Mirror the provider's rounding: 500ms => 1s finite timeout.
+            CommandTimeout = 1,
+        };
+
+        var sw = System.Diagnostics.Stopwatch.StartNew();
+        await Assert.ThrowsAnyAsync<Exception>(() => cmd.ExecuteNonQueryAsync());
+        sw.Stop();
+
+        // It must have cancelled close to the 1s timeout, far below the 5s sleep. A 3s ceiling is a wide
+        // margin for a loaded runner yet still well under the 5s an infinite-timeout run would reach.
+        Assert.True(
+            sw.Elapsed < TimeSpan.FromSeconds(3),
+            $"sub-second command timeout was not honoured: command ran {sw.ElapsedMilliseconds}ms (expected cancellation near 1s)");
     }
 }

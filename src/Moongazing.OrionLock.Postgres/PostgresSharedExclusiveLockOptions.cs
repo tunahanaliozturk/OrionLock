@@ -36,5 +36,13 @@ public sealed class PostgresSharedExclusiveLockOptions
     /// hangs, not lock contention; contention is handled by the OrionLock retry loop above the
     /// provider. Default 30 seconds.
     /// </summary>
+    /// <remarks>
+    /// Npgsql expresses command timeouts in whole seconds, where 0 means no timeout. A positive
+    /// sub-second value is therefore rounded UP to 1 second (the smallest finite value the underlying
+    /// API can carry) rather than truncated to 0, so a sub-second timeout is honoured as a real (short)
+    /// timeout instead of silently becoming infinite. A non-positive value is treated as a deliberate
+    /// "no timeout" (Npgsql's native 0 = infinite). Use <see cref="TimeSpan.Zero"/> only when you really
+    /// want commands to wait indefinitely.
+    /// </remarks>
     public TimeSpan CommandTimeout { get; set; } = TimeSpan.FromSeconds(30);
 }

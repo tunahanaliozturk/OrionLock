@@ -56,12 +56,25 @@ namespace Moongazing.OrionLock.Postgres;
 /// <b>Atomicity / clock.</b> Each transition opens a transaction, calls
 /// <c>pg_advisory_xact_lock(hash(resource))</c> to serialize concurrent transitions for that one key
 /// (the xact-scoped advisory lock auto-releases at COMMIT/ROLLBACK, so it cannot leak), prunes expired
-/// rows with <c>DELETE ... WHERE expires_at &lt;= now()</c>, evaluates the same predicates the Redis
-/// Lua scripts use, writes, and commits. All expiry math uses the PostgreSQL server clock via
-/// <c>now()</c> (the transaction-start timestamp), so every process compares lease expiries against
-/// one authoritative clock with no client-clock-skew hazard. Because the advisory lock is taken
-/// before any read, the prune-evaluate-write sequence is race-free: no other transition for the same
-/// key can interleave between the read and the write.
+/// rows with <c>DELETE ... WHERE expires_at &lt;= clock_timestamp()</c>, evaluates the same predicates
+/// the Redis Lua scripts use, writes, and commits. All expiry math uses the PostgreSQL server clock,
+/// so every process compares lease expiries against one authoritative clock with no
+/// client-clock-skew hazard. Because the advisory lock is taken before any read, the
+/// prune-evaluate-write sequence is race-free: no other transition for the same key can interleave
+/// between the read and the write.
+/// </para>
+/// <para>
+/// <b>Why <c>clock_timestamp()</c>, not <c>now()</c>.</b> Every expiry comparison and every written
+/// <c>expires_at</c> uses <c>clock_timestamp()</c> (true wall-clock at the moment of evaluation), NOT
+/// <c>now()</c> (which is fixed at transaction start). Each transition first takes
+/// <c>pg_advisory_xact_lock</c> and may WAIT on it while another transition for the same key runs; that
+/// wait can span more than a lease. With <c>now()</c> the prune predicate would still see the stale
+/// transaction-start instant after the wait, so a hold that expired DURING the advisory-lock wait would
+/// still look live: a legitimate waiter would be falsely refused, and a late renew could extend an
+/// already-dead hold. <c>clock_timestamp()</c> advances during the wait, so a hold that lapsed while the
+/// transition was blocked is correctly reclaimed and a renew of an expired hold correctly fails. This
+/// keeps the single-authoritative-DB-clock property (still the server's clock, never a client clock); it
+/// only moves the reading of that clock from transaction-start to evaluation-time.
 /// </para>
 /// <para>
 /// <b>Fencing.</b> The caller-supplied <c>ownerToken</c> is the fencing token. Renew and release are
@@ -172,7 +185,7 @@ public sealed class PostgresSharedExclusiveLockProvider : ISharedExclusiveLockPr
         // resurrecting a dead share. A non-positive lease was already rejected by ToLeaseMilliseconds.
         var kind = mode == LockMode.Shared ? "r" : "w";
         var sql =
-            $"UPDATE {table} SET expires_at = now() + make_interval(secs => @lease_s) " +
+            $"UPDATE {table} SET expires_at = clock_timestamp() + make_interval(secs => @lease_s) " +
             "WHERE resource = @resource AND kind = @kind AND owner_token = @owner";
         await using var cmd = NewCommand(conn, tx, sql);
         AddText(cmd, "resource", resource);
@@ -240,7 +253,7 @@ public sealed class PostgresSharedExclusiveLockProvider : ISharedExclusiveLockPr
 
         var sql =
             $"INSERT INTO {table} (resource, kind, owner_token, expires_at) " +
-            "VALUES (@resource, 'r', @owner, now() + make_interval(secs => @lease_s)) " +
+            "VALUES (@resource, 'r', @owner, clock_timestamp() + make_interval(secs => @lease_s)) " +
             "ON CONFLICT (resource, kind, owner_token) DO UPDATE SET expires_at = EXCLUDED.expires_at";
         await using var cmd = NewCommand(conn, tx, sql);
         AddText(cmd, "resource", resource);
@@ -270,7 +283,7 @@ public sealed class PostgresSharedExclusiveLockProvider : ISharedExclusiveLockPr
             {
                 var pwSql =
                     $"INSERT INTO {table} (resource, kind, owner_token, expires_at) " +
-                    "VALUES (@resource, 'pw', @owner, now() + make_interval(secs => @lease_s)) " +
+                    "VALUES (@resource, 'pw', @owner, clock_timestamp() + make_interval(secs => @lease_s)) " +
                     "ON CONFLICT (resource, kind, owner_token) DO UPDATE SET expires_at = EXCLUDED.expires_at";
                 await using var pwCmd = NewCommand(conn, tx, pwSql);
                 AddText(pwCmd, "resource", resource);
@@ -285,7 +298,7 @@ public sealed class PostgresSharedExclusiveLockProvider : ISharedExclusiveLockPr
         // marker (not even another writer's) survives to deny new readers after this writer releases.
         var setSql =
             $"INSERT INTO {table} (resource, kind, owner_token, expires_at) " +
-            "VALUES (@resource, 'w', @owner, now() + make_interval(secs => @lease_s)) " +
+            "VALUES (@resource, 'w', @owner, clock_timestamp() + make_interval(secs => @lease_s)) " +
             "ON CONFLICT (resource, kind, owner_token) DO UPDATE SET expires_at = EXCLUDED.expires_at";
         await using (var setCmd = NewCommand(conn, tx, setSql))
         {
@@ -308,10 +321,12 @@ public sealed class PostgresSharedExclusiveLockProvider : ISharedExclusiveLockPr
     // ---- Small SQL helpers ----
 
     // Prune every expired row for this resource. Run inside the serialized transaction so a renew/
-    // acquire never sees a dead share. now() is the transaction-start server clock (one authority).
+    // acquire never sees a dead share. clock_timestamp() is the server clock read at THIS instant (not
+    // transaction-start now()), so a hold that lapsed while this transition waited on the advisory lock
+    // is correctly reclaimed here. Still one authoritative server clock; only the read instant moves.
     private async Task PruneAsync(NpgsqlConnection conn, NpgsqlTransaction tx, string resource, CancellationToken ct)
     {
-        var sql = $"DELETE FROM {table} WHERE resource = @resource AND expires_at <= now()";
+        var sql = $"DELETE FROM {table} WHERE resource = @resource AND expires_at <= clock_timestamp()";
         await using var cmd = NewCommand(conn, tx, sql);
         AddText(cmd, "resource", resource);
         await cmd.ExecuteNonQueryAsync(ct).ConfigureAwait(false);
@@ -406,7 +421,7 @@ public sealed class PostgresSharedExclusiveLockProvider : ISharedExclusiveLockPr
                 "expires_at timestamptz NOT NULL, " +
                 $"CONSTRAINT {table}_pkey PRIMARY KEY (resource, kind, owner_token)); " +
                 $"CREATE INDEX IF NOT EXISTS {table}_expiry_idx ON {table} (resource, expires_at);";
-            await using var cmd = new NpgsqlCommand(ddl, conn) { CommandTimeout = (int)options.CommandTimeout.TotalSeconds };
+            await using var cmd = new NpgsqlCommand(ddl, conn) { CommandTimeout = CommandTimeoutSeconds() };
             await cmd.ExecuteNonQueryAsync(ct).ConfigureAwait(false);
             bootstrapped = true;
         }
@@ -417,7 +432,24 @@ public sealed class PostgresSharedExclusiveLockProvider : ISharedExclusiveLockPr
     }
 
     private NpgsqlCommand NewCommand(NpgsqlConnection conn, NpgsqlTransaction tx, string sql)
-        => new(sql, conn, tx) { CommandTimeout = (int)options.CommandTimeout.TotalSeconds };
+        => new(sql, conn, tx) { CommandTimeout = CommandTimeoutSeconds() };
+
+    // Npgsql's CommandTimeout is whole seconds, where 0 means "no timeout" (infinite). A naive
+    // (int)TotalSeconds truncates a positive sub-second timeout (e.g. 500ms -> 0), silently turning a
+    // bounded timeout into an UNbounded one. So round a positive timeout up to at least 1 second (the
+    // smallest finite value this seconds-granularity API can express) and never let it collapse to 0.
+    // A non-positive configured timeout is treated as a deliberate "no timeout" (0 -> infinite), which
+    // matches Npgsql's own native semantics rather than inventing a different meaning.
+    private int CommandTimeoutSeconds()
+    {
+        var seconds = options.CommandTimeout.TotalSeconds;
+        if (seconds <= 0)
+        {
+            return 0;
+        }
+
+        return (int)Math.Min(int.MaxValue, Math.Ceiling(seconds));
+    }
 
     private static void AddText(NpgsqlCommand cmd, string name, string value)
         => cmd.Parameters.Add(new NpgsqlParameter(name, NpgsqlDbType.Text) { Value = value });
