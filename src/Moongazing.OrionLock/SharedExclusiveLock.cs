@@ -60,6 +60,18 @@ public sealed class SharedExclusiveLock : ISharedExclusiveLock
         string key, DistributedLockOptions? options = null, CancellationToken cancellationToken = default)
         => AcquireAsync(key, LockMode.Exclusive, options, cancellationToken);
 
+    /// <inheritdoc />
+    public Task<IDistributedLockHandle?> TryAcquireSharedAsync(
+        string key, TimeSpan deadline, DistributedLockOptions? options = null, CancellationToken cancellationToken = default)
+        => DeadlineAcquire.TryAcquireUntilDeadlineAsync(
+            (k, o, ct) => TryAcquireSharedAsync(k, o, ct), key, deadline, options, cancellationToken);
+
+    /// <inheritdoc />
+    public Task<IDistributedLockHandle?> TryAcquireExclusiveAsync(
+        string key, TimeSpan deadline, DistributedLockOptions? options = null, CancellationToken cancellationToken = default)
+        => DeadlineAcquire.TryAcquireUntilDeadlineAsync(
+            (k, o, ct) => TryAcquireExclusiveAsync(k, o, ct), key, deadline, options, cancellationToken);
+
     private Task<IDistributedLockHandle?> TryAcquireAsync(
         string key, LockMode mode, DistributedLockOptions? options, CancellationToken cancellationToken)
     {

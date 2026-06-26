@@ -204,4 +204,94 @@ public class SharedExclusiveLockTests
         await Assert.ThrowsAsync<ArgumentException>(() => locker.AcquireSharedAsync("  ", Fast()));
         await Assert.ThrowsAsync<ArgumentException>(() => locker.TryAcquireExclusiveAsync("", Fast()));
     }
+
+    // ---- v0.5.0 TryAcquire-with-deadline ----------------------------------------------------
+
+    [Fact]
+    public async Task TryAcquireSharedWithDeadline_Succeeds_WhenFree()
+    {
+        var locker = NewLock();
+        await using var handle = await locker.TryAcquireSharedAsync("k", TimeSpan.FromSeconds(5), Fast());
+        Assert.NotNull(handle);
+        Assert.True(handle!.IsHeld);
+    }
+
+    [Fact]
+    public async Task TryAcquireExclusiveWithDeadline_ReturnsNull_OnDeadline_NotThrows()
+    {
+        var locker = NewLock();
+        await using var reader = await locker.AcquireSharedAsync("k", Fast());
+
+        // A writer cannot get in while the reader holds. The deadline overload must give up by returning
+        // null rather than throwing LockAcquisitionTimeoutException (the block-or-throw AcquireExclusive
+        // behaviour) - that is the whole point of the acquire-or-give-up surface.
+        var result = await locker.TryAcquireExclusiveAsync("k", TimeSpan.FromMilliseconds(150), Fast());
+        Assert.Null(result);
+    }
+
+    [Fact]
+    public async Task TryAcquireExclusiveWithDeadline_Succeeds_AfterReaderDrains()
+    {
+        var locker = NewLock();
+        var reader = await locker.AcquireSharedAsync("k", Fast());
+
+        // Give up generously, but drain the reader almost immediately so the poll loop wins well before
+        // the deadline.
+        var writerTask = locker.TryAcquireExclusiveAsync("k", TimeSpan.FromSeconds(5), Fast());
+        await reader.DisposeAsync();
+
+        await using var writer = await writerTask;
+        Assert.NotNull(writer);
+        Assert.True(writer!.IsHeld);
+    }
+
+    [Fact]
+    public async Task TryAcquireWithDeadline_NonPositiveDeadline_IsSingleAttempt()
+    {
+        var locker = NewLock();
+        await using var reader = await locker.AcquireSharedAsync("k", Fast());
+
+        // A non-positive deadline performs exactly one attempt and gives up immediately (null), never
+        // throwing. It cannot acquire because the reader holds.
+        var result = await locker.TryAcquireExclusiveAsync("k", TimeSpan.Zero, Fast());
+        Assert.Null(result);
+    }
+
+    [Fact]
+    public async Task TryAcquireWithDeadline_Cancellation_Propagates()
+    {
+        var locker = NewLock();
+        await using var reader = await locker.AcquireSharedAsync("k", Fast());
+        using var cts = new CancellationTokenSource(TimeSpan.FromMilliseconds(50));
+
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(
+            () => locker.TryAcquireExclusiveAsync("k", TimeSpan.FromSeconds(30), Fast(), cts.Token));
+    }
+
+    [Fact]
+    public async Task TryAcquireWithDeadline_DoesNotOvershoot_Deadline()
+    {
+        var locker = NewLock();
+        await using var reader = await locker.AcquireSharedAsync("k", Fast());
+
+        // Same clamp guarantee as the blocking acquire loop: a RetryInterval larger than the deadline
+        // must not overshoot by a full interval. A correct clamp returns at ~deadline (1000ms); an
+        // unclamped one would sleep a full 1600ms interval before giving up, landing at ~1600ms+.
+        var opts = new DistributedLockOptions
+        {
+            LeaseDuration = TimeSpan.FromSeconds(30),
+            WaitTimeout = TimeSpan.FromMilliseconds(200),
+            RetryInterval = TimeSpan.FromMilliseconds(1600),
+            AutoRenew = false,
+        };
+
+        var sw = System.Diagnostics.Stopwatch.StartNew();
+        var result = await locker.TryAcquireExclusiveAsync("k", TimeSpan.FromMilliseconds(1000), opts);
+        sw.Stop();
+
+        Assert.Null(result);
+        Assert.True(
+            sw.Elapsed < TimeSpan.FromMilliseconds(1000) + TimeSpan.FromMilliseconds(600),
+            $"deadline acquire {sw.ElapsedMilliseconds}ms overshot the 1000ms deadline by more than the allowed margin");
+    }
 }

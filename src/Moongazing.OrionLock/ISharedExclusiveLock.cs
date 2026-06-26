@@ -33,4 +33,43 @@ public interface ISharedExclusiveLock
     /// <summary>Tries once, without waiting, to acquire an exclusive hold. Returns <see langword="null"/> if any holder owns the key.</summary>
     Task<IDistributedLockHandle?> TryAcquireExclusiveAsync(
         string key, DistributedLockOptions? options = null, CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// v0.5.0: tries to acquire a shared (read) hold, polling until <paramref name="deadline"/> elapses,
+    /// then giving up by returning <see langword="null"/> instead of throwing
+    /// <see cref="LockAcquisitionTimeoutException"/>. This is the acquire-or-give-up-by-deadline middle
+    /// ground between the single-shot <see cref="TryAcquireSharedAsync(string, DistributedLockOptions, CancellationToken)"/>
+    /// and the block-or-throw
+    /// <see cref="AcquireSharedAsync"/>, for callers that treat "could not acquire in time" as ordinary
+    /// control flow rather than an exceptional condition.
+    /// </summary>
+    /// <param name="key">The resource key.</param>
+    /// <param name="deadline">
+    /// How long to keep polling before giving up. A non-positive value means a single attempt (no wait).
+    /// </param>
+    /// <param name="options">Lock options; <see cref="DistributedLockOptions.RetryInterval"/> sets the poll cadence.</param>
+    /// <param name="cancellationToken">Cancellation token; a cancel still throws <see cref="OperationCanceledException"/>.</param>
+    /// <returns>The held handle, or <see langword="null"/> if the deadline lapsed first.</returns>
+    Task<IDistributedLockHandle?> TryAcquireSharedAsync(
+        string key, TimeSpan deadline, DistributedLockOptions? options = null, CancellationToken cancellationToken = default)
+        => DeadlineAcquire.TryAcquireUntilDeadlineAsync(
+            (k, o, ct) => TryAcquireSharedAsync(k, o, ct), key, deadline, options, cancellationToken);
+
+    /// <summary>
+    /// v0.5.0: tries to acquire an exclusive (write) hold, polling until <paramref name="deadline"/>
+    /// elapses, then giving up by returning <see langword="null"/> instead of throwing
+    /// <see cref="LockAcquisitionTimeoutException"/>. The exclusive counterpart of
+    /// <see cref="TryAcquireSharedAsync(string, TimeSpan, DistributedLockOptions, CancellationToken)"/>.
+    /// </summary>
+    /// <param name="key">The resource key.</param>
+    /// <param name="deadline">
+    /// How long to keep polling before giving up. A non-positive value means a single attempt (no wait).
+    /// </param>
+    /// <param name="options">Lock options; <see cref="DistributedLockOptions.RetryInterval"/> sets the poll cadence.</param>
+    /// <param name="cancellationToken">Cancellation token; a cancel still throws <see cref="OperationCanceledException"/>.</param>
+    /// <returns>The held handle, or <see langword="null"/> if the deadline lapsed first.</returns>
+    Task<IDistributedLockHandle?> TryAcquireExclusiveAsync(
+        string key, TimeSpan deadline, DistributedLockOptions? options = null, CancellationToken cancellationToken = default)
+        => DeadlineAcquire.TryAcquireUntilDeadlineAsync(
+            (k, o, ct) => TryAcquireExclusiveAsync(k, o, ct), key, deadline, options, cancellationToken);
 }

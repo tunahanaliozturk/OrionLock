@@ -4,10 +4,13 @@ This document lists what is shipped, what is actively planned, and what we are d
 *not* building. It is a planning artifact, not a contract — dates slip, priorities reshuffle.
 If an item here matters to you, open a GitHub issue so we can weigh it against everything else.
 
-**Current release: 0.4.2.** Reader-writer (shared/exclusive) locking shipped for the in-memory
+**Current release: 0.5.0.** Reader-writer (shared/exclusive) locking shipped for the in-memory
 backend in 0.4.0; 0.4.1 trimmed an allocation on the acquire hot path and made the diagnostics
 meter version self-deriving; 0.4.2 shipped the first *distributed* reader-writer provider, backed by
-Redis. The next milestone is the relational (EF Core / Postgres) reader-writer provider.
+Redis; 0.5.0 adds the PostgreSQL distributed reader-writer provider (the relational half) plus a
+`TryAcquireAsync`-with-deadline ergonomics surface on the reader-writer lock. The next milestone is
+the EF Core reader-writer provider and folding the FIFO coordinator into the reader-writer path for
+fair ordering beyond the best-effort starvation marker.
 
 ## Status legend
 
@@ -229,38 +232,47 @@ implementation behind the existing contract, not an API change. The exclusive-on
 - `RedisSharedExclusiveLockOptions` (`KeyPrefix`, `Database`) + the
   `OrionLockBuilder.UseRedisSharedExclusive()` DI helper, additive to `UseRedis`.
 
+### v0.5.0 — PostgreSQL reader-writer provider + acquire-by-deadline *(shipped 2026-06-27)*
+
+The relational half of the distributed reader-writer work, plus the first of the v0.5.0-era
+ergonomics items. The public surface (`ISharedExclusiveLock`, `ISharedExclusiveLockProvider`,
+`LockMode`) was already in place, so the provider is a new backend behind the existing contract; the
+deadline overloads are additive default-interface methods. The family version moves to a uniform
+0.5.0 (it supersedes the Redis-only v0.4.2 roadmap point).
+
+- **`PostgresSharedExclusiveLockProvider`** in the existing `OrionLock.Postgres` package, with the
+  same correctness guarantees as the Redis provider. Unlike the exclusive-only advisory-lock backend,
+  holds are clock-leased rows in a table (default `orionlock_rw_holds`): a reader row per reader keyed
+  by its fencing token, one writer row, one pending-writer row, each with an explicit `expires_at`.
+  Readers are tracked individually so one reader's expiry never frees another's. Every transition runs
+  in a transaction that serializes the key with `pg_advisory_xact_lock`, prunes expired rows, then
+  evaluates and writes, so there is no read-then-write race. All lease math uses the server clock via
+  `now()`. Owner-checked renew/release; release of an expired share is a no-op. Best-effort writer
+  fairness via a lease-bounded pending-writer marker that holds off new readers while a writer waits
+  (writer-preference, not strict FIFO), the analogue of the in-memory and Redis reservation.
+- `PostgresSharedExclusiveLockOptions` (`KeyPrefix`, `TableName`, `AutoCreateTable`, `CommandTimeout`)
+  + `OrionLockBuilder.UsePostgresSharedExclusive(connectionString, configure?)` DI helper, additive to
+  `UsePostgres`.
+- **`TryAcquireAsync` with a deadline on the reader-writer lock.** `ISharedExclusiveLock` gains
+  `TryAcquireSharedAsync(key, deadline, ...)` / `TryAcquireExclusiveAsync(key, deadline, ...)` that
+  poll until the deadline and return `null` on expiry instead of throwing
+  `LockAcquisitionTimeoutException`, closing the gap between "one attempt" and "block-or-throw". The
+  poll delay is clamped to the time left so it cannot overshoot by a full retry interval. The
+  exclusive-`IDistributedLock` deadline overload remains a follow-up.
+
 ---
 
-## v0.4.x — Distributed reader-writer locks *(planned, next)*
+## v0.5.x / v0.6.0 — Fairness, ergonomics, and coordination primitives *(planned)*
 
-The headline follow-up to v0.4.0. The reader-writer abstraction, the in-memory provider, and the
-Redis distributed provider (v0.4.2 above) shipped; the relational half is the next concrete piece of
-work. The public surface (`ISharedExclusiveLock`, `ISharedExclusiveLockProvider`, `LockMode`) is
-already in place, so this is new backend implementations behind the existing contract, not an API
-change.
+The remaining v0.5.0-era depth items, now that the distributed reader-writer matrix covers in-memory,
+Redis, and PostgreSQL.
 
-### v0.4.3 — EF Core / Postgres distributed reader-writer provider *(planned, August 2026)*
-
-- A relational `ISharedExclusiveLockProvider` for the SQL backends. The EF Core lock-table model
-  extends cleanly to a mode column plus a shared-holder count, so acquire/renew/release become
-  guarded `UPDATE`s. Postgres can alternatively use shared-vs-exclusive advisory locks
-  (`pg_try_advisory_lock_shared`) where a relational table is not wanted.
-- Documented semantics for which relational backend gives which fairness and crash-safety
-  guarantee, since session-scoped advisory locks and the clock-leased table differ here.
-
----
-
-## v0.5.0 — Fairness, ergonomics, and coordination primitives *(planned, Q4 2026)*
-
-With the backend matrix essentially complete (Redis, EF Core, SqlServer, Postgres, Consul, Etcd,
-ZooKeeper all ship), the focus shifts from breadth to depth: fairness, acquire ergonomics, and the
-nearest neighbours to "lock" that real consumers ask for.
-
-- **`TryAcquireAsync` with a deadline.** Today blocking fairness lives only on `AcquireAsync`, and
-  `TryAcquireAsync` is a single shot. A `TryAcquireAsync(key, deadline, ...)` overload that returns
-  `null` on expiry instead of throwing `LockAcquisitionTimeoutException` closes the gap between
-  "one attempt" and "block-or-throw" without forcing callers to catch a timeout exception for
-  ordinary control flow. The shared/exclusive variants get the same treatment.
+- **EF Core reader-writer provider.** A provider-agnostic relational `ISharedExclusiveLockProvider`
+  on the EF Core lock-table model (a mode column plus individually-tracked shared-holder rows), so the
+  reader-writer lock works on any EF Core relational provider, not only PostgreSQL.
+- **`TryAcquireAsync` with a deadline on the exclusive lock.** The reader-writer surface shipped the
+  deadline overload in 0.5.0; the exclusive-only `IDistributedLock` gets the same treatment for
+  parity.
 - **Fair queueing beyond opt-in FIFO.** The FIFO coordinator is opt-in and per-acquire. The next
   step is reusing it (and the Redis sorted-set queue) to give the distributed reader-writer lock a
   fair writer/reader ordering rather than the best-effort starvation marker, and folding the
