@@ -57,7 +57,8 @@ public static class OrionLockEfCoreBuilderExtensions
 
         builder.Services.TryAddScoped<DbContext>(sp => sp.GetRequiredService<TDbContext>());
         builder.Services.TryAddSingleton<ISharedExclusiveLockProvider>(
-            sp => new EfCoreSharedExclusiveLockProvider(sp.GetRequiredService<IServiceScopeFactory>(), options));
+            sp => new EfCoreSharedExclusiveLockProvider(
+                sp.GetRequiredService<IServiceScopeFactory>(), options, typeof(TDbContext)));
         builder.Services.TryAddSingleton<ISharedExclusiveLock>(
             sp => new SharedExclusiveLock(sp.GetRequiredService<ISharedExclusiveLockProvider>()));
 

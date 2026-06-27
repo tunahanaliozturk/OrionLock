@@ -40,14 +40,19 @@ namespace Moongazing.OrionLock.EntityFrameworkCore;
 /// against each other.
 /// </para>
 /// <para>
-/// <b>Live clock, read per transition.</b> Every transition reads the database's current time once via
-/// <c>SELECT CURRENT_TIMESTAMP</c> (the live DB clock, the portable analogue of the PostgreSQL
-/// <c>clock_timestamp()</c> fix) and bases ALL expiry math on that one value: it prunes
-/// <c>ExpiresOnUtc &lt;= now</c> and writes <c>ExpiresOnUtc = now + lease</c>. Using the DB clock, not
-/// <see cref="DateTime.UtcNow"/>, keeps every process comparing expiries against ONE authoritative clock
-/// with no client-clock-skew hazard. Reading it inside the transition (after the serialization point is
-/// taken) rather than at some earlier instant means a hold that lapsed while this transition waited to be
-/// serialized is correctly reclaimed.
+/// <b>Live clock, read per transition.</b> Every transition reads the database's current time once and
+/// bases ALL expiry math on that one value: it prunes <c>ExpiresOnUtc &lt;= now</c> and writes
+/// <c>ExpiresOnUtc = now + lease</c>. Using the DB clock, not <see cref="DateTime.UtcNow"/>, keeps every
+/// process comparing expiries against ONE authoritative clock with no client-clock-skew hazard. The clock is
+/// read AFTER the per-resource serialization anchor is taken, so a hold that lapsed while this transition
+/// waited to be serialized is correctly reclaimed - but only if the value advances during that wait. The
+/// expression is therefore provider-aware: <c>clock_timestamp()</c> on PostgreSQL and <c>SYSUTCDATETIME()</c>
+/// on SQL Server (both the real wall clock at the instant of evaluation), the portable analogue of the
+/// PostgreSQL provider's <c>clock_timestamp()</c> fix. A portable <c>CURRENT_TIMESTAMP</c> would be WRONG on
+/// PostgreSQL, where it is transaction-START time (fixed for the whole transaction): after the
+/// anchor-serialization wait it is stale, so a hold that expired during the wait would still look live. Plain
+/// SQLite has no transaction-start-vs-now distinction at this scope, so its fallback
+/// <c>CURRENT_TIMESTAMP</c> is the live clock there; the same provider-aware selection routes to it.
 /// </para>
 /// <para>
 /// <b>Fencing.</b> The caller-supplied <c>ownerToken</c> is the fencing token. Renew and release are
@@ -78,19 +83,48 @@ public sealed class EfCoreSharedExclusiveLockProvider : ISharedExclusiveLockProv
 
     private readonly IServiceScopeFactory scopeFactory;
     private readonly EfCoreSharedExclusiveLockOptions options;
+    private readonly Type contextType;
 
-    /// <summary>Creates the provider. A scoped <see cref="DbContext"/> is resolved per transition.</summary>
+    /// <summary>
+    /// Creates the provider. A scoped <see cref="DbContext"/> is resolved per transition from the ambient
+    /// <see cref="DbContext"/> registration. Prefer
+    /// <see cref="EfCoreSharedExclusiveLockProvider(IServiceScopeFactory, EfCoreSharedExclusiveLockOptions, Type)"/>
+    /// to bind a specific context type when more than one <see cref="DbContext"/> is registered.
+    /// </summary>
     /// <exception cref="ArgumentNullException"><paramref name="scopeFactory"/> or <paramref name="options"/> is null, or <see cref="EfCoreSharedExclusiveLockOptions.KeyPrefix"/> is null.</exception>
     /// <exception cref="ArgumentOutOfRangeException"><see cref="EfCoreSharedExclusiveLockOptions.MaxSerializationRetries"/> is less than 1.</exception>
     public EfCoreSharedExclusiveLockProvider(IServiceScopeFactory scopeFactory, EfCoreSharedExclusiveLockOptions options)
+        : this(scopeFactory, options, typeof(DbContext))
+    {
+    }
+
+    /// <summary>
+    /// Creates the provider bound to a specific <paramref name="contextType"/> (the configured
+    /// <c>TDbContext</c>), which it resolves per transition. Resolving the CONFIGURED context rather than the
+    /// ambient <see cref="DbContext"/> registration keeps the lock on its intended context even when another
+    /// <see cref="DbContext"/> is also registered in the same container.
+    /// </summary>
+    /// <exception cref="ArgumentNullException"><paramref name="scopeFactory"/>, <paramref name="options"/>, <paramref name="contextType"/>, or <see cref="EfCoreSharedExclusiveLockOptions.KeyPrefix"/> is null.</exception>
+    /// <exception cref="ArgumentException"><paramref name="contextType"/> is not a <see cref="DbContext"/> type.</exception>
+    /// <exception cref="ArgumentOutOfRangeException"><see cref="EfCoreSharedExclusiveLockOptions.MaxSerializationRetries"/> is less than 1.</exception>
+    public EfCoreSharedExclusiveLockProvider(
+        IServiceScopeFactory scopeFactory, EfCoreSharedExclusiveLockOptions options, Type contextType)
     {
         ArgumentNullException.ThrowIfNull(scopeFactory);
         ArgumentNullException.ThrowIfNull(options);
         ArgumentNullException.ThrowIfNull(options.KeyPrefix);
+        ArgumentNullException.ThrowIfNull(contextType);
+        if (!typeof(DbContext).IsAssignableFrom(contextType))
+        {
+            throw new ArgumentException(
+                $"'{contextType}' is not a {nameof(DbContext)} type.", nameof(contextType));
+        }
+
         ArgumentOutOfRangeException.ThrowIfLessThan(options.MaxSerializationRetries, 1);
 
         this.scopeFactory = scopeFactory;
         this.options = options;
+        this.contextType = contextType;
     }
 
     /// <inheritdoc />
@@ -289,7 +323,10 @@ public sealed class EfCoreSharedExclusiveLockProvider : ISharedExclusiveLockProv
             cancellationToken.ThrowIfCancellationRequested();
 
             await using var scope = scopeFactory.CreateAsyncScope();
-            var ctx = scope.ServiceProvider.GetRequiredService<DbContext>();
+            // Resolve the CONFIGURED context type (the TDbContext passed at registration), not necessarily the
+            // ambient DbContext registration, so the lock uses its intended context even when another
+            // DbContext is also registered in the same container.
+            var ctx = (DbContext)scope.ServiceProvider.GetRequiredService(contextType);
             // A fresh scope yields a fresh context, but be defensive: never inherit tracked state.
             ctx.ChangeTracker.Clear();
 
@@ -328,7 +365,12 @@ public sealed class EfCoreSharedExclusiveLockProvider : ISharedExclusiveLockProv
 
     // Take the per-resource serialization anchor: insert the row if it is the first ever touch of this
     // resource, then unconditionally rewrite its token so a concurrent serializable transition for the
-    // same resource conflicts on this single row.
+    // same resource conflicts on this single row. Two concurrent FIRST-time acquirers both see no row and
+    // both try to INSERT it; one wins and the other hits a unique / PK violation. That insert race is NOT a
+    // serialization failure, so the outer retry loop would not catch it - handle it here: on a save failure
+    // re-run the conditional UPDATE, which now matches the row the winner inserted, so first-use contention
+    // serializes through the anchor instead of throwing. A save failure that is genuinely NOT a present-row
+    // collision leaves the UPDATE matching nothing, and the original exception is rethrown.
     private static async Task TakeResourceAnchorAsync(DbContext ctx, string resource, CancellationToken ct)
     {
         var newToken = Guid.NewGuid().ToString("N");
@@ -336,41 +378,95 @@ public sealed class EfCoreSharedExclusiveLockProvider : ISharedExclusiveLockProv
             .Where(x => x.Resource == resource)
             .ExecuteUpdateAsync(s => s.SetProperty(x => x.Token, newToken), ct)
             .ConfigureAwait(false);
-        if (rows == 0)
+        if (rows > 0)
         {
-            ctx.Add(new OrionLockRwResourceRow { Resource = resource, Token = newToken });
+            return;
+        }
+
+        ctx.Add(new OrionLockRwResourceRow { Resource = resource, Token = newToken });
+        try
+        {
             await ctx.SaveChangesAsync(ct).ConfigureAwait(false);
             ctx.ChangeTracker.Clear();
         }
+        catch (DbUpdateException)
+        {
+            // A concurrent first-time acquirer inserted the anchor row first. Drop our pending insert and
+            // re-run the unconditional UPDATE; if the row now exists (the expected case) it serializes us
+            // against that other transition exactly as a non-first transition would. If the UPDATE still
+            // matches nothing the failure was not a present-row collision, so rethrow the original error.
+            ctx.ChangeTracker.Clear();
+            var retried = await ctx.Set<OrionLockRwResourceRow>()
+                .Where(x => x.Resource == resource)
+                .ExecuteUpdateAsync(s => s.SetProperty(x => x.Token, newToken), ct)
+                .ConfigureAwait(false);
+            if (retried == 0)
+            {
+                throw;
+            }
+        }
     }
 
-    // Read the database server's current time as the live clock for this transition. CURRENT_TIMESTAMP is
-    // portable across SQL Server, PostgreSQL, and SQLite. The value is returned with
-    // DateTimeKind.Unspecified holding UTC clock numbers: the holds column is mapped as a timestamp
-    // WITHOUT time zone, so both the stored ExpiresOnUtc and every parameter compared against it must be
-    // Unspecified. Otherwise a Kind=Utc parameter binds as PostgreSQL timestamptz and the
-    // timestamp-vs-timestamptz comparison is silently shifted by the session time zone, so an expired row
-    // is never pruned. SQL Server ignores Kind, so this is correct there too. The lease math only needs one
-    // consistent clock shared by every process; the zone label does not matter as long as it is uniform.
+    // Read the database server's current time as the live clock for this transition. The expression is
+    // PROVIDER-AWARE and must reflect the real wall clock at the instant of evaluation, NOT transaction-start
+    // time: this read happens after the per-resource anchor wait, and a hold that expired DURING that wait
+    // must be pruned. On PostgreSQL CURRENT_TIMESTAMP is transaction-START time (frozen for the transaction),
+    // so it would be stale here and a lapsed hold would still look live - the exact bug the Postgres provider
+    // fixed with clock_timestamp(). So: clock_timestamp() on PostgreSQL, SYSUTCDATETIME() on SQL Server (both
+    // advance during the transaction); CURRENT_TIMESTAMP elsewhere (plain SQLite has no
+    // transaction-start-vs-now distinction at this scope, so it is already the live clock there). The lease
+    // math only needs ONE consistent clock shared by every process; the zone label does not matter as long as
+    // it is uniform, and ReadDbNowUtcAsync normalises whatever Kind the provider returns to a UTC instant.
     private static async Task<DateTime> ReadDbNowUtcAsync(DbContext ctx, CancellationToken ct)
     {
+        var sql = "SELECT " + LiveClockExpression(ctx) + " AS Value";
         var rows = await ctx.Database
-            .SqlQueryRaw<DateTime>("SELECT CURRENT_TIMESTAMP AS Value")
+            .SqlQueryRaw<DateTime>(sql)
             .ToListAsync(ct)
             .ConfigureAwait(false);
         var value = rows[0];
         // The holds column is mapped as a UTC instant (timestamp WITH time zone on PostgreSQL / datetime2
         // on SQL Server), so both the stored ExpiresOnUtc and every parameter compared against it must be
         // DateTimeKind.Utc; a non-Utc value would bind as a different PostgreSQL type and the comparison
-        // would be silently time-zone-shifted (an expired row would then never prune). CURRENT_TIMESTAMP is
-        // the database server clock; normalise whatever Kind the provider returns to a UTC instant. Every
-        // process reads the same server clock, so this is one consistent comparison frame.
+        // would be silently time-zone-shifted (an expired row would then never prune). The live-clock
+        // expression is the database server clock; normalise whatever Kind the provider returns to a UTC
+        // instant. Every process reads the same server clock, so this is one consistent comparison frame.
         return value.Kind switch
         {
             DateTimeKind.Utc => value,
             DateTimeKind.Local => value.ToUniversalTime(),
             _ => DateTime.SpecifyKind(value, DateTimeKind.Utc),
         };
+    }
+
+    // Provider-aware LIVE wall-clock SQL expression for the current DbContext's database provider, selected
+    // off Database.ProviderName so no provider package is referenced (this package depends only on
+    // EntityFrameworkCore.Relational). clock_timestamp()/SYSUTCDATETIME() advance during a transaction;
+    // CURRENT_TIMESTAMP is the safe portable fallback (and the live clock on plain SQLite). PostgreSQL is
+    // matched first so its CURRENT_TIMESTAMP (transaction-start time) is never used for expiry math.
+    // Internal (not private) so the regression suite can assert the per-provider selection directly: the
+    // staleness this guards against is otherwise masked end-to-end because Npgsql defers BEGIN, pinning the
+    // transaction timestamp only when the anchor statement runs.
+    internal static string LiveClockExpression(DbContext ctx)
+    {
+        var provider = ctx.Database.ProviderName;
+        if (provider is null)
+        {
+            return "CURRENT_TIMESTAMP";
+        }
+
+        if (provider.Contains("Npgsql", StringComparison.OrdinalIgnoreCase)
+            || provider.Contains("PostgreSQL", StringComparison.OrdinalIgnoreCase))
+        {
+            return "clock_timestamp()";
+        }
+
+        if (provider.Contains("SqlServer", StringComparison.OrdinalIgnoreCase))
+        {
+            return "SYSUTCDATETIME()";
+        }
+
+        return "CURRENT_TIMESTAMP";
     }
 
     private async Task BackoffAsync(int attempt, CancellationToken ct)

@@ -101,8 +101,10 @@ public sealed class DistributedLockDeadlineTests
         await using var held = await holder.TryAcquireAsync("k", Fast());
 
         // A 200ms deadline with a 250ms retry interval must NOT wait a full 250ms past the deadline; the
-        // delay is clamped to the time left. Upper bound is widened for a loaded runner but stays well
-        // under deadline + one full interval (450ms) to prove the clamp.
+        // delay is clamped to the time left. The bound must stay UNDER deadline + one full interval (450ms)
+        // or it would also pass for an unclamped implementation that waited the full extra interval, proving
+        // nothing. 400ms gives a loaded runner ~200ms of headroom over the deadline while still excluding a
+        // full unclamped overshoot.
         var options = new DistributedLockOptions
         {
             RetryInterval = TimeSpan.FromMilliseconds(250),
@@ -113,7 +115,7 @@ public sealed class DistributedLockDeadlineTests
         sw.Stop();
 
         Assert.Null(result);
-        Assert.True(sw.ElapsedMilliseconds < 2000, $"deadline overshot: {sw.ElapsedMilliseconds}ms");
+        Assert.True(sw.ElapsedMilliseconds < 400, $"deadline overshot: {sw.ElapsedMilliseconds}ms");
     }
 
     [Fact]

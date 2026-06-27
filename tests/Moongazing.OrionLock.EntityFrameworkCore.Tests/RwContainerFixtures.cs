@@ -19,10 +19,14 @@ public abstract class RwContainerFixtureBase : IAsyncLifetime
     /// <summary>The scope factory the provider-under-test resolves <see cref="DbContext"/> from.</summary>
     public IServiceScopeFactory ScopeFactory { get; private set; } = default!;
 
+    /// <summary>The container connection string, for tests that open their own raw competing connection.</summary>
+    public string ConnectionString { get; private set; } = default!;
+
     /// <summary>Starts the container (with the hardened retry-warmup), wires DI, and creates the schema.</summary>
     public async Task InitializeAsync()
     {
         var connectionString = await StartAndGetConnectionStringAsync().ConfigureAwait(false);
+        ConnectionString = connectionString;
 
         var sc = new ServiceCollection();
         sc.AddDbContext<RwLockDbContext>(ConfigureDbContext(connectionString), ServiceLifetime.Scoped);
@@ -64,10 +68,10 @@ public sealed class PostgresRwContainerFixture : RwContainerFixtureBase
             budget: TimeSpan.FromMinutes(2),
             warmupAsync: async ct =>
             {
-                await using var scope = new ServiceCollection()
+                await using var warmupServices = new ServiceCollection()
                     .AddDbContext<RwLockDbContext>(o => o.UseNpgsql(container.GetConnectionString()))
-                    .BuildServiceProvider()
-                    .CreateAsyncScope();
+                    .BuildServiceProvider();
+                await using var scope = warmupServices.CreateAsyncScope();
                 var ctx = scope.ServiceProvider.GetRequiredService<RwLockDbContext>();
                 _ = await ctx.Database.CanConnectAsync(ct).ConfigureAwait(false);
             }).ConfigureAwait(false);
@@ -94,10 +98,10 @@ public sealed class SqlServerRwContainerFixture : RwContainerFixtureBase
             budget: TimeSpan.FromMinutes(5),
             warmupAsync: async ct =>
             {
-                await using var scope = new ServiceCollection()
+                await using var warmupServices = new ServiceCollection()
                     .AddDbContext<RwLockDbContext>(o => o.UseSqlServer(container.GetConnectionString()))
-                    .BuildServiceProvider()
-                    .CreateAsyncScope();
+                    .BuildServiceProvider();
+                await using var scope = warmupServices.CreateAsyncScope();
                 var ctx = scope.ServiceProvider.GetRequiredService<RwLockDbContext>();
                 _ = await ctx.Database.CanConnectAsync(ct).ConfigureAwait(false);
             }).ConfigureAwait(false);
