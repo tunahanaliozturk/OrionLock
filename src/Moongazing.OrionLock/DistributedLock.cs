@@ -54,19 +54,39 @@ public sealed class DistributedLock : IDistributedLock
     }
 
     /// <inheritdoc />
-    public async Task<IDistributedLockHandle?> TryAcquireAsync(
+    public Task<IDistributedLockHandle?> TryAcquireAsync(
         string key, DistributedLockOptions? options = null, CancellationToken cancellationToken = default)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(key);
         options ??= new DistributedLockOptions();
+        return TryAcquireAsync(key, Guid.NewGuid().ToString("N"), options, cancellationToken);
+    }
 
+    /// <inheritdoc />
+    public Task<IDistributedLockHandle?> TryAcquireAsync(
+        string key, TimeSpan deadline, DistributedLockOptions? options = null, CancellationToken cancellationToken = default)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(key);
+        options ??= new DistributedLockOptions();
+
+        // Mint the owner token ONCE and reuse it across every deadline-retry attempt, exactly as the
+        // blocking AcquireAsync loop does. A fresh token per attempt would make each retry a DIFFERENT
+        // logical acquirer and break fencing identity; reusing one keeps the deadline overload's fencing
+        // identity stable, matching the reader-writer deadline overloads.
+        var ownerToken = Guid.NewGuid().ToString("N");
+        return DeadlineAcquire.TryAcquireUntilDeadlineAsync(
+            (k, o, ct) => TryAcquireAsync(k, ownerToken, o!, ct), key, deadline, options, cancellationToken);
+    }
+
+    private async Task<IDistributedLockHandle?> TryAcquireAsync(
+        string key, string ownerToken, DistributedLockOptions options, CancellationToken cancellationToken)
+    {
         var nested = reentrancy.TryEnter(key);
         if (nested is not null)
         {
             return nested;
         }
 
-        var ownerToken = Guid.NewGuid().ToString("N");
         var acquired = await provider
             .TryAcquireAsync(key, ownerToken, options.LeaseDuration, cancellationToken)
             .ConfigureAwait(false);

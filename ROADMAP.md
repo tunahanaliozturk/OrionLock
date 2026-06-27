@@ -4,12 +4,14 @@ This document lists what is shipped, what is actively planned, and what we are d
 *not* building. It is a planning artifact, not a contract — dates slip, priorities reshuffle.
 If an item here matters to you, open a GitHub issue so we can weigh it against everything else.
 
-**Current release: 0.5.0.** Reader-writer (shared/exclusive) locking shipped for the in-memory
+**Current release: 0.6.0.** Reader-writer (shared/exclusive) locking shipped for the in-memory
 backend in 0.4.0; 0.4.1 trimmed an allocation on the acquire hot path and made the diagnostics
 meter version self-deriving; 0.4.2 shipped the first *distributed* reader-writer provider, backed by
-Redis; 0.5.0 adds the PostgreSQL distributed reader-writer provider (the relational half) plus a
-`TryAcquireAsync`-with-deadline ergonomics surface on the reader-writer lock. The next milestone is
-the EF Core reader-writer provider and folding the FIFO coordinator into the reader-writer path for
+Redis; 0.5.0 added the PostgreSQL distributed reader-writer provider plus a
+`TryAcquireAsync`-with-deadline ergonomics surface on the reader-writer lock; 0.6.0 adds the
+*provider-portable* EF Core distributed reader-writer provider (works on SQL Server, PostgreSQL, and
+any other relational EF Core provider) and the matching `TryAcquireAsync`-with-deadline overload on
+the exclusive lock. The next milestone is folding the FIFO coordinator into the reader-writer path for
 fair ordering beyond the best-effort starvation marker.
 
 ## Status legend
@@ -260,19 +262,46 @@ deadline overloads are additive default-interface methods. The family version mo
   poll delay is clamped to the time left so it cannot overshoot by a full retry interval. The
   exclusive-`IDistributedLock` deadline overload remains a follow-up.
 
+### v0.6.0 — Provider-portable EF Core reader-writer provider + exclusive acquire-by-deadline *(shipped 2026-06-27)*
+
+The reader-writer matrix's portable relational half, plus the exclusive-lock half of the
+acquire-by-deadline ergonomics. The public surface was already in place, so the provider is a new
+backend behind the existing contract; the exclusive deadline overload is an additive default-interface
+method.
+
+- **`EfCoreSharedExclusiveLockProvider`** in the existing `OrionLock.EntityFrameworkCore` package, the
+  first *provider-portable* reader-writer backend: it works on SQL Server, PostgreSQL, and any other
+  relational EF Core provider through provider-agnostic EF Core, not raw provider SQL. Holds are
+  clock-leased rows in `OrionLock_RwHolds` (a `Kind='r'` row per reader keyed by its fencing token, one
+  `Kind='w'` writer row, one `Kind='pw'` pending-writer row, each with an explicit `ExpiresOnUtc`),
+  mirroring the PostgreSQL schema but not PostgreSQL-specific. Readers are tracked individually so one
+  reader's expiry never frees another's. Per-resource serialization uses a `Serializable` transaction
+  that first writes the resource's anchor row in `OrionLock_RwResources`, so concurrent transitions for
+  one resource conflict and one retries (the portable substitute for `pg_advisory_xact_lock`); the live
+  DB clock is read per transition via `CURRENT_TIMESTAMP` (the portable `clock_timestamp()` analogue) so
+  there is no client-clock-skew hazard and a hold that lapsed during the serialization wait is reclaimed.
+  Owner-checked renew/release; release of an expired share is a no-op. Best-effort writer fairness via
+  the lease-bounded pending-writer marker, the analogue of the in-memory, Redis, and PostgreSQL
+  reservation.
+- `EfCoreSharedExclusiveLockOptions` (`KeyPrefix`, `MaxSerializationRetries`, `SerializationRetryBaseDelay`),
+  the two `IEntityTypeConfiguration`s for the holds and resource tables, and the
+  `OrionLockBuilder.UseEntityFrameworkCoreSharedExclusive<TDbContext>(configure?)` DI helper, additive to
+  `UseEntityFrameworkCore`. The schema is created via EF Core migrations / `EnsureCreated()`, as for any
+  other application table (no auto-create, because EF Core owns the schema).
+- **`TryAcquireAsync` with a deadline on the exclusive lock.** `IDistributedLock` gains
+  `TryAcquireAsync(key, deadline, ...)`, the exclusive counterpart of the 0.5.0 reader-writer deadline
+  overloads: it polls until the deadline and returns `null` on expiry instead of throwing. Added as a
+  default interface method with a concrete `DistributedLock` implementation that reuses one owner token
+  across retries; the poll delay is clamped to the time left so it cannot overshoot by a full interval.
+
 ---
 
-## v0.5.x / v0.6.0 — Fairness, ergonomics, and coordination primitives *(planned)*
+## v0.6.x — Fairness and coordination primitives *(planned)*
 
-The remaining v0.5.0-era depth items, now that the distributed reader-writer matrix covers in-memory,
-Redis, and PostgreSQL.
+The remaining depth items, now that the distributed reader-writer matrix covers in-memory, Redis,
+PostgreSQL, and (portably) every EF Core relational provider, and both locks have the acquire-by-deadline
+surface.
 
-- **EF Core reader-writer provider.** A provider-agnostic relational `ISharedExclusiveLockProvider`
-  on the EF Core lock-table model (a mode column plus individually-tracked shared-holder rows), so the
-  reader-writer lock works on any EF Core relational provider, not only PostgreSQL.
-- **`TryAcquireAsync` with a deadline on the exclusive lock.** The reader-writer surface shipped the
-  deadline overload in 0.5.0; the exclusive-only `IDistributedLock` gets the same treatment for
-  parity.
 - **Fair queueing beyond opt-in FIFO.** The FIFO coordinator is opt-in and per-acquire. The next
   step is reusing it (and the Redis sorted-set queue) to give the distributed reader-writer lock a
   fair writer/reader ordering rather than the best-effort starvation marker, and folding the
