@@ -16,7 +16,13 @@
   </ItemGroup>
   <ItemGroup>
     <PackageReference Include="Microsoft.EntityFrameworkCore.Sqlite" Version="9.0.0" />
+    <PackageReference Include="Microsoft.EntityFrameworkCore.SqlServer" Version="9.0.0" />
+    <PackageReference Include="Npgsql.EntityFrameworkCore.PostgreSQL" Version="9.0.4" />
+    <PackageReference Include="Microsoft.Extensions.DependencyInjection" Version="9.0.1" />
+    <PackageReference Include="Testcontainers.PostgreSql" Version="3.10.0" />
+    <PackageReference Include="Testcontainers.MsSql" Version="3.10.0" />
     <ProjectReference Include="..\..\src\Moongazing.OrionLock\Moongazing.OrionLock.csproj" />
     <ProjectReference Include="..\..\src\Moongazing.OrionLock.EntityFrameworkCore\Moongazing.OrionLock.EntityFrameworkCore.csproj" />
+    <ProjectReference Include="..\..\src\Moongazing.OrionLock.Testing\Moongazing.OrionLock.Testing.csproj" />
   </ItemGroup>
 </Project>
