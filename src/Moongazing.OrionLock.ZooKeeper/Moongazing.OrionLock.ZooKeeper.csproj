@@ -1,6 +1,8 @@
 <Project Sdk="Microsoft.NET.Sdk">
   <PropertyGroup>
     <PackageId>OrionLock.ZooKeeper</PackageId>
+    <!-- Unpublished backend held below 1.0 (not on the published pack list, never released). Overrides the repo-wide 1.0.0 in Directory.Build.props. -->
+    <Version>0.6.0</Version>
     <Description>Apache ZooKeeper backend for OrionLock distributed locking. Implements IDistributedLockProvider over ephemeral-sequential znodes following the recipe in the ZooKeeper docs: TryAcquire creates an ephemeral-sequential child under a lock-key parent znode, then declares ownership when it holds the lowest sequence number. Session-expiry semantics drop the znode automatically so a crashed holder loses the lock without external intervention.</Description>
     <PackageTags>distributed-lock;zookeeper;apache;orionlock</PackageTags>
   </PropertyGroup>

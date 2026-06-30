@@ -1,6 +1,8 @@
 <Project Sdk="Microsoft.NET.Sdk">
   <PropertyGroup>
     <PackageId>OrionLock.Etcd</PackageId>
+    <!-- Unpublished backend held below 1.0 (not on the published pack list, never released). Overrides the repo-wide 1.0.0 in Directory.Build.props. -->
+    <Version>0.6.0</Version>
     <Description>etcd backend for OrionLock distributed locking. Implements IDistributedLockProvider over etcd v3 lease-bound keys: TryAcquire creates a lease + transactional put-if-absent, TryRenew refreshes the lease, Release revokes it.</Description>
     <PackageTags>distributed-lock;etcd;orionlock</PackageTags>
   </PropertyGroup>

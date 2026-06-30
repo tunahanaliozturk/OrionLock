@@ -64,31 +64,6 @@ Moongazing.OrionLock.ISharedExclusiveLock.TryAcquireExclusiveAsync(string! key, 
 Moongazing.OrionLock.ISharedExclusiveLock.TryAcquireExclusiveAsync(string! key, System.TimeSpan deadline, Moongazing.OrionLock.DistributedLockOptions? options = null, System.Threading.CancellationToken cancellationToken = default(System.Threading.CancellationToken)) -> System.Threading.Tasks.Task<Moongazing.OrionLock.IDistributedLockHandle?>!
 Moongazing.OrionLock.ISharedExclusiveLock.TryAcquireSharedAsync(string! key, Moongazing.OrionLock.DistributedLockOptions? options = null, System.Threading.CancellationToken cancellationToken = default(System.Threading.CancellationToken)) -> System.Threading.Tasks.Task<Moongazing.OrionLock.IDistributedLockHandle?>!
 Moongazing.OrionLock.ISharedExclusiveLock.TryAcquireSharedAsync(string! key, System.TimeSpan deadline, Moongazing.OrionLock.DistributedLockOptions? options = null, System.Threading.CancellationToken cancellationToken = default(System.Threading.CancellationToken)) -> System.Threading.Tasks.Task<Moongazing.OrionLock.IDistributedLockHandle?>!
-Moongazing.OrionLock.Internal.DistributedLockHandle
-Moongazing.OrionLock.Internal.DistributedLockHandle.DisposeAsync() -> System.Threading.Tasks.ValueTask
-Moongazing.OrionLock.Internal.DistributedLockHandle.DistributedLockHandle(Moongazing.OrionLock.Providers.IDistributedLockProvider! provider, string! key, string! ownerToken, Moongazing.OrionLock.DistributedLockOptions! options) -> void
-Moongazing.OrionLock.Internal.DistributedLockHandle.DistributedLockHandle(Moongazing.OrionLock.Providers.IDistributedLockProvider! provider, string! key, string! ownerToken, Moongazing.OrionLock.DistributedLockOptions! options, Moongazing.OrionLock.ILockEventObserver? eventObserver) -> void
-Moongazing.OrionLock.Internal.DistributedLockHandle.IsHeld.get -> bool
-Moongazing.OrionLock.Internal.DistributedLockHandle.Key.get -> string!
-Moongazing.OrionLock.Internal.DistributedLockHandle.LostToken.get -> System.Threading.CancellationToken
-Moongazing.OrionLock.Internal.ReentrancyRegistry
-Moongazing.OrionLock.Internal.ReentrancyRegistry.Exit(string! key) -> bool
-Moongazing.OrionLock.Internal.ReentrancyRegistry.ReentrancyRegistry() -> void
-Moongazing.OrionLock.Internal.ReentrancyRegistry.Register(string! key, Moongazing.OrionLock.IDistributedLockHandle! realHandle) -> Moongazing.OrionLock.IDistributedLockHandle!
-Moongazing.OrionLock.Internal.ReentrancyRegistry.TryEnter(string! key) -> Moongazing.OrionLock.IDistributedLockHandle?
-Moongazing.OrionLock.Internal.ReentrantLockHandle
-Moongazing.OrionLock.Internal.ReentrantLockHandle.DisposeAsync() -> System.Threading.Tasks.ValueTask
-Moongazing.OrionLock.Internal.ReentrantLockHandle.IsHeld.get -> bool
-Moongazing.OrionLock.Internal.ReentrantLockHandle.Key.get -> string!
-Moongazing.OrionLock.Internal.ReentrantLockHandle.LostToken.get -> System.Threading.CancellationToken
-Moongazing.OrionLock.Internal.ReentrantLockHandle.ReentrantLockHandle(Moongazing.OrionLock.Internal.ReentrancyRegistry! registry, string! key, Moongazing.OrionLock.IDistributedLockHandle! realHandle) -> void
-Moongazing.OrionLock.Internal.SharedExclusiveLockHandle
-Moongazing.OrionLock.Internal.SharedExclusiveLockHandle.DisposeAsync() -> System.Threading.Tasks.ValueTask
-Moongazing.OrionLock.Internal.SharedExclusiveLockHandle.IsHeld.get -> bool
-Moongazing.OrionLock.Internal.SharedExclusiveLockHandle.Key.get -> string!
-Moongazing.OrionLock.Internal.SharedExclusiveLockHandle.LostToken.get -> System.Threading.CancellationToken
-Moongazing.OrionLock.Internal.SharedExclusiveLockHandle.Mode.get -> Moongazing.OrionLock.LockMode
-Moongazing.OrionLock.Internal.SharedExclusiveLockHandle.SharedExclusiveLockHandle(Moongazing.OrionLock.Providers.ISharedExclusiveLockProvider! provider, string! key, string! ownerToken, Moongazing.OrionLock.LockMode mode, Moongazing.OrionLock.DistributedLockOptions! options) -> void
 Moongazing.OrionLock.LeaseLostException
 Moongazing.OrionLock.LeaseLostException.Key.get -> string!
 Moongazing.OrionLock.LeaseLostException.LeaseLostException(string! key) -> void
@@ -150,4 +125,4 @@ static Moongazing.OrionLock.Diagnostics.OrionLockDiagnostics.HashKeyToBucket(str
 static Moongazing.OrionLock.Diagnostics.OrionLockDiagnostics.RecordFifoQueueDepth(int waitersAhead) -> void
 static Moongazing.OrionLock.Diagnostics.OrionLockDiagnostics.RecordHealthCheckCompleted(System.DateTime utcNow) -> void
 static Moongazing.OrionLock.Providers.DistributedLockProviderExtensions.WaitForAcquireAsync(this Moongazing.OrionLock.Providers.IDistributedLockProvider! provider, string! key, string! ownerToken, System.TimeSpan leaseDuration, System.TimeSpan acquireTimeout, Moongazing.OrionLock.Providers.WaitForAcquireOptions? options = null, System.Threading.CancellationToken cancellationToken = default(System.Threading.CancellationToken)) -> System.Threading.Tasks.Task<bool>!
-static readonly Moongazing.OrionLock.Providers.WaitForAcquireOptions.Default -> Moongazing.OrionLock.Providers.WaitForAcquireOptions!
+static Moongazing.OrionLock.Providers.WaitForAcquireOptions.Default.get -> Moongazing.OrionLock.Providers.WaitForAcquireOptions!

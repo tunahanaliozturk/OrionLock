@@ -21,6 +21,7 @@
   </ItemGroup>
   <ItemGroup>
     <InternalsVisibleTo Include="Moongazing.OrionLock.Tests" />
+    <InternalsVisibleTo Include="Moongazing.OrionLock.Testing.Tests" />
     <InternalsVisibleTo Include="Moongazing.OrionLock.HealthChecks" />
     <InternalsVisibleTo Include="Moongazing.OrionLock.HealthChecks.Tests" />
   </ItemGroup>

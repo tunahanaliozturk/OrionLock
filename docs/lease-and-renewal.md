@@ -30,7 +30,9 @@ If a renewal returns false or throws — backend blip, lease already expired, an
 The critical section is now running **without** the lock. OrionLock cannot abort the section for you; it only makes the loss observable. Use `LostToken` to bail safely:
 
 ```csharp
-await using var handle = await locker.AcquireAsync("order:42", TimeSpan.FromSeconds(30));
+await using var handle = await locker.AcquireAsync(
+    "order:42",
+    new DistributedLockOptions { LeaseDuration = TimeSpan.FromSeconds(30) });
 await ProcessAsync(order, handle.LostToken);
 // or check periodically:
 foreach (var item in items)

@@ -79,7 +79,9 @@ services.AddOrionLock()
 ```
 
 ```csharp
-await using var handle = await locker.AcquireAsync("order:42", TimeSpan.FromSeconds(30));
+await using var handle = await locker.AcquireAsync(
+    "order:42",
+    new DistributedLockOptions { LeaseDuration = TimeSpan.FromSeconds(30) });
 // critical section - handle.LostToken trips if the lease is lost mid-section
 ```
 
@@ -187,7 +189,9 @@ services.AddOrionLock().UsePostgres(connectionString);          // OrionLock.Pos
 
 // Resolve and use the same way regardless of backend:
 var locker = serviceProvider.GetRequiredService<IDistributedLock>();
-await using var handle = await locker.AcquireAsync("order:42", TimeSpan.FromSeconds(30));
+await using var handle = await locker.AcquireAsync(
+    "order:42",
+    new DistributedLockOptions { LeaseDuration = TimeSpan.FromSeconds(30) });
 // critical section
 ```
 

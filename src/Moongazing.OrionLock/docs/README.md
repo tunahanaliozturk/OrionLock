@@ -5,7 +5,9 @@ Distributed locking for .NET — a backend-agnostic `IDistributedLock` with bloc
 ```csharp
 services.AddOrionLock().UseRedis("localhost:6379");
 
-await using var handle = await locker.AcquireAsync("order:42", TimeSpan.FromSeconds(30));
+await using var handle = await locker.AcquireAsync(
+    "order:42",
+    new DistributedLockOptions { LeaseDuration = TimeSpan.FromSeconds(30) });
 // critical section; handle.LostToken trips if the lease is lost
 ```
 

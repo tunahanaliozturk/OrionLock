@@ -10,7 +10,7 @@ namespace Moongazing.OrionLock.Internal;
 /// on renewal failure it flips <see cref="IsHeld"/> and trips <see cref="LostToken"/>. Disposing
 /// stops the watchdog and releases the hold in its <see cref="LockMode"/>.
 /// </summary>
-public sealed class SharedExclusiveLockHandle : IDistributedLockHandle
+internal sealed class SharedExclusiveLockHandle : IDistributedLockHandle
 {
     private readonly ISharedExclusiveLockProvider provider;
     private readonly string ownerToken;
