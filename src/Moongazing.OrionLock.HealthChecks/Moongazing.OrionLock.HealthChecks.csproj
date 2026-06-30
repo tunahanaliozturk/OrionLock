@@ -1,6 +1,8 @@
 <Project Sdk="Microsoft.NET.Sdk">
   <PropertyGroup>
     <PackageId>Moongazing.OrionLock.HealthChecks</PackageId>
+    <!-- Unpublished backend held below 1.0 (not on the published pack list, never released). Overrides the repo-wide 1.0.0 in Directory.Build.props. -->
+    <Version>0.6.0</Version>
     <Description>IHealthCheck integration for OrionLock distributed locking. Probes backend reachability by acquiring a sentinel lock so container readiness probes fail fast when the lock backend is unreachable.</Description>
     <PackageTags>health-check;distributed-lock;orion;orionlock</PackageTags>
     <PackageReadmeFile>docs/README.md</PackageReadmeFile>

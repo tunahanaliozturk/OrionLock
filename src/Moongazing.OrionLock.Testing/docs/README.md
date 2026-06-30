@@ -6,4 +6,4 @@ In-memory backend for testing code that uses [OrionLock](https://www.nuget.org/p
 services.AddOrionLock().UseInMemory();
 ```
 
-For tests only. See https://github.com/tunahanaliozturk/OrionLock.
+For tests only. Trimmable and Native AOT compatible (`IsTrimmable` and `IsAotCompatible` set). See https://github.com/tunahanaliozturk/OrionLock.

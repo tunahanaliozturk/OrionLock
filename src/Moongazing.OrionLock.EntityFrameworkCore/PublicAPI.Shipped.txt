@@ -1,0 +1,56 @@
+#nullable enable
+Moongazing.OrionLock.EntityFrameworkCore.EfCoreLockProvider
+Moongazing.OrionLock.EntityFrameworkCore.EfCoreLockProvider.EfCoreLockProvider(Microsoft.Extensions.DependencyInjection.IServiceScopeFactory! scopeFactory) -> void
+Moongazing.OrionLock.EntityFrameworkCore.EfCoreLockProvider.ReleaseAsync(string! key, string! ownerToken, System.Threading.CancellationToken cancellationToken) -> System.Threading.Tasks.Task!
+Moongazing.OrionLock.EntityFrameworkCore.EfCoreLockProvider.TryAcquireAsync(string! key, string! ownerToken, System.TimeSpan leaseDuration, System.Threading.CancellationToken cancellationToken) -> System.Threading.Tasks.Task<bool>!
+Moongazing.OrionLock.EntityFrameworkCore.EfCoreLockProvider.TryRenewAsync(string! key, string! ownerToken, System.TimeSpan leaseDuration, System.Threading.CancellationToken cancellationToken) -> System.Threading.Tasks.Task<bool>!
+Moongazing.OrionLock.EntityFrameworkCore.EfCoreSharedExclusiveLockOptions
+Moongazing.OrionLock.EntityFrameworkCore.EfCoreSharedExclusiveLockOptions.EfCoreSharedExclusiveLockOptions() -> void
+Moongazing.OrionLock.EntityFrameworkCore.EfCoreSharedExclusiveLockOptions.KeyPrefix.get -> string!
+Moongazing.OrionLock.EntityFrameworkCore.EfCoreSharedExclusiveLockOptions.KeyPrefix.set -> void
+Moongazing.OrionLock.EntityFrameworkCore.EfCoreSharedExclusiveLockOptions.MaxSerializationRetries.get -> int
+Moongazing.OrionLock.EntityFrameworkCore.EfCoreSharedExclusiveLockOptions.MaxSerializationRetries.set -> void
+Moongazing.OrionLock.EntityFrameworkCore.EfCoreSharedExclusiveLockOptions.SerializationRetryBaseDelay.get -> System.TimeSpan
+Moongazing.OrionLock.EntityFrameworkCore.EfCoreSharedExclusiveLockOptions.SerializationRetryBaseDelay.set -> void
+Moongazing.OrionLock.EntityFrameworkCore.EfCoreSharedExclusiveLockProvider
+Moongazing.OrionLock.EntityFrameworkCore.EfCoreSharedExclusiveLockProvider.EfCoreSharedExclusiveLockProvider(Microsoft.Extensions.DependencyInjection.IServiceScopeFactory! scopeFactory, Moongazing.OrionLock.EntityFrameworkCore.EfCoreSharedExclusiveLockOptions! options) -> void
+Moongazing.OrionLock.EntityFrameworkCore.EfCoreSharedExclusiveLockProvider.EfCoreSharedExclusiveLockProvider(Microsoft.Extensions.DependencyInjection.IServiceScopeFactory! scopeFactory, Moongazing.OrionLock.EntityFrameworkCore.EfCoreSharedExclusiveLockOptions! options, System.Type! contextType) -> void
+Moongazing.OrionLock.EntityFrameworkCore.EfCoreSharedExclusiveLockProvider.ReleaseAsync(string! key, string! ownerToken, Moongazing.OrionLock.LockMode mode, System.Threading.CancellationToken cancellationToken) -> System.Threading.Tasks.Task!
+Moongazing.OrionLock.EntityFrameworkCore.EfCoreSharedExclusiveLockProvider.TryAcquireAsync(string! key, string! ownerToken, Moongazing.OrionLock.LockMode mode, System.TimeSpan leaseDuration, System.Threading.CancellationToken cancellationToken) -> System.Threading.Tasks.Task<bool>!
+Moongazing.OrionLock.EntityFrameworkCore.EfCoreSharedExclusiveLockProvider.TryRenewAsync(string! key, string! ownerToken, Moongazing.OrionLock.LockMode mode, System.TimeSpan leaseDuration, System.Threading.CancellationToken cancellationToken) -> System.Threading.Tasks.Task<bool>!
+Moongazing.OrionLock.EntityFrameworkCore.OrionLockEfCoreBuilderExtensions
+Moongazing.OrionLock.EntityFrameworkCore.OrionLockRow
+Moongazing.OrionLock.EntityFrameworkCore.OrionLockRow.ExpiresOnUtc.get -> System.DateTime
+Moongazing.OrionLock.EntityFrameworkCore.OrionLockRow.ExpiresOnUtc.set -> void
+Moongazing.OrionLock.EntityFrameworkCore.OrionLockRow.Key.get -> string!
+Moongazing.OrionLock.EntityFrameworkCore.OrionLockRow.Key.set -> void
+Moongazing.OrionLock.EntityFrameworkCore.OrionLockRow.OrionLockRow() -> void
+Moongazing.OrionLock.EntityFrameworkCore.OrionLockRow.OwnerToken.get -> string?
+Moongazing.OrionLock.EntityFrameworkCore.OrionLockRow.OwnerToken.set -> void
+Moongazing.OrionLock.EntityFrameworkCore.OrionLockRowEntityTypeConfiguration
+Moongazing.OrionLock.EntityFrameworkCore.OrionLockRowEntityTypeConfiguration.Configure(Microsoft.EntityFrameworkCore.Metadata.Builders.EntityTypeBuilder<Moongazing.OrionLock.EntityFrameworkCore.OrionLockRow!>! builder) -> void
+Moongazing.OrionLock.EntityFrameworkCore.OrionLockRowEntityTypeConfiguration.OrionLockRowEntityTypeConfiguration() -> void
+Moongazing.OrionLock.EntityFrameworkCore.OrionLockRwHoldRow
+Moongazing.OrionLock.EntityFrameworkCore.OrionLockRwHoldRow.ExpiresOnUtc.get -> System.DateTime
+Moongazing.OrionLock.EntityFrameworkCore.OrionLockRwHoldRow.ExpiresOnUtc.set -> void
+Moongazing.OrionLock.EntityFrameworkCore.OrionLockRwHoldRow.Kind.get -> string!
+Moongazing.OrionLock.EntityFrameworkCore.OrionLockRwHoldRow.Kind.set -> void
+Moongazing.OrionLock.EntityFrameworkCore.OrionLockRwHoldRow.OrionLockRwHoldRow() -> void
+Moongazing.OrionLock.EntityFrameworkCore.OrionLockRwHoldRow.OwnerToken.get -> string!
+Moongazing.OrionLock.EntityFrameworkCore.OrionLockRwHoldRow.OwnerToken.set -> void
+Moongazing.OrionLock.EntityFrameworkCore.OrionLockRwHoldRow.Resource.get -> string!
+Moongazing.OrionLock.EntityFrameworkCore.OrionLockRwHoldRow.Resource.set -> void
+Moongazing.OrionLock.EntityFrameworkCore.OrionLockRwHoldRowEntityTypeConfiguration
+Moongazing.OrionLock.EntityFrameworkCore.OrionLockRwHoldRowEntityTypeConfiguration.Configure(Microsoft.EntityFrameworkCore.Metadata.Builders.EntityTypeBuilder<Moongazing.OrionLock.EntityFrameworkCore.OrionLockRwHoldRow!>! builder) -> void
+Moongazing.OrionLock.EntityFrameworkCore.OrionLockRwHoldRowEntityTypeConfiguration.OrionLockRwHoldRowEntityTypeConfiguration() -> void
+Moongazing.OrionLock.EntityFrameworkCore.OrionLockRwResourceRow
+Moongazing.OrionLock.EntityFrameworkCore.OrionLockRwResourceRow.OrionLockRwResourceRow() -> void
+Moongazing.OrionLock.EntityFrameworkCore.OrionLockRwResourceRow.Resource.get -> string!
+Moongazing.OrionLock.EntityFrameworkCore.OrionLockRwResourceRow.Resource.set -> void
+Moongazing.OrionLock.EntityFrameworkCore.OrionLockRwResourceRow.Token.get -> string!
+Moongazing.OrionLock.EntityFrameworkCore.OrionLockRwResourceRow.Token.set -> void
+Moongazing.OrionLock.EntityFrameworkCore.OrionLockRwResourceRowEntityTypeConfiguration
+Moongazing.OrionLock.EntityFrameworkCore.OrionLockRwResourceRowEntityTypeConfiguration.Configure(Microsoft.EntityFrameworkCore.Metadata.Builders.EntityTypeBuilder<Moongazing.OrionLock.EntityFrameworkCore.OrionLockRwResourceRow!>! builder) -> void
+Moongazing.OrionLock.EntityFrameworkCore.OrionLockRwResourceRowEntityTypeConfiguration.OrionLockRwResourceRowEntityTypeConfiguration() -> void
+static Moongazing.OrionLock.EntityFrameworkCore.OrionLockEfCoreBuilderExtensions.UseEntityFrameworkCore<TDbContext>(this Moongazing.OrionLock.DependencyInjection.OrionLockBuilder! builder) -> Moongazing.OrionLock.DependencyInjection.OrionLockBuilder!
+static Moongazing.OrionLock.EntityFrameworkCore.OrionLockEfCoreBuilderExtensions.UseEntityFrameworkCoreSharedExclusive<TDbContext>(this Moongazing.OrionLock.DependencyInjection.OrionLockBuilder! builder, System.Action<Moongazing.OrionLock.EntityFrameworkCore.EfCoreSharedExclusiveLockOptions!>? configure = null) -> Moongazing.OrionLock.DependencyInjection.OrionLockBuilder!

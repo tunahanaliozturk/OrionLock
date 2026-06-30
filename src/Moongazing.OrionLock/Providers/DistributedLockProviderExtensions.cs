@@ -115,8 +115,12 @@ public static class DistributedLockProviderExtensions
 /// </summary>
 public sealed class WaitForAcquireOptions
 {
-    /// <summary>Static default instance: 25 ms initial, 2 s cap, system random.</summary>
-    public static readonly WaitForAcquireOptions Default = new();
+    /// <summary>
+    /// A fresh default-configured instance: 25 ms initial, 2 s cap, system random. Each access
+    /// returns a new instance so there is no shared mutable global state - callers may freely set
+    /// the properties on the returned object without affecting any other caller.
+    /// </summary>
+    public static WaitForAcquireOptions Default => new();
 
     /// <summary>Initial backoff lower bound. Default 25 ms.</summary>
     public TimeSpan InitialDelay { get; set; } = TimeSpan.FromMilliseconds(25);

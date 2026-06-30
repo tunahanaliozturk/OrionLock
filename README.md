@@ -79,14 +79,34 @@ services.AddOrionLock()
 ```
 
 ```csharp
-await using var handle = await locker.AcquireAsync("order:42", TimeSpan.FromSeconds(30));
+await using var handle = await locker.AcquireAsync(
+    "order:42",
+    new DistributedLockOptions { LeaseDuration = TimeSpan.FromSeconds(30) });
 // critical section - handle.LostToken trips if the lease is lost mid-section
 ```
 
 ## Acquire vs TryAcquire
 
 - `AcquireAsync` blocks up to `WaitTimeout` (default 10s), retrying every `RetryInterval` (default 250 ms). Throws `LockAcquisitionTimeoutException` if it cannot acquire.
-- `TryAcquireAsync` is a single attempt. Returns `null` immediately if the lock is held.
+- `TryAcquireAsync(key)` is a single attempt. Returns `null` immediately if the lock is held.
+- `TryAcquireAsync(key, deadline)` polls until the deadline and returns `null` on expiry instead of throwing. The poll delay is clamped to the time left so it cannot overshoot by a full retry interval.
+
+```csharp
+// Single attempt: null if already held.
+await using var first = await locker.TryAcquireAsync("order:42");
+if (first is null)
+{
+    return; // someone else holds it
+}
+
+// Bounded wait: poll for up to two seconds, then give up without throwing.
+await using var bounded = await locker.TryAcquireAsync("order:42", TimeSpan.FromSeconds(2));
+if (bounded is null)
+{
+    return; // could not acquire within the deadline
+}
+// critical section
+```
 
 ## Lease and renewal
 
@@ -120,23 +140,83 @@ await using (var write = await rwLock.AcquireExclusiveAsync("catalog:42"))
 
 Blocking `AcquireSharedAsync` / `AcquireExclusiveAsync` wait up to `WaitTimeout` and throw `LockAcquisitionTimeoutException` on timeout. The non-blocking `TryAcquireSharedAsync` / `TryAcquireExclusiveAsync` make a single attempt and return `null` when the key is held in a conflicting mode.
 
-As of v0.4.2, Redis is the first distributed backend for the reader-writer lock. `UseRedisSharedExclusive()` registers `ISharedExclusiveLock` over Redis, additive to the exclusive-only `UseRedis()`:
+`TryAcquireSharedAsync` / `TryAcquireExclusiveAsync` also take an optional deadline, the reader-writer counterpart of `TryAcquireAsync(key, deadline)`: they poll until the deadline and return `null` on expiry instead of throwing.
+
+```csharp
+await using var write = await rwLock.TryAcquireExclusiveAsync("catalog:42", TimeSpan.FromSeconds(2));
+if (write is null)
+{
+    return; // readers (or another writer) did not drain within the deadline
+}
+```
+
+The reader-writer lock runs distributed on Redis, PostgreSQL, and any EF Core relational provider. Each registration is additive to the exclusive-only registration of the same backend:
 
 ```csharp
 services.AddOrionLock()
     .UseRedis("localhost:6379")        // exclusive IDistributedLock
-    .UseRedisSharedExclusive();        // reader-writer ISharedExclusiveLock
+    .UseRedisSharedExclusive();        // reader-writer ISharedExclusiveLock over Redis
+
+// or PostgreSQL:
+services.AddOrionLock()
+    .UsePostgres(connectionString)
+    .UsePostgresSharedExclusive(connectionString);
+
+// or any EF Core relational provider (SQL Server, PostgreSQL, and so on):
+services.AddOrionLock()
+    .UseEntityFrameworkCore<AppDbContext>()
+    .UseEntityFrameworkCoreSharedExclusive<AppDbContext>();
 ```
 
-The Redis provider keeps a Lua-scripted writer marker, a per-reader sorted set scored by lease expiry (so one reader's expiry never frees another's), and a lease-bounded pending-writer marker that holds off new readers so a waiting writer is not starved. See the `OrionLock.Redis` backend note below. The other distributed backends (EntityFrameworkCore, Postgres, SqlServer, Consul, Etcd, ZooKeeper) keep the exclusive lock only; the relational reader-writer provider is the next milestone. See the runnable section in `demo/Moongazing.OrionLock.Demo`.
+Every distributed reader-writer provider keeps a writer marker, a per-reader record scored or stamped by lease expiry (so one reader's expiry never frees another's), and a lease-bounded pending-writer marker that holds off new readers so a waiting writer is not starved. The Redis provider does this with Lua scripts and a sorted set; the PostgreSQL provider with clock-leased rows serialized by `pg_advisory_xact_lock`; the EF Core provider with clock-leased rows in a serializable transaction. The remaining backends (SqlServer's `sp_getapplock`, Consul, Etcd, ZooKeeper) keep the exclusive lock only. See the runnable section in `demo/Moongazing.OrionLock.Demo`.
+
+## Choosing a backend
+
+All backends implement the same `IDistributedLock`, so application code never changes when you switch; only the registration does. Pick the in-memory backend for tests, then a distributed backend for production.
+
+```csharp
+using Microsoft.Extensions.DependencyInjection;
+using Moongazing.OrionLock;
+
+// In-memory (tests, single process) - no Redis or DB required.
+services.AddOrionLock().UseInMemory();                          // OrionLock.Testing
+
+// Redis - SET NX PX acquire, clock-leased, owner-checked Lua release.
+services.AddOrionLock().UseRedis("localhost:6379");             // OrionLock.Redis
+
+// PostgreSQL - native pg_try_advisory_lock, session-scoped, crash-safe.
+services.AddOrionLock().UsePostgres(connectionString);          // OrionLock.Postgres
+
+// Resolve and use the same way regardless of backend:
+var locker = serviceProvider.GetRequiredService<IDistributedLock>();
+await using var handle = await locker.AcquireAsync(
+    "order:42",
+    new DistributedLockOptions { LeaseDuration = TimeSpan.FromSeconds(30) });
+// critical section
+```
 
 ## Backends
 
-- **`OrionLock.Redis`** — `SET NX PX` acquire, owner-checked Lua renew/release. Single Redis endpoint (single-instance lock; multi-master RedLock is post-0.1). As of v0.4.2 also ships the distributed reader-writer lock (`UseRedisSharedExclusive()`): a Lua-scripted writer marker plus a per-reader sorted set scored by lease expiry, with a lease-bounded pending-writer marker for writer fairness.
-- **`OrionLock.EntityFrameworkCore`** — provider-agnostic `OrionLock_Locks` table; PostgreSQL, SQL Server, MySQL, SQLite. See [docs/migrations/orionlock-locks-table.md](docs/migrations/orionlock-locks-table.md).
+- **`OrionLock.Redis`** — `SET NX PX` acquire, owner-checked Lua renew/release. Single Redis endpoint (single-instance lock; multi-master RedLock is a separate opt-in). Also ships the distributed reader-writer lock (`UseRedisSharedExclusive()`): a Lua-scripted writer marker plus a per-reader sorted set scored by lease expiry, with a lease-bounded pending-writer marker for writer fairness.
+- **`OrionLock.EntityFrameworkCore`** — provider-agnostic `OrionLock_Locks` table; PostgreSQL, SQL Server, MySQL, SQLite. Also ships the provider-portable reader-writer lock (`UseEntityFrameworkCoreSharedExclusive<TDbContext>()`) over clock-leased rows in a serializable transaction. See [docs/migrations/orionlock-locks-table.md](docs/migrations/orionlock-locks-table.md).
 - **`OrionLock.SqlServer`** — native `sp_getapplock` with session-scope lifetime. Crash-safe (no clock-based expiry; SQL Server releases the lock when the session ends) and faster than the EF Core lock table on SQL Server.
-- **`OrionLock.Postgres`** — native `pg_try_advisory_lock` with session-scope lifetime. Crash-safe with the same rationale as SqlServer.
+- **`OrionLock.Postgres`** — native `pg_try_advisory_lock` with session-scope lifetime, crash-safe with the same rationale as SqlServer. Also ships the distributed reader-writer lock (`UsePostgresSharedExclusive()`) over clock-leased rows serialized by `pg_advisory_xact_lock`.
 - **`OrionLock.Testing`** — in-memory provider for tests, no Redis or DB required.
+
+## Trimming and Native AOT
+
+OrionLock's own surface uses no dynamic code generation; the only reflection in the core reads assembly and attribute metadata for telemetry, which is trimmer- and AOT-safe. The posture below reflects what each package's dependencies allow.
+
+| Package | Trimmable / AOT-compatible | Notes |
+| --- | --- | --- |
+| `OrionLock` (core) | Yes | `IsTrimmable` and `IsAotCompatible` set; built clean with the trim and AOT analyzers. |
+| `OrionLock.Testing` | Yes | In-memory provider only; `IsTrimmable` and `IsAotCompatible` set. |
+| `OrionLock.Redis` | Not claimed | Depends on `StackExchange.Redis`, which is not annotated AOT-safe. |
+| `OrionLock.EntityFrameworkCore` | Not claimed | EF Core model building uses dynamic code; not Native AOT compatible. |
+| `OrionLock.SqlServer` | Not claimed | Depends on `Microsoft.Data.SqlClient`, which is not annotated AOT-safe. |
+| `OrionLock.Postgres` | Not claimed | Depends on the `Npgsql` driver; not claimed AOT-safe at this time. |
+
+For a Native AOT or aggressively trimmed application, reference the core and (in tests) the Testing package directly; the database and Redis backends carry their drivers' trimming posture, so build them with the trim warnings on and validate against your own configuration.
 
 ## Health checks
 
@@ -152,7 +232,7 @@ See [benchmarks.md](benchmarks.md) for the BenchmarkDotNet harness in `bench/Moo
 
 ## Roadmap
 
-The current release is 0.4.2, which adds the first distributed reader-writer provider (Redis) on top of the v0.4.0 shared/exclusive core and in-memory backend. Forward plan in [ROADMAP.md](ROADMAP.md): v0.4.3 the relational (EF Core / Postgres) reader-writer provider, v0.5.0 (Q4 2026) fairness and coordination primitives, v1.0.0 (Q2 2027) API freeze. If something on the list matters to you, open an issue with the `roadmap` label.
+The current release is **1.0.0**: the public API is frozen for the 1.x line. `IDistributedLock`, `IDistributedLockHandle`, `DistributedLockOptions`, the provider primitive interfaces (`IDistributedLockProvider`, `ISharedExclusiveLockProvider`), `ISharedExclusiveLock` / `LockMode`, and the bundled backends (Redis, EF Core, SqlServer, Postgres, Testing) are stable; future changes are additions only, guarded by `Microsoft.CodeAnalysis.PublicApiAnalyzers` and per-project `PublicAPI.Shipped.txt` baselines. Forward plan in [ROADMAP.md](ROADMAP.md): fair queueing beyond opt-in FIFO and a distributed counter/sequence primitive. If something on the list matters to you, open an issue with the `roadmap` label.
 
 ## More from the Orion family
 

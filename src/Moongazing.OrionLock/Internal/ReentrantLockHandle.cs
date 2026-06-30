@@ -5,7 +5,7 @@ namespace Moongazing.OrionLock.Internal;
 /// <see cref="DisposeAsync"/> decrements the reentrancy count; the real backend handle is
 /// disposed only when the outermost handle is disposed.
 /// </summary>
-public sealed class ReentrantLockHandle : IDistributedLockHandle
+internal sealed class ReentrantLockHandle : IDistributedLockHandle
 {
     private readonly ReentrancyRegistry registry;
     private readonly IDistributedLockHandle realHandle;

@@ -1,0 +1,16 @@
+#nullable enable
+Moongazing.OrionLock.SqlServer.OrionLockSqlServerBuilderExtensions
+Moongazing.OrionLock.SqlServer.SqlServerLockOptions
+Moongazing.OrionLock.SqlServer.SqlServerLockOptions.CommandTimeout.get -> System.TimeSpan
+Moongazing.OrionLock.SqlServer.SqlServerLockOptions.CommandTimeout.set -> void
+Moongazing.OrionLock.SqlServer.SqlServerLockOptions.KeyPrefix.get -> string!
+Moongazing.OrionLock.SqlServer.SqlServerLockOptions.KeyPrefix.set -> void
+Moongazing.OrionLock.SqlServer.SqlServerLockOptions.SqlServerLockOptions() -> void
+Moongazing.OrionLock.SqlServer.SqlServerLockProvider
+Moongazing.OrionLock.SqlServer.SqlServerLockProvider.Dispose() -> void
+Moongazing.OrionLock.SqlServer.SqlServerLockProvider.LeaseDurationIsTtl.get -> bool
+Moongazing.OrionLock.SqlServer.SqlServerLockProvider.ReleaseAsync(string! key, string! ownerToken, System.Threading.CancellationToken cancellationToken) -> System.Threading.Tasks.Task!
+Moongazing.OrionLock.SqlServer.SqlServerLockProvider.SqlServerLockProvider(string! connectionString, Moongazing.OrionLock.SqlServer.SqlServerLockOptions! options) -> void
+Moongazing.OrionLock.SqlServer.SqlServerLockProvider.TryAcquireAsync(string! key, string! ownerToken, System.TimeSpan leaseDuration, System.Threading.CancellationToken cancellationToken) -> System.Threading.Tasks.Task<bool>!
+Moongazing.OrionLock.SqlServer.SqlServerLockProvider.TryRenewAsync(string! key, string! ownerToken, System.TimeSpan leaseDuration, System.Threading.CancellationToken cancellationToken) -> System.Threading.Tasks.Task<bool>!
+static Moongazing.OrionLock.SqlServer.OrionLockSqlServerBuilderExtensions.UseSqlServer(this Moongazing.OrionLock.DependencyInjection.OrionLockBuilder! builder, string! connectionString, System.Action<Moongazing.OrionLock.SqlServer.SqlServerLockOptions!>? configure = null) -> Moongazing.OrionLock.DependencyInjection.OrionLockBuilder!

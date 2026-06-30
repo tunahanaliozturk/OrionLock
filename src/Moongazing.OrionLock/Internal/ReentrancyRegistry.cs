@@ -8,7 +8,7 @@ namespace Moongazing.OrionLock.Internal;
 /// re-acquisition of the same key collapses into a counted nested handle instead of a second
 /// backend call. Process-local by design — reentrancy must not cross process boundaries.
 /// </summary>
-public sealed class ReentrancyRegistry
+internal sealed class ReentrancyRegistry
 {
     private sealed class Entry
     {

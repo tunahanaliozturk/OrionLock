@@ -8,7 +8,7 @@ namespace Moongazing.OrionLock.Internal;
 /// <c>LeaseDuration / 3</c> intervals; on renewal failure it flips <see cref="IsHeld"/> and
 /// trips <see cref="LostToken"/>. Disposing stops the watchdog and releases the lock.
 /// </summary>
-public sealed class DistributedLockHandle : IDistributedLockHandle
+internal sealed class DistributedLockHandle : IDistributedLockHandle
 {
     private readonly IDistributedLockProvider provider;
     private readonly string ownerToken;
