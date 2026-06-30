@@ -6,7 +6,7 @@ Redis backend for [OrionLock](https://www.nuget.org/packages/OrionLock). `SET NX
 services.AddOrionLock().UseRedis("localhost:6379");
 ```
 
-As of v0.4.2 this package also ships the distributed reader-writer (shared/exclusive) lock. `UseRedisSharedExclusive()` registers `ISharedExclusiveLock` over Redis, additive to `UseRedis()`:
+This package also ships the distributed reader-writer (shared/exclusive) lock. `UseRedisSharedExclusive()` registers `ISharedExclusiveLock` over Redis, additive to `UseRedis()`:
 
 ```csharp
 services.AddOrionLock()

@@ -1,0 +1,13 @@
+#nullable enable
+Moongazing.OrionLock.Testing.InMemoryLockProvider
+Moongazing.OrionLock.Testing.InMemoryLockProvider.InMemoryLockProvider() -> void
+Moongazing.OrionLock.Testing.InMemoryLockProvider.ReleaseAsync(string! key, string! ownerToken, System.Threading.CancellationToken cancellationToken) -> System.Threading.Tasks.Task!
+Moongazing.OrionLock.Testing.InMemoryLockProvider.TryAcquireAsync(string! key, string! ownerToken, System.TimeSpan leaseDuration, System.Threading.CancellationToken cancellationToken) -> System.Threading.Tasks.Task<bool>!
+Moongazing.OrionLock.Testing.InMemoryLockProvider.TryRenewAsync(string! key, string! ownerToken, System.TimeSpan leaseDuration, System.Threading.CancellationToken cancellationToken) -> System.Threading.Tasks.Task<bool>!
+Moongazing.OrionLock.Testing.InMemorySharedExclusiveLockProvider
+Moongazing.OrionLock.Testing.InMemorySharedExclusiveLockProvider.InMemorySharedExclusiveLockProvider() -> void
+Moongazing.OrionLock.Testing.InMemorySharedExclusiveLockProvider.ReleaseAsync(string! key, string! ownerToken, Moongazing.OrionLock.LockMode mode, System.Threading.CancellationToken cancellationToken) -> System.Threading.Tasks.Task!
+Moongazing.OrionLock.Testing.InMemorySharedExclusiveLockProvider.TryAcquireAsync(string! key, string! ownerToken, Moongazing.OrionLock.LockMode mode, System.TimeSpan leaseDuration, System.Threading.CancellationToken cancellationToken) -> System.Threading.Tasks.Task<bool>!
+Moongazing.OrionLock.Testing.InMemorySharedExclusiveLockProvider.TryRenewAsync(string! key, string! ownerToken, Moongazing.OrionLock.LockMode mode, System.TimeSpan leaseDuration, System.Threading.CancellationToken cancellationToken) -> System.Threading.Tasks.Task<bool>!
+Moongazing.OrionLock.Testing.OrionLockTestingBuilderExtensions
+static Moongazing.OrionLock.Testing.OrionLockTestingBuilderExtensions.UseInMemory(this Moongazing.OrionLock.DependencyInjection.OrionLockBuilder! builder) -> Moongazing.OrionLock.DependencyInjection.OrionLockBuilder!

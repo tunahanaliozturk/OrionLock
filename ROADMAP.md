@@ -4,15 +4,17 @@ This document lists what is shipped, what is actively planned, and what we are d
 *not* building. It is a planning artifact, not a contract — dates slip, priorities reshuffle.
 If an item here matters to you, open a GitHub issue so we can weigh it against everything else.
 
-**Current release: 0.6.0.** Reader-writer (shared/exclusive) locking shipped for the in-memory
+**Current release: 1.0.0.** Reader-writer (shared/exclusive) locking shipped for the in-memory
 backend in 0.4.0; 0.4.1 trimmed an allocation on the acquire hot path and made the diagnostics
 meter version self-deriving; 0.4.2 shipped the first *distributed* reader-writer provider, backed by
 Redis; 0.5.0 added the PostgreSQL distributed reader-writer provider plus a
-`TryAcquireAsync`-with-deadline ergonomics surface on the reader-writer lock; 0.6.0 adds the
+`TryAcquireAsync`-with-deadline ergonomics surface on the reader-writer lock; 0.6.0 added the
 *provider-portable* EF Core distributed reader-writer provider (works on SQL Server, PostgreSQL, and
 any other relational EF Core provider) and the matching `TryAcquireAsync`-with-deadline overload on
-the exclusive lock. The next milestone is folding the FIFO coordinator into the reader-writer path for
-fair ordering beyond the best-effort starvation marker.
+the exclusive lock. 1.0.0 is the stabilization milestone: it freezes the public API surface with the
+`PublicApiAnalyzers` baselines, audits the family for trimming / Native AOT, and ships runnable docs,
+all without changing runtime behavior. The next milestone is folding the FIFO coordinator into the
+reader-writer path for fair ordering beyond the best-effort starvation marker.
 
 ## Status legend
 
@@ -331,20 +333,27 @@ Cross-cutting work that lands incrementally rather than in one milestone.
 
 ---
 
-## v1.0.0 — Stable API *(planned, Q2 2027)*
+## v1.0.0 — Stable API *(shipped 2026-06-30)*
 
 The 1.0 release is a commitment: we stop changing public types and method signatures inside
-the 1.x line. Anything obsolete by then is removed; everything that remains is stable.
+the 1.x line. It is a stabilization milestone, not a feature release: no runtime behavior changed
+and no existing public API broke. The public surface is captured as-is and frozen.
 
-- **API stability** — `IDistributedLock`, `IDistributedLockHandle`, `DistributedLockOptions`, the
-  provider primitive interfaces (`IDistributedLockProvider`, `ISharedExclusiveLockProvider`),
-  `ISharedExclusiveLock` / `LockMode`, and the bundled backends (Redis, EF Core, SqlServer,
-  Postgres, Consul, Etcd, ZooKeeper, Testing) freeze. Additions only.
-- **Documentation pass** — every public type has a runnable example. Lease/renewal pitfalls
-  documented exhaustively. Migration guide from any breaking change introduced in 0.x.
-- **AOT readiness audit** — every reflection path annotated; trimmer-safe by default.
-- **`OrionLock.Testing` polish** — deterministic-lease test helpers, scenario builders for
-  contention and lease loss, including the reader-writer modes.
+- **API freeze** — `Microsoft.CodeAnalysis.PublicApiAnalyzers` added to the six packable projects
+  (`OrionLock`, `OrionLock.Redis`, `OrionLock.EntityFrameworkCore`, `OrionLock.SqlServer`,
+  `OrionLock.Postgres`, `OrionLock.Testing`), each with a `PublicAPI.Shipped.txt` baseline and an
+  empty `PublicAPI.Unshipped.txt` wired as `AdditionalFiles`. With `TreatWarningsAsErrors` on, any
+  public-surface change now fails the build (RS0016 / RS0017) until the baselines are edited
+  deliberately. `IDistributedLock`, `IDistributedLockHandle`, `DistributedLockOptions`, the provider
+  primitive interfaces (`IDistributedLockProvider`, `ISharedExclusiveLockProvider`),
+  `ISharedExclusiveLock` / `LockMode`, and the bundled backends are frozen. Additions only.
+- **Documentation pass** — runnable, copy-pasteable examples for the main scenarios (exclusive
+  acquire/release, reader-writer with readers and a writer, `TryAcquireAsync` with a deadline,
+  choosing a backend), plus the per-package trimming/AOT posture.
+- **AOT readiness audit** — `OrionLock` (core) and `OrionLock.Testing` marked `IsTrimmable` and
+  `IsAotCompatible`, built clean with the trim and AOT analyzers; the only core reflection
+  (assembly/attribute metadata for telemetry) is AOT-safe. The database and Redis backends are
+  documented as not claimed AOT-safe because of their drivers' trimming posture.
 
 ---
 

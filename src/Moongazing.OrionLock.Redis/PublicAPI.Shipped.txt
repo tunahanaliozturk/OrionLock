@@ -1,0 +1,42 @@
+#nullable enable
+Moongazing.OrionLock.Redis.OrionLockRedisBuilderExtensions
+Moongazing.OrionLock.Redis.RedisFifoWaiterCoordinator
+Moongazing.OrionLock.Redis.RedisFifoWaiterCoordinator.EnterAsync(string! key, System.Threading.CancellationToken cancellationToken) -> System.Threading.Tasks.Task<Moongazing.OrionLock.Fairness.IFifoWaiterTicket!>!
+Moongazing.OrionLock.Redis.RedisFifoWaiterCoordinator.LeaveAsync(Moongazing.OrionLock.Fairness.IFifoWaiterTicket! ticket, System.Threading.CancellationToken cancellationToken) -> System.Threading.Tasks.Task!
+Moongazing.OrionLock.Redis.RedisFifoWaiterCoordinator.RedisFifoWaiterCoordinator(StackExchange.Redis.IConnectionMultiplexer! connection, Moongazing.OrionLock.Redis.RedisFifoWaiterOptions? options = null, System.TimeProvider? clock = null) -> void
+Moongazing.OrionLock.Redis.RedisFifoWaiterOptions
+Moongazing.OrionLock.Redis.RedisFifoWaiterOptions.Database.get -> int
+Moongazing.OrionLock.Redis.RedisFifoWaiterOptions.Database.set -> void
+Moongazing.OrionLock.Redis.RedisFifoWaiterOptions.KeyPrefix.get -> string!
+Moongazing.OrionLock.Redis.RedisFifoWaiterOptions.KeyPrefix.set -> void
+Moongazing.OrionLock.Redis.RedisFifoWaiterOptions.PollInterval.get -> System.TimeSpan
+Moongazing.OrionLock.Redis.RedisFifoWaiterOptions.PollInterval.set -> void
+Moongazing.OrionLock.Redis.RedisFifoWaiterOptions.RedisFifoWaiterOptions() -> void
+Moongazing.OrionLock.Redis.RedisFifoWaiterOptions.WaiterTtl.get -> System.TimeSpan
+Moongazing.OrionLock.Redis.RedisFifoWaiterOptions.WaiterTtl.set -> void
+Moongazing.OrionLock.Redis.RedisLockOptions
+Moongazing.OrionLock.Redis.RedisLockOptions.Database.get -> int
+Moongazing.OrionLock.Redis.RedisLockOptions.Database.set -> void
+Moongazing.OrionLock.Redis.RedisLockOptions.KeyPrefix.get -> string!
+Moongazing.OrionLock.Redis.RedisLockOptions.KeyPrefix.set -> void
+Moongazing.OrionLock.Redis.RedisLockOptions.RedisLockOptions() -> void
+Moongazing.OrionLock.Redis.RedisLockProvider
+Moongazing.OrionLock.Redis.RedisLockProvider.RedisLockProvider(StackExchange.Redis.IConnectionMultiplexer! multiplexer, Moongazing.OrionLock.Redis.RedisLockOptions! options) -> void
+Moongazing.OrionLock.Redis.RedisLockProvider.ReleaseAsync(string! key, string! ownerToken, System.Threading.CancellationToken cancellationToken) -> System.Threading.Tasks.Task!
+Moongazing.OrionLock.Redis.RedisLockProvider.TryAcquireAsync(string! key, string! ownerToken, System.TimeSpan leaseDuration, System.Threading.CancellationToken cancellationToken) -> System.Threading.Tasks.Task<bool>!
+Moongazing.OrionLock.Redis.RedisLockProvider.TryRenewAsync(string! key, string! ownerToken, System.TimeSpan leaseDuration, System.Threading.CancellationToken cancellationToken) -> System.Threading.Tasks.Task<bool>!
+Moongazing.OrionLock.Redis.RedisSharedExclusiveLockOptions
+Moongazing.OrionLock.Redis.RedisSharedExclusiveLockOptions.Database.get -> int
+Moongazing.OrionLock.Redis.RedisSharedExclusiveLockOptions.Database.set -> void
+Moongazing.OrionLock.Redis.RedisSharedExclusiveLockOptions.KeyPrefix.get -> string!
+Moongazing.OrionLock.Redis.RedisSharedExclusiveLockOptions.KeyPrefix.set -> void
+Moongazing.OrionLock.Redis.RedisSharedExclusiveLockOptions.RedisSharedExclusiveLockOptions() -> void
+Moongazing.OrionLock.Redis.RedisSharedExclusiveLockProvider
+Moongazing.OrionLock.Redis.RedisSharedExclusiveLockProvider.RedisSharedExclusiveLockProvider(StackExchange.Redis.IConnectionMultiplexer! multiplexer, Moongazing.OrionLock.Redis.RedisSharedExclusiveLockOptions! options) -> void
+Moongazing.OrionLock.Redis.RedisSharedExclusiveLockProvider.ReleaseAsync(string! key, string! ownerToken, Moongazing.OrionLock.LockMode mode, System.Threading.CancellationToken cancellationToken) -> System.Threading.Tasks.Task!
+Moongazing.OrionLock.Redis.RedisSharedExclusiveLockProvider.TryAcquireAsync(string! key, string! ownerToken, Moongazing.OrionLock.LockMode mode, System.TimeSpan leaseDuration, System.Threading.CancellationToken cancellationToken) -> System.Threading.Tasks.Task<bool>!
+Moongazing.OrionLock.Redis.RedisSharedExclusiveLockProvider.TryRenewAsync(string! key, string! ownerToken, Moongazing.OrionLock.LockMode mode, System.TimeSpan leaseDuration, System.Threading.CancellationToken cancellationToken) -> System.Threading.Tasks.Task<bool>!
+static Moongazing.OrionLock.Redis.OrionLockRedisBuilderExtensions.UseRedis(this Moongazing.OrionLock.DependencyInjection.OrionLockBuilder! builder, System.Action<Moongazing.OrionLock.Redis.RedisLockOptions!>? configure = null) -> Moongazing.OrionLock.DependencyInjection.OrionLockBuilder!
+static Moongazing.OrionLock.Redis.OrionLockRedisBuilderExtensions.UseRedis(this Moongazing.OrionLock.DependencyInjection.OrionLockBuilder! builder, string! connectionString, System.Action<Moongazing.OrionLock.Redis.RedisLockOptions!>? configure = null) -> Moongazing.OrionLock.DependencyInjection.OrionLockBuilder!
+static Moongazing.OrionLock.Redis.OrionLockRedisBuilderExtensions.UseRedisFifoWaiterCoordinator(this Moongazing.OrionLock.DependencyInjection.OrionLockBuilder! builder, System.Action<Moongazing.OrionLock.Redis.RedisFifoWaiterOptions!>? configure = null) -> Moongazing.OrionLock.DependencyInjection.OrionLockBuilder!
+static Moongazing.OrionLock.Redis.OrionLockRedisBuilderExtensions.UseRedisSharedExclusive(this Moongazing.OrionLock.DependencyInjection.OrionLockBuilder! builder, System.Action<Moongazing.OrionLock.Redis.RedisSharedExclusiveLockOptions!>? configure = null) -> Moongazing.OrionLock.DependencyInjection.OrionLockBuilder!

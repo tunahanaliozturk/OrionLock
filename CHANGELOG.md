@@ -4,6 +4,56 @@ All notable changes to OrionLock are documented in this file. The format is base
 [Keep a Changelog](https://keepachangelog.com/en/1.0.0/) and this project adheres to
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.0.0] - 2026-06-30
+
+The 1.0 release is a stabilization and finalization milestone, not a feature release. It changes
+no runtime behavior and breaks no existing public API: it commits to the current public surface
+and hardens it. Everything that was callable in 0.6.0 is callable in 1.0.0 with identical
+semantics; from here, public-surface changes inside the 1.x line are additions only.
+
+### Public API freeze
+
+- Added `Microsoft.CodeAnalysis.PublicApiAnalyzers` to each of the six packable projects
+  (`OrionLock`, `OrionLock.Redis`, `OrionLock.EntityFrameworkCore`, `OrionLock.SqlServer`,
+  `OrionLock.Postgres`, `OrionLock.Testing`), with a `PublicAPI.Shipped.txt` baseline that
+  captures the current public surface of each and an empty `PublicAPI.Unshipped.txt`, both wired
+  as `AdditionalFiles`. The surface was captured as-is, with no changes made to make it pass.
+- This makes the surface a build-enforced contract: with `TreatWarningsAsErrors` on, any future
+  public-surface addition, change, or removal fails the build (RS0016 / RS0017) until the
+  `PublicAPI.*.txt` files are edited deliberately. The `.txt` baselines are the API-stability
+  guard for the 1.x line.
+- The frozen contract spans `IDistributedLock`, `IDistributedLockHandle`, `DistributedLockOptions`,
+  the provider primitive interfaces (`IDistributedLockProvider`, `ISharedExclusiveLockProvider`),
+  `ISharedExclusiveLock` / `LockMode`, the FIFO coordination contracts, the diagnostics surface,
+  and the bundled backends' DI helpers.
+
+### Trimming and Native AOT audit
+
+- `OrionLock` (core) and `OrionLock.Testing` are now marked `IsTrimmable` and `IsAotCompatible`
+  and build clean with the trim and AOT analyzers enabled under `TreatWarningsAsErrors`. The core
+  uses no dynamic code generation; its only reflection reads assembly and attribute metadata for
+  telemetry (`MeterVersion`, `BackendNameResolver`), which is trimmer- and AOT-safe and needs no
+  suppression.
+- The database and Redis backends (`OrionLock.Redis`, `OrionLock.EntityFrameworkCore`,
+  `OrionLock.SqlServer`, `OrionLock.Postgres`) are documented as not claimed AOT-safe, because they
+  depend on drivers (`StackExchange.Redis`, EF Core's dynamic model building,
+  `Microsoft.Data.SqlClient`, `Npgsql`) whose own trimming posture OrionLock cannot assert. The
+  per-package AOT posture is documented in the README.
+
+### Documentation
+
+- README pass with runnable, copy-pasteable examples for the main scenarios: acquire/release of an
+  exclusive lock, a reader-writer lock with readers and a writer, `TryAcquireAsync` with a deadline
+  (exclusive and reader-writer), and choosing a backend (in-memory, Redis, PostgreSQL). The
+  distributed reader-writer matrix (Redis, PostgreSQL, EF Core) and the per-package trimming/AOT
+  posture are documented. Stale version references were refreshed to the frozen 1.x surface.
+
+### Notes
+
+No behavioral, locking, lease, renewal, fairness, or wire-format changes ship in 1.0.0. The full
+existing test suite passes unchanged; the `PublicAPI.Shipped.txt` baselines are the new
+build-time guard against accidental surface drift.
+
 ## [0.6.0] - 2026-06-27
 
 ### Added

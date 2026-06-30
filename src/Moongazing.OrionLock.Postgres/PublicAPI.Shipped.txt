@@ -1,0 +1,33 @@
+#nullable enable
+Moongazing.OrionLock.Postgres.OrionLockPostgresBuilderExtensions
+Moongazing.OrionLock.Postgres.PostgresLockOptions
+Moongazing.OrionLock.Postgres.PostgresLockOptions.CommandTimeout.get -> System.TimeSpan
+Moongazing.OrionLock.Postgres.PostgresLockOptions.CommandTimeout.set -> void
+Moongazing.OrionLock.Postgres.PostgresLockOptions.KeyPrefix.get -> string!
+Moongazing.OrionLock.Postgres.PostgresLockOptions.KeyPrefix.set -> void
+Moongazing.OrionLock.Postgres.PostgresLockOptions.PostgresLockOptions() -> void
+Moongazing.OrionLock.Postgres.PostgresLockProvider
+Moongazing.OrionLock.Postgres.PostgresLockProvider.Dispose() -> void
+Moongazing.OrionLock.Postgres.PostgresLockProvider.LeaseDurationIsTtl.get -> bool
+Moongazing.OrionLock.Postgres.PostgresLockProvider.PostgresLockProvider(string! connectionString, Moongazing.OrionLock.Postgres.PostgresLockOptions! options) -> void
+Moongazing.OrionLock.Postgres.PostgresLockProvider.ReleaseAsync(string! key, string! ownerToken, System.Threading.CancellationToken cancellationToken) -> System.Threading.Tasks.Task!
+Moongazing.OrionLock.Postgres.PostgresLockProvider.TryAcquireAsync(string! key, string! ownerToken, System.TimeSpan leaseDuration, System.Threading.CancellationToken cancellationToken) -> System.Threading.Tasks.Task<bool>!
+Moongazing.OrionLock.Postgres.PostgresLockProvider.TryRenewAsync(string! key, string! ownerToken, System.TimeSpan leaseDuration, System.Threading.CancellationToken cancellationToken) -> System.Threading.Tasks.Task<bool>!
+Moongazing.OrionLock.Postgres.PostgresSharedExclusiveLockOptions
+Moongazing.OrionLock.Postgres.PostgresSharedExclusiveLockOptions.AutoCreateTable.get -> bool
+Moongazing.OrionLock.Postgres.PostgresSharedExclusiveLockOptions.AutoCreateTable.set -> void
+Moongazing.OrionLock.Postgres.PostgresSharedExclusiveLockOptions.CommandTimeout.get -> System.TimeSpan
+Moongazing.OrionLock.Postgres.PostgresSharedExclusiveLockOptions.CommandTimeout.set -> void
+Moongazing.OrionLock.Postgres.PostgresSharedExclusiveLockOptions.KeyPrefix.get -> string!
+Moongazing.OrionLock.Postgres.PostgresSharedExclusiveLockOptions.KeyPrefix.set -> void
+Moongazing.OrionLock.Postgres.PostgresSharedExclusiveLockOptions.PostgresSharedExclusiveLockOptions() -> void
+Moongazing.OrionLock.Postgres.PostgresSharedExclusiveLockOptions.TableName.get -> string!
+Moongazing.OrionLock.Postgres.PostgresSharedExclusiveLockOptions.TableName.set -> void
+Moongazing.OrionLock.Postgres.PostgresSharedExclusiveLockProvider
+Moongazing.OrionLock.Postgres.PostgresSharedExclusiveLockProvider.Dispose() -> void
+Moongazing.OrionLock.Postgres.PostgresSharedExclusiveLockProvider.PostgresSharedExclusiveLockProvider(string! connectionString, Moongazing.OrionLock.Postgres.PostgresSharedExclusiveLockOptions! options) -> void
+Moongazing.OrionLock.Postgres.PostgresSharedExclusiveLockProvider.ReleaseAsync(string! key, string! ownerToken, Moongazing.OrionLock.LockMode mode, System.Threading.CancellationToken cancellationToken) -> System.Threading.Tasks.Task!
+Moongazing.OrionLock.Postgres.PostgresSharedExclusiveLockProvider.TryAcquireAsync(string! key, string! ownerToken, Moongazing.OrionLock.LockMode mode, System.TimeSpan leaseDuration, System.Threading.CancellationToken cancellationToken) -> System.Threading.Tasks.Task<bool>!
+Moongazing.OrionLock.Postgres.PostgresSharedExclusiveLockProvider.TryRenewAsync(string! key, string! ownerToken, Moongazing.OrionLock.LockMode mode, System.TimeSpan leaseDuration, System.Threading.CancellationToken cancellationToken) -> System.Threading.Tasks.Task<bool>!
+static Moongazing.OrionLock.Postgres.OrionLockPostgresBuilderExtensions.UsePostgres(this Moongazing.OrionLock.DependencyInjection.OrionLockBuilder! builder, string! connectionString, System.Action<Moongazing.OrionLock.Postgres.PostgresLockOptions!>? configure = null) -> Moongazing.OrionLock.DependencyInjection.OrionLockBuilder!
+static Moongazing.OrionLock.Postgres.OrionLockPostgresBuilderExtensions.UsePostgresSharedExclusive(this Moongazing.OrionLock.DependencyInjection.OrionLockBuilder! builder, string! connectionString, System.Action<Moongazing.OrionLock.Postgres.PostgresSharedExclusiveLockOptions!>? configure = null) -> Moongazing.OrionLock.DependencyInjection.OrionLockBuilder!
