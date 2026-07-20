@@ -1,8 +1,24 @@
+<!-- markdownlint-disable MD024 -->
 # Changelog
 
 All notable changes to OrionLock are documented in this file. The format is based on
 [Keep a Changelog](https://keepachangelog.com/en/1.0.0/) and this project adheres to
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
+
+## [Unreleased]
+
+### Security
+
+- Pinned `SQLitePCLRaw.bundle_e_sqlite3` to `2.1.12` in
+  `Moongazing.OrionLock.EntityFrameworkCore.Tests` to resolve
+  [GHSA-2m69-gcr7-jv3q](https://github.com/advisories/GHSA-2m69-gcr7-jv3q) (High), a vulnerability
+  in the bundled SQLite native library. `Microsoft.EntityFrameworkCore.Sqlite` resolved
+  `SQLitePCLRaw.lib.e_sqlite3` `2.1.10` transitively; pinning the bundle lifts `core`,
+  `lib.e_sqlite3`, and `provider.e_sqlite3` to the patched `2.1.12` together.
+- This advisory reaches **test projects only**. SQLite is used solely as an in-test database for
+  the EF Core provider's test suite; no shipped OrionLock package references SQLitePCLRaw, either
+  directly or transitively. No released version of any OrionLock package is affected, and this
+  change alters no runtime behavior and no public API.
 
 ## [1.0.0] - 2026-06-30
 
