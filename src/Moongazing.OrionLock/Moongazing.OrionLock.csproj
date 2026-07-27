@@ -4,7 +4,6 @@
     <Description>Distributed locking for .NET. A backend-agnostic IDistributedLock with blocking acquire, reentrancy, and background lease auto-renewal. Backends ship separately (OrionLock.Redis, OrionLock.EntityFrameworkCore).</Description>
     <PackageTags>distributed-lock;redis;redlock;ef-core;locking;concurrency</PackageTags>
     <PackageReadmeFile>docs/README.md</PackageReadmeFile>
-    <PackageIcon>docs/logo.png</PackageIcon>
     <IsTrimmable>true</IsTrimmable>
     <IsAotCompatible>true</IsAotCompatible>
   </PropertyGroup>
@@ -27,6 +26,5 @@
   </ItemGroup>
   <ItemGroup>
     <None Include="docs/README.md" Pack="true" PackagePath="docs/" />
-    <None Include="docs/logo.png" Pack="true" PackagePath="docs/" />
   </ItemGroup>
 </Project>

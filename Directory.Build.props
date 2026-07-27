@@ -26,6 +26,16 @@
     <RepositoryType>git</RepositoryType>
     <PackageProjectUrl>https://github.com/tunahanaliozturk/OrionLock</PackageProjectUrl>
     <PackageLicenseExpression>MIT</PackageLicenseExpression>
-    <Version>1.0.0</Version>
+    <PackageIcon>icon.png</PackageIcon>
+    <Version>1.0.1</Version>
   </PropertyGroup>
+
+  <!--
+    Pack the package icon for every packable project from one place so sub-packages added later
+    inherit it automatically. Per-project READMEs (docs/README.md) stay per-project and are packed
+    by each csproj; only the icon is centralized here.
+  -->
+  <ItemGroup Condition="'$(IsPackable)' == 'true'">
+    <None Include="$(MSBuildThisFileDirectory)docs/icon.png" Pack="true" PackagePath="\" Visible="false" />
+  </ItemGroup>
 </Project>
