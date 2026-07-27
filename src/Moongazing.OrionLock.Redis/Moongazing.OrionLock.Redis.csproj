@@ -4,7 +4,6 @@
     <Description>Redis backend for OrionLock distributed locking.</Description>
     <PackageTags>distributed-lock;redis;redlock;orionlock</PackageTags>
     <PackageReadmeFile>docs/README.md</PackageReadmeFile>
-    <PackageIcon>docs/logo.png</PackageIcon>
   </PropertyGroup>
   <ItemGroup>
     <PackageReference Include="StackExchange.Redis" Version="2.8.16" />
@@ -15,7 +14,6 @@
   </ItemGroup>
   <ItemGroup>
     <None Include="docs/README.md" Pack="true" PackagePath="docs/" />
-    <None Include="docs/logo.png" Pack="true" PackagePath="docs/" />
   </ItemGroup>
   <ItemGroup>
     <PackageReference Include="Microsoft.CodeAnalysis.PublicApiAnalyzers" Version="3.11.0-beta1.24508.2">

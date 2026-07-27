@@ -7,6 +7,16 @@ All notable changes to OrionLock are documented in this file. The format is base
 
 ## [Unreleased]
 
+## [1.0.1] - 2026-07-27
+
+### Fixed
+
+- The package icon is now packed for every packable project from `Directory.Build.props`, so
+  sub-packages added later inherit it automatically. `OrionLock.Consul`, `OrionLock.Etcd`, and
+  `OrionLock.ZooKeeper` previously shipped with no icon because `PackageIcon` and the icon pack
+  item were declared per-csproj on only some projects. Per-project READMEs are unchanged; this is
+  a packaging-only fix with no runtime behavior or public API change.
+
 ### Security
 
 - Pinned `SQLitePCLRaw.bundle_e_sqlite3` to `2.1.12` in
