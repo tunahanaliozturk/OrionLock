@@ -1,0 +1,31 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(git -C \"C:\\\\Users\\\\Tunahan Ali Ozturk\\\\OneDrive - PEAKUP\\\\Desktop\\\\OrionLock\" show a499ffb --stat)",
+      "PowerShell($env:DOCKER_HOST; $env:TESTCONTAINERS_HOST_OVERRIDE; $env:DOCKER_CONTEXT)",
+      "PowerShell($env:DOCKER_HOST)",
+      "PowerShell($env:TESTCONTAINERS_HOST_OVERRIDE)",
+      "PowerShell($env:DOCKER_CONTEXT)",
+      "PowerShell(Start-Process \"C:\\\\Program Files\\\\Docker\\\\Docker\\\\Docker Desktop.exe\" -ErrorAction SilentlyContinue)",
+      "PowerShell(head -3)",
+      "Skill(code-review:code-review)",
+      "Skill(code-review:code-review:*)",
+      "Bash(git -C \"C:\\\\Users\\\\Tunahan Ali Ozturk\\\\OneDrive - PEAKUP\\\\Desktop\\\\OrionLock\" log --oneline -5)",
+      "Bash(grep -v \"^commit\\\\|^Author\\\\|^Date\\\\|^$\\\\|^    \")",
+      "Bash(New-Item -ItemType Directory -Force \"C:\\\\Users\\\\Tunahan Ali Ozturk\\\\OneDrive - PEAKUP\\\\Desktop\\\\OrionLock\\\\src\\\\Moongazing.OrionLock.SqlServer\\\\docs\")",
+      "Bash(Out-Null)",
+      "Bash(Write-Output \"Directory ready\")",
+      "PowerShell(New-Item -ItemType Directory -Force \"C:\\\\Users\\\\Tunahan Ali Ozturk\\\\OneDrive - PEAKUP\\\\Desktop\\\\OrionLock\\\\src\\\\Moongazing.OrionLock.SqlServer\\\\docs\")",
+      "PowerShell(dotnet pack \"C:\\\\Users\\\\Tunahan Ali Ozturk\\\\OneDrive - PEAKUP\\\\Desktop\\\\OrionLock\\\\src\\\\Moongazing.OrionLock.SqlServer\\\\Moongazing.OrionLock.SqlServer.csproj\" -c Release -o \"C:\\\\Users\\\\Tunahan Ali Ozturk\\\\OneDrive - PEAKUP\\\\Desktop\\\\OrionLock\\\\artifacts\\\\local-pack\" 2>&1)",
+      "Bash(Get-FileHash \"src\\\\Moongazing.OrionLock.SqlServer\\\\docs\\\\logo.png\" -Algorithm SHA256)",
+      "Bash(Select-Object Hash)",
+      "Bash(Get-FileHash \"src\\\\Moongazing.OrionLock.Redis\\\\docs\\\\logo.png\" -Algorithm SHA256)",
+      "PowerShell(cd \"C:\\\\Users\\\\Tunahan Ali Ozturk\\\\OneDrive - PEAKUP\\\\Desktop\\\\OrionLock\"; $sql = Get-FileHash \"src\\\\Moongazing.OrionLock.SqlServer\\\\docs\\\\logo.png\" -Algorithm SHA256; $redis = Get-FileHash \"src\\\\Moongazing.OrionLock.Redis\\\\docs\\\\logo.png\" -Algorithm SHA256; \"SqlServer logo SHA256: $\\($sql.Hash\\)\"; \"Redis logo SHA256:     $\\($redis.Hash\\)\"; \"Identical: $\\($sql.Hash -eq $redis.Hash\\)\"; \"SqlServer bytes: $\\(\\(Get-Item 'src\\\\Moongazing.OrionLock.SqlServer\\\\docs\\\\logo.png'\\).Length\\)\"; \"Redis bytes:     $\\(\\(Get-Item 'src\\\\Moongazing.OrionLock.Redis\\\\docs\\\\logo.png'\\).Length\\)\")",
+      "Bash(gh pr create --title 'feat\\(orionlock\\): SqlServer backend using sp_getapplock' --body ' *)",
+      "Bash(git update-ref *)",
+      "Bash(gh pr *)",
+      "Bash(curl -s \"https://api.nuget.org/v3-flatcontainer/orionlock.sqlserver/index.json\")",
+      "Bash(curl -s \"https://api.nuget.org/v3-flatcontainer/orionlock/index.json\")"
+    ]
+  }
+}
