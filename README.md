@@ -228,7 +228,7 @@ For a Native AOT or aggressively trimmed application, reference the core and (in
 
 ## Benchmarks
 
-See [benchmarks.md](benchmarks.md) for the BenchmarkDotNet harness in `bench/Moongazing.OrionLock.Benchmarks`, the scenarios it covers (uncontended in-memory acquire/release as the abstraction-cost floor, plus the Redis and Postgres backends), and the comparison baselines we report against.
+See [benchmarks.md](benchmarks.md) for the BenchmarkDotNet harness in `bench/Moongazing.OrionLock.Benchmarks`, the scenarios it covers (uncontended in-memory acquire/release as the abstraction-cost floor), and the comparison baselines we report against. The Redis and Postgres backends ship as packages but are exercised by the integration tests rather than the benchmark harness.
 
 ## Roadmap
 
