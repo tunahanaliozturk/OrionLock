@@ -28,11 +28,11 @@ All notable changes to OrionLock are documented in this file. The format is base
   - Histograms: `orion.lock.acquire.duration`, `orion.lock.acquire.latency`,
     `orion.lock.acquire.attempt_count`, `orion.lock.contention.duration`,
     `orion.lock.lease_renewal.duration`, `orion.lock.handle.holding_duration`,
-    `orion.lock.handle.renewals_per_hold`, `orion.lock.reentrancy.depth`,
-    `orion.lock.reentrancy.max_depth`, `orion.lock.fairness.queue_depth`,
-    `orion.lock.fairness.coordinator_enter_duration`,
-    `orion.lock.lease.renewal_failures_consecutive`, `orion.lock.leases.held_concurrent`.
-  - Gauge: `orion.lock.health.last_check_at_unix_seconds`.
+    `orion.lock.handle.renewals_per_hold`, `orion.lock.reentrancy.max_depth`,
+    `orion.lock.fairness.queue_depth`, `orion.lock.fairness.coordinator_enter_duration`,
+    `orion.lock.lease.renewal_failures_consecutive`.
+  - UpDownCounters: `orion.lock.reentrancy.depth`, `orion.lock.leases.held_concurrent`.
+  - Observable gauge: `orion.lock.health.last_check_at_unix_seconds`.
 
   OrionLock follows the naming convention by string (it does not reference `Orion.Abstractions`), so
   its dependency footprint is unchanged.

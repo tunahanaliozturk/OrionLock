@@ -102,7 +102,7 @@ public static class OrionLockDiagnostics
     /// v0.3.16 acquire-timeout counter. Increments each time
     /// <c>DistributedLock.AcquireAsync</c> throws <c>LockAcquisitionTimeoutException</c>
     /// because the contention loop exceeded <c>WaitTimeout</c>. Distinct from
-    /// <c>orionlock.contentions</c> which counts EVERY contended TryAcquireAsync miss
+    /// <c>orion.lock.contentions</c> which counts EVERY contended TryAcquireAsync miss
     /// even when the acquire eventually succeeds; this counter only fires when the
     /// caller gave up.
     /// </summary>
@@ -134,7 +134,7 @@ public static class OrionLockDiagnostics
 
     /// <summary>
     /// v0.3.23 cardinality-bucketed key hash for top-N hot-key analysis. Operators
-    /// query <c>topk(10, sum by (key_hash)(orionlock_acquire_timeout_total))</c> to find
+    /// query <c>topk(10, sum by (key_hash)(orion_lock_acquire_timeout_total))</c> to find
     /// the buckets producing the most timeouts without exploding metric cardinality
     /// on raw key strings (a multi-tenant deployment may have millions of unique
     /// keys). Uses 64 buckets so the cardinality stays bounded regardless of input
@@ -181,7 +181,7 @@ public static class OrionLockDiagnostics
     /// <summary>
     /// v0.3.17 reentrancy depth gauge: how many nested reentrant handles this process
     /// currently holds across all keys. Operators graph this alongside
-    /// <c>orionlock.leases.held_concurrent</c> to answer "are leases held with deep
+    /// <c>orion.lock.leases.held_concurrent</c> to answer "are leases held with deep
     /// re-entry (nested calls re-acquiring the same key)?" - a non-zero reentrancy
     /// gauge while held_concurrent is steady reveals nested-call patterns that would
     /// otherwise look like simple long holds.
@@ -317,7 +317,7 @@ public static class OrionLockDiagnostics
 
     /// <summary>
     /// v0.3.21 counter: lease expired before the caller disposed the handle. Distinct
-    /// from <c>orionlock.lease.lost</c> which fires on a confirmed backend-side loss
+    /// from <c>orion.lock.lease.lost</c> which fires on a confirmed backend-side loss
     /// (a renewal returning false). This counter fires when the handle's lease wall
     /// clock has elapsed before <c>DisposeAsync</c> ran — typically the caller held
     /// the handle longer than the configured lease (Application-layer slow-path) or
@@ -414,7 +414,7 @@ public static class OrionLockDiagnostics
     /// <summary>
     /// Number of leases the v0.3.10 fairness watchdog surrendered because the
     /// <see cref="DistributedLockOptions.RenewalFailureGracePeriod"/> elapsed without a
-    /// successful renewal. Distinct from <c>orionlock.lease.lost</c>, which counts ALL
+    /// successful renewal. Distinct from <c>orion.lock.lease.lost</c>, which counts ALL
     /// confirmed losses including provider-side "lease no longer exists" returns. This
     /// counter is the operational signal that a backend was unreachable long enough to
     /// trigger the fairness deadline.

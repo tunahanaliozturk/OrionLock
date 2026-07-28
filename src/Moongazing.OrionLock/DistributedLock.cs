@@ -121,7 +121,7 @@ public sealed class DistributedLock : IDistributedLock
         using var activity = OrionLockDiagnostics.ActivitySource.HasListeners()
             ? OrionLockDiagnostics.ActivitySource.StartActivity($"OrionLock.Acquire {key}")
             : null;
-        activity?.SetTag("orion.lock.key", key);
+        activity?.SetTag("orionlock.key", key);
 
         // v0.3.3: opt-in FIFO ordering. When enabled, the caller waits for its turn at the
         // head of the per-key queue BEFORE entering the polling-retry loop. LeaveAsync runs
@@ -148,7 +148,7 @@ public sealed class DistributedLock : IDistributedLock
                 var handle = await TryAcquireAsync(key, options, cancellationToken).ConfigureAwait(false);
                 if (handle is not null)
                 {
-                    activity?.SetTag("orion.lock.outcome", "acquired");
+                    activity?.SetTag("orionlock.outcome", "acquired");
                     OrionLockDiagnostics.RecordAcquisition();
                     OrionLockDiagnostics.RecordAcquireDuration(deadline.Elapsed.TotalMilliseconds);
                     // v0.3.22: per-acquire attempt count for retry-interval sizing.
@@ -173,7 +173,7 @@ public sealed class DistributedLock : IDistributedLock
 
                 if (deadline.Elapsed >= options.WaitTimeout)
                 {
-                    activity?.SetTag("orion.lock.outcome", "timeout");
+                    activity?.SetTag("orionlock.outcome", "timeout");
                     // v0.3.23: emit timeout with the hashed-bucket key tag so operators
                     // can use topk() to find the keys driving the most timeouts.
                     OrionLockDiagnostics.RecordAcquireTimeout(key);
@@ -191,7 +191,7 @@ public sealed class DistributedLock : IDistributedLock
             // v0.3.28: the caller abandoned the acquire (graceful shutdown / client gave up),
             // distinct from a WaitTimeout SLO breach. Count it separately so the timeout signal
             // stays clean for alerting, then let the cancellation propagate unchanged.
-            activity?.SetTag("orion.lock.outcome", "cancelled");
+            activity?.SetTag("orionlock.outcome", "cancelled");
             OrionLockDiagnostics.RecordAcquireCancelled();
             throw;
         }
