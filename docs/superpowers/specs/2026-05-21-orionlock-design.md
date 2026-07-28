@@ -236,8 +236,8 @@ Single Redis endpoint (or a single logical endpoint behind Sentinel/Cluster as `
 ## 10. OpenTelemetry / diagnostics
 
 - An `ActivitySource` named `Moongazing.OrionLock`. Each `AcquireAsync` / `TryAcquireAsync` opens a span tagged with the key, the outcome (`acquired` / `timeout` / `not-acquired`), and the wait elapsed. Acquisition is genuinely span-worthy (it can block and contend), unlike a trivial primitive.
-- A `Meter` named `Moongazing.OrionLock` with counters `orionlock.acquisitions`, `orionlock.contentions` (a try that found the lock held), `orionlock.lease.lost`, and a histogram `orionlock.acquire.duration`.
-- Lease-loss is surfaced through `IsHeld` / `LostToken` (§6.2) and the `orionlock.lease.lost` counter.
+- A `Meter` named `Moongazing.OrionLock` with counters `orion.lock.acquisitions`, `orion.lock.contentions` (a try that found the lock held), `orion.lock.lease.lost`, and a histogram `orion.lock.acquire.duration`.
+- Lease-loss is surfaced through `IsHeld` / `LostToken` (§6.2) and the `orion.lock.lease.lost` counter.
 
 ## 11. Versioning & repository
 

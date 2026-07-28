@@ -20,7 +20,7 @@ public sealed class AcquireAttemptCountTests
         listener.InstrumentPublished = (instrument, l) =>
         {
             if (instrument.Meter.Name == "Moongazing.OrionLock"
-                && instrument.Name == "orionlock.acquire.attempt_count")
+                && instrument.Name == "orion.lock.acquire.attempt_count")
             {
                 l.EnableMeasurementEvents(instrument);
             }
@@ -46,7 +46,7 @@ public sealed class AcquireAttemptCountTests
         listener.InstrumentPublished = (instrument, l) =>
         {
             if (instrument.Meter.Name == "Moongazing.OrionLock"
-                && instrument.Name == "orionlock.acquire.attempt_count")
+                && instrument.Name == "orion.lock.acquire.attempt_count")
             {
                 l.EnableMeasurementEvents(instrument);
             }

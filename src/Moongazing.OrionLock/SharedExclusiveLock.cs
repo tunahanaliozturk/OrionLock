@@ -127,8 +127,8 @@ public sealed class SharedExclusiveLock : ISharedExclusiveLock
         using var activity = OrionLockDiagnostics.ActivitySource.HasListeners()
             ? OrionLockDiagnostics.ActivitySource.StartActivity($"OrionLock.AcquireRW {key}")
             : null;
-        activity?.SetTag("orionlock.key", key);
-        activity?.SetTag("orionlock.mode", modeTag);
+        activity?.SetTag("orion.lock.key", key);
+        activity?.SetTag("orion.lock.mode", modeTag);
 
         try
         {
@@ -145,7 +145,7 @@ public sealed class SharedExclusiveLock : ISharedExclusiveLock
                 var handle = await TryAcquireAsync(key, ownerToken, mode, options, cancellationToken).ConfigureAwait(false);
                 if (handle is not null)
                 {
-                    activity?.SetTag("orionlock.outcome", "acquired");
+                    activity?.SetTag("orion.lock.outcome", "acquired");
                     OrionLockDiagnostics.RecordAcquisition();
                     OrionLockDiagnostics.RecordAcquireDuration(deadline.Elapsed.TotalMilliseconds);
                     if (contended)
@@ -161,7 +161,7 @@ public sealed class SharedExclusiveLock : ISharedExclusiveLock
                 var remaining = options.WaitTimeout - deadline.Elapsed;
                 if (remaining <= TimeSpan.Zero)
                 {
-                    activity?.SetTag("orionlock.outcome", "timeout");
+                    activity?.SetTag("orion.lock.outcome", "timeout");
                     OrionLockDiagnostics.RecordAcquireTimeout(key);
                     throw new LockAcquisitionTimeoutException(key, deadline.Elapsed);
                 }
@@ -174,7 +174,7 @@ public sealed class SharedExclusiveLock : ISharedExclusiveLock
         }
         catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
         {
-            activity?.SetTag("orionlock.outcome", "cancelled");
+            activity?.SetTag("orion.lock.outcome", "cancelled");
             OrionLockDiagnostics.RecordAcquireCancelled();
             throw;
         }

@@ -42,7 +42,7 @@ public class LeaseRenewalFailureTelemetryTests
             InstrumentPublished = (instrument, l) =>
             {
                 if (instrument.Meter.Name == OrionLockDiagnostics.MeterName
-                    && instrument.Name == "orionlock.lease_renewal.failures")
+                    && instrument.Name == "orion.lock.lease_renewal.failures")
                 {
                     l.EnableMeasurementEvents(instrument);
                 }
@@ -85,7 +85,7 @@ public class LeaseRenewalFailureTelemetryTests
             InstrumentPublished = (instrument, l) =>
             {
                 if (instrument.Meter.Name == OrionLockDiagnostics.MeterName
-                    && instrument.Name == "orionlock.lease_renewal.failures")
+                    && instrument.Name == "orion.lock.lease_renewal.failures")
                 {
                     l.EnableMeasurementEvents(instrument);
                 }
@@ -114,7 +114,7 @@ public class LeaseRenewalFailureTelemetryTests
             InstrumentPublished = (instrument, l) =>
             {
                 if (instrument.Meter.Name == OrionLockDiagnostics.MeterName
-                    && instrument.Name == "orionlock.lease_renewal.failures")
+                    && instrument.Name == "orion.lock.lease_renewal.failures")
                 {
                     l.EnableMeasurementEvents(instrument);
                 }

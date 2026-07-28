@@ -22,7 +22,7 @@ public sealed class ContentionDurationTests
         listener.InstrumentPublished = (instrument, l) =>
         {
             if (instrument.Meter.Name == "Moongazing.OrionLock"
-                && instrument.Name == "orionlock.contention.duration")
+                && instrument.Name == "orion.lock.contention.duration")
             {
                 l.EnableMeasurementEvents(instrument);
             }

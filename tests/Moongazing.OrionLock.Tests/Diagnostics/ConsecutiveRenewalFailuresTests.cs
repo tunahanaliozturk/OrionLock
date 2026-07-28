@@ -20,7 +20,7 @@ public sealed class ConsecutiveRenewalFailuresTests
         listener.InstrumentPublished = (instrument, l) =>
         {
             if (instrument.Meter.Name == "Moongazing.OrionLock"
-                && instrument.Name == "orionlock.lease.renewal_failures_consecutive")
+                && instrument.Name == "orion.lock.lease.renewal_failures_consecutive")
             {
                 l.EnableMeasurementEvents(instrument);
             }
@@ -44,7 +44,7 @@ public sealed class ConsecutiveRenewalFailuresTests
         listener.InstrumentPublished = (instrument, l) =>
         {
             if (instrument.Meter.Name == "Moongazing.OrionLock"
-                && instrument.Name == "orionlock.lease.renewal_failures_consecutive")
+                && instrument.Name == "orion.lock.lease.renewal_failures_consecutive")
             {
                 l.EnableMeasurementEvents(instrument);
             }

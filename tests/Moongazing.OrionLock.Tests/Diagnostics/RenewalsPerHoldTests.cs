@@ -15,7 +15,7 @@ public sealed class RenewalsPerHoldTestsCollection { }
 [Collection(nameof(RenewalsPerHoldTests))]
 public sealed class RenewalsPerHoldTests
 {
-    private const string InstrumentName = "orionlock.handle.renewals_per_hold";
+    private const string InstrumentName = "orion.lock.handle.renewals_per_hold";
 
     private static MeterListener StartListener(System.Collections.Generic.List<int> samples)
     {

@@ -19,7 +19,7 @@ public class TelemetryInstrumentsTests
             InstrumentPublished = (instrument, l) =>
             {
                 if (instrument.Meter.Name == OrionLockDiagnostics.MeterName
-                    && instrument.Name == "orionlock.acquire.latency")
+                    && instrument.Name == "orion.lock.acquire.latency")
                 {
                     l.EnableMeasurementEvents(instrument);
                 }
@@ -69,7 +69,7 @@ public class TelemetryInstrumentsTests
             InstrumentPublished = (instrument, l) =>
             {
                 if (instrument.Meter.Name == OrionLockDiagnostics.MeterName
-                    && instrument.Name == "orionlock.lease_renewal.duration")
+                    && instrument.Name == "orion.lock.lease_renewal.duration")
                 {
                     l.EnableMeasurementEvents(instrument);
                 }

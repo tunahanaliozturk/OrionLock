@@ -24,7 +24,7 @@ public sealed class HandleHoldingDurationTests
         listener.InstrumentPublished = (instrument, l) =>
         {
             if (instrument.Meter.Name == "Moongazing.OrionLock"
-                && instrument.Name == "orionlock.handle.holding_duration")
+                && instrument.Name == "orion.lock.handle.holding_duration")
             {
                 l.EnableMeasurementEvents(instrument);
             }
@@ -64,7 +64,7 @@ public sealed class HandleHoldingDurationTests
         listener.InstrumentPublished = (instrument, l) =>
         {
             if (instrument.Meter.Name == "Moongazing.OrionLock"
-                && instrument.Name == "orionlock.handle.holding_duration")
+                && instrument.Name == "orion.lock.handle.holding_duration")
             {
                 l.EnableMeasurementEvents(instrument);
             }

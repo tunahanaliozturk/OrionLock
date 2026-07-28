@@ -20,7 +20,7 @@ public sealed class ExpiredBeforeReleaseTests
         listener.InstrumentPublished = (instrument, l) =>
         {
             if (instrument.Meter.Name == "Moongazing.OrionLock"
-                && instrument.Name == "orionlock.lease.expired_before_release")
+                && instrument.Name == "orion.lock.lease.expired_before_release")
             {
                 l.EnableMeasurementEvents(instrument);
             }

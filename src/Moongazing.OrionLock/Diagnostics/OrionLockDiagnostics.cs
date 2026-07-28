@@ -22,9 +22,9 @@ public static class OrionLockDiagnostics
 
     private static readonly Meter Meter = new(MeterName, MeterVersion.Value);
 
-    internal static readonly Counter<long> Acquisitions = Meter.CreateCounter<long>("orionlock.acquisitions");
-    internal static readonly Counter<long> Contentions = Meter.CreateCounter<long>("orionlock.contentions");
-    internal static readonly Counter<long> LeasesLost = Meter.CreateCounter<long>("orionlock.lease.lost");
+    internal static readonly Counter<long> Acquisitions = Meter.CreateCounter<long>("orion.lock.acquisitions");
+    internal static readonly Counter<long> Contentions = Meter.CreateCounter<long>("orion.lock.contentions");
+    internal static readonly Counter<long> LeasesLost = Meter.CreateCounter<long>("orion.lock.lease.lost");
 
     /// <summary>
     /// v0.3.12 static tags appended to every counter / histogram emitted by OrionLock.
@@ -90,7 +90,7 @@ public static class OrionLockDiagnostics
     /// from AcquireDuration which records EVERY successful acquire.
     /// </summary>
     internal static readonly Histogram<double> ContentionDuration = Meter.CreateHistogram<double>(
-        "orionlock.contention.duration");
+        "orion.lock.contention.duration");
 
     internal static void RecordContentionDuration(double milliseconds)
     {
@@ -107,7 +107,7 @@ public static class OrionLockDiagnostics
     /// caller gave up.
     /// </summary>
     internal static readonly Counter<long> AcquireTimeouts = Meter.CreateCounter<long>(
-        "orionlock.acquire.timeout");
+        "orion.lock.acquire.timeout");
 
     internal static void RecordAcquireTimeout()
     {
@@ -124,7 +124,7 @@ public static class OrionLockDiagnostics
     /// aborts). Separating them keeps the timeout signal clean for alerting.
     /// </summary>
     internal static readonly Counter<long> AcquireCancellations = Meter.CreateCounter<long>(
-        "orionlock.acquire.cancelled");
+        "orion.lock.acquire.cancelled");
 
     internal static void RecordAcquireCancelled()
     {
@@ -187,7 +187,7 @@ public static class OrionLockDiagnostics
     /// otherwise look like simple long holds.
     /// </summary>
     internal static readonly UpDownCounter<long> ReentrancyDepth = Meter.CreateUpDownCounter<long>(
-        "orionlock.reentrancy.depth");
+        "orion.lock.reentrancy.depth");
 
     internal static void IncrementReentrancyDepth()
     {
@@ -208,7 +208,7 @@ public static class OrionLockDiagnostics
     /// graph p99 to size the FIFO queue and spot a head-of-line block.
     /// </summary>
     internal static readonly Histogram<double> FifoCoordinatorEnterDuration = Meter.CreateHistogram<double>(
-        "orionlock.fairness.coordinator_enter_duration");
+        "orion.lock.fairness.coordinator_enter_duration");
 
     internal static void RecordFifoCoordinatorEnter(double milliseconds)
     {
@@ -236,7 +236,7 @@ public static class OrionLockDiagnostics
     /// cancellation-heavy shutdown does not inflate the depth tail.
     /// </remarks>
     internal static readonly Histogram<int> FifoQueueDepth = Meter.CreateHistogram<int>(
-        "orionlock.fairness.queue_depth");
+        "orion.lock.fairness.queue_depth");
 
     /// <summary>
     /// Record the number of live waiters a candidate joined behind (0 = it became the head).
@@ -257,7 +257,7 @@ public static class OrionLockDiagnostics
     /// against actual backend flakiness rather than guessing.
     /// </summary>
     internal static readonly Histogram<int> ConsecutiveRenewalFailures = Meter.CreateHistogram<int>(
-        "orionlock.lease.renewal_failures_consecutive");
+        "orion.lock.lease.renewal_failures_consecutive");
 
     internal static void RecordConsecutiveRenewalFailures(int count)
     {
@@ -280,7 +280,7 @@ public static class OrionLockDiagnostics
     /// visible.
     /// </summary>
     internal static readonly Histogram<int> ReentrancyMaxDepth = Meter.CreateHistogram<int>(
-        "orionlock.reentrancy.max_depth");
+        "orion.lock.reentrancy.max_depth");
 
     internal static void RecordReentrancyMaxDepth(int maxDepth)
     {
@@ -300,7 +300,7 @@ public static class OrionLockDiagnostics
     private static long lastHealthCheckAtUnixSeconds;
 
     internal static readonly ObservableGauge<long> HealthCheckLastCheckAt = Meter.CreateObservableGauge<long>(
-        "orionlock.health.last_check_at_unix_seconds",
+        "orion.lock.health.last_check_at_unix_seconds",
         () => Interlocked.Read(ref lastHealthCheckAtUnixSeconds),
         unit: "s",
         description: "Unix seconds at which the OrionLock health check last completed (0 = never).");
@@ -326,7 +326,7 @@ public static class OrionLockDiagnostics
     /// counter alone cannot diagnose.
     /// </summary>
     internal static readonly Counter<long> LeasesExpiredBeforeRelease = Meter.CreateCounter<long>(
-        "orionlock.lease.expired_before_release");
+        "orion.lock.lease.expired_before_release");
 
     internal static void RecordLeaseExpiredBeforeRelease()
     {
@@ -343,7 +343,7 @@ public static class OrionLockDiagnostics
     /// timed-out acquires do not pollute the distribution).
     /// </summary>
     internal static readonly Histogram<int> AcquireAttemptCount = Meter.CreateHistogram<int>(
-        "orionlock.acquire.attempt_count");
+        "orion.lock.acquire.attempt_count");
 
     internal static void RecordAcquireAttemptCount(int count)
     {
@@ -361,7 +361,7 @@ public static class OrionLockDiagnostics
     /// longer than expected, or whether load is concentrated on a small set of keys.
     /// </summary>
     internal static readonly UpDownCounter<long> LeasesHeldConcurrent = Meter.CreateUpDownCounter<long>(
-        "orionlock.leases.held_concurrent");
+        "orion.lock.leases.held_concurrent");
 
     /// <summary>
     /// v0.3.14 distribution of how long each lease was held between acquire and dispose.
@@ -370,7 +370,7 @@ public static class OrionLockDiagnostics
     /// a stuck holder. Tags inherited from v0.3.12 WithMetricsLabel.
     /// </summary>
     internal static readonly Histogram<double> HandleHoldingDuration = Meter.CreateHistogram<double>(
-        "orionlock.handle.holding_duration");
+        "orion.lock.handle.holding_duration");
 
     internal static void RecordHandleHoldingDuration(double milliseconds)
     {
@@ -390,7 +390,7 @@ public static class OrionLockDiagnostics
     /// holds is itself the signal. Tags inherited from v0.3.12 WithMetricsLabel.
     /// </summary>
     internal static readonly Histogram<int> HandleRenewalsPerHold = Meter.CreateHistogram<int>(
-        "orionlock.handle.renewals_per_hold");
+        "orion.lock.handle.renewals_per_hold");
 
     internal static void RecordRenewalsPerHold(int renewals)
     {
@@ -420,23 +420,23 @@ public static class OrionLockDiagnostics
     /// trigger the fairness deadline.
     /// </summary>
     internal static readonly Counter<long> LeasesGraceExhausted = Meter.CreateCounter<long>(
-        "orionlock.lease.grace_period_exhausted");
+        "orion.lock.lease.grace_period_exhausted");
 
     /// <summary>End-to-end duration of <c>AcquireAsync</c> including wait/retry, in milliseconds.</summary>
-    internal static readonly Histogram<double> AcquireDuration = Meter.CreateHistogram<double>("orionlock.acquire.duration");
+    internal static readonly Histogram<double> AcquireDuration = Meter.CreateHistogram<double>("orion.lock.acquire.duration");
 
     /// <summary>
     /// Duration of a single <see cref="Providers.IDistributedLockProvider.TryAcquireAsync"/> call,
     /// in milliseconds, tagged with the backend identifier (<c>redis</c>, <c>sqlserver</c>, <c>postgres</c>,
     /// <c>efcore</c>, <c>inmemory</c>).
     /// </summary>
-    internal static readonly Histogram<double> AcquireLatency = Meter.CreateHistogram<double>("orionlock.acquire.latency");
+    internal static readonly Histogram<double> AcquireLatency = Meter.CreateHistogram<double>("orion.lock.acquire.latency");
 
     /// <summary>
     /// Duration of a single lease renewal call in the watchdog, in milliseconds. Useful for spotting
     /// backend slowdown that could push renewals past <c>LeaseDuration / 3</c>.
     /// </summary>
-    internal static readonly Histogram<double> LeaseRenewalDuration = Meter.CreateHistogram<double>("orionlock.lease_renewal.duration");
+    internal static readonly Histogram<double> LeaseRenewalDuration = Meter.CreateHistogram<double>("orion.lock.lease_renewal.duration");
 
     /// <summary>
     /// Number of transient lease-renewal failures, tagged with <c>backend</c>. Distinct from
@@ -446,13 +446,13 @@ public static class OrionLockDiagnostics
     /// Useful for spotting backend instability that has not yet cost real availability because
     /// the next renewal attempt succeeded.
     /// </summary>
-    internal static readonly Counter<long> LeaseRenewalFailures = Meter.CreateCounter<long>("orionlock.lease_renewal.failures");
+    internal static readonly Counter<long> LeaseRenewalFailures = Meter.CreateCounter<long>("orion.lock.lease_renewal.failures");
 
     /// <summary>
     /// Health-check outcomes for the OrionLock health check, tagged with <c>result</c>
     /// (<c>healthy</c>, <c>degraded</c>, <c>unhealthy</c>). Incremented on every probe.
     /// </summary>
-    internal static readonly Counter<long> HealthCheckResult = Meter.CreateCounter<long>("orionlock.health_check.result");
+    internal static readonly Counter<long> HealthCheckResult = Meter.CreateCounter<long>("orion.lock.health_check.result");
 
     // Internal accessors so sibling packages (HealthChecks) can record without exposing the Meter publicly.
     internal static void RecordAcquireLatency(double milliseconds, string backend)

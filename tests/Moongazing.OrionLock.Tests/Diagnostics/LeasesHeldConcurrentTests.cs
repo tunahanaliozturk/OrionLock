@@ -23,7 +23,7 @@ public sealed class LeasesHeldConcurrentTests
         listener.InstrumentPublished = (instrument, l) =>
         {
             if (instrument.Meter.Name == "Moongazing.OrionLock"
-                && instrument.Name == "orionlock.leases.held_concurrent")
+                && instrument.Name == "orion.lock.leases.held_concurrent")
             {
                 l.EnableMeasurementEvents(instrument);
             }
@@ -41,7 +41,7 @@ public sealed class LeasesHeldConcurrentTests
         listener.InstrumentPublished = (instrument, l) =>
         {
             if (instrument.Meter.Name == "Moongazing.OrionLock"
-                && instrument.Name == "orionlock.leases.held_concurrent")
+                && instrument.Name == "orion.lock.leases.held_concurrent")
             {
                 l.EnableMeasurementEvents(instrument);
             }
@@ -69,7 +69,7 @@ public sealed class LeasesHeldConcurrentTests
         listener.InstrumentPublished = (instrument, l) =>
         {
             if (instrument.Meter.Name == "Moongazing.OrionLock"
-                && instrument.Name == "orionlock.leases.held_concurrent")
+                && instrument.Name == "orion.lock.leases.held_concurrent")
             {
                 l.EnableMeasurementEvents(instrument);
             }

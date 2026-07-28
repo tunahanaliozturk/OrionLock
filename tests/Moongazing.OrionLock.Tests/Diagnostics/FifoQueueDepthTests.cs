@@ -16,7 +16,7 @@ public sealed class FifoQueueDepthTestsCollection { }
 [Collection(nameof(FifoQueueDepthTests))]
 public sealed class FifoQueueDepthTests
 {
-    private const string InstrumentName = "orionlock.fairness.queue_depth";
+    private const string InstrumentName = "orion.lock.fairness.queue_depth";
 
     private static MeterListener StartListener(System.Collections.Generic.List<int> samples)
     {

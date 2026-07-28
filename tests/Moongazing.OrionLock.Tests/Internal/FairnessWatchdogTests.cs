@@ -62,13 +62,13 @@ public sealed class FairnessWatchdogTests
         listener.InstrumentPublished = (instrument, l) =>
         {
             if (instrument.Meter.Name != "Moongazing.OrionLock") return;
-            if (instrument.Name == "orionlock.lease.lost") l.EnableMeasurementEvents(instrument);
-            if (instrument.Name == "orionlock.lease.grace_period_exhausted") l.EnableMeasurementEvents(instrument);
+            if (instrument.Name == "orion.lock.lease.lost") l.EnableMeasurementEvents(instrument);
+            if (instrument.Name == "orion.lock.lease.grace_period_exhausted") l.EnableMeasurementEvents(instrument);
         };
         listener.SetMeasurementEventCallback<long>((instr, val, tags, state) =>
         {
-            if (instr.Name == "orionlock.lease.lost") Interlocked.Add(ref leasesLost, val);
-            if (instr.Name == "orionlock.lease.grace_period_exhausted") Interlocked.Add(ref graceExhausted, val);
+            if (instr.Name == "orion.lock.lease.lost") Interlocked.Add(ref leasesLost, val);
+            if (instr.Name == "orion.lock.lease.grace_period_exhausted") Interlocked.Add(ref graceExhausted, val);
         });
         listener.Start();
 
