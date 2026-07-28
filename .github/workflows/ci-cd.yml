@@ -12,6 +12,7 @@ env:
   DOTNET_SKIP_FIRST_TIME_EXPERIENCE: true
   DOTNET_CLI_TELEMETRY_OPTOUT: true
   SOLUTION_PATH: Moongazing.OrionLock.sln
+  AOT_SMOKE_PATH: tests/Moongazing.OrionLock.AotSmoke/Moongazing.OrionLock.AotSmoke.csproj
 
 jobs:
   build-and-test:
@@ -50,8 +51,29 @@ jobs:
       - name: Test
         run: dotnet test ${{ env.SOLUTION_PATH }} --no-restore --configuration Release --verbosity normal
 
+  aot-smoke:
+    # OrionLock's AOT exit criterion: a NativeAOT publish of the acquire/contend/release lifecycle
+    # with zero trim/AOT warnings, and a native binary that exits 0.
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+      - name: Setup .NET
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '10.0.x'
+      - name: Publish NativeAOT
+        run: |
+          dotnet publish ${{ env.AOT_SMOKE_PATH }} \
+            --configuration Release \
+            --runtime linux-x64 \
+            --output ./aot-smoke \
+            -warnaserror
+      - name: Run the native binary
+        run: ./aot-smoke/Moongazing.OrionLock.AotSmoke
+
   publish:
-    needs: build-and-test
+    needs: [build-and-test, aot-smoke]
     runs-on: ubuntu-latest
     if: github.event_name == 'release'
     permissions:
