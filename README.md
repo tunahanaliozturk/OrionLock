@@ -228,11 +228,11 @@ For a Native AOT or aggressively trimmed application, reference the core and (in
 
 ## Benchmarks
 
-See [benchmarks.md](benchmarks.md) for the BenchmarkDotNet harness in `bench/Moongazing.OrionLock.Benchmarks`, the scenarios it covers (uncontended in-memory acquire/release as the abstraction-cost floor, with Redis and Postgres backends queued for v0.2), and the comparison baselines we report against.
+See [benchmarks.md](benchmarks.md) for the BenchmarkDotNet harness in `bench/Moongazing.OrionLock.Benchmarks`, the scenarios it covers (uncontended in-memory acquire/release as the abstraction-cost floor, plus the Redis and Postgres backends), and the comparison baselines we report against.
 
 ## Roadmap
 
-The current release is **1.0.0**: the public API is frozen for the 1.x line. `IDistributedLock`, `IDistributedLockHandle`, `DistributedLockOptions`, the provider primitive interfaces (`IDistributedLockProvider`, `ISharedExclusiveLockProvider`), `ISharedExclusiveLock` / `LockMode`, and the bundled backends (Redis, EF Core, SqlServer, Postgres, Testing) are stable; future changes are additions only, guarded by `Microsoft.CodeAnalysis.PublicApiAnalyzers` and per-project `PublicAPI.Shipped.txt` baselines. Forward plan in [ROADMAP.md](ROADMAP.md): fair queueing beyond opt-in FIFO and a distributed counter/sequence primitive. If something on the list matters to you, open an issue with the `roadmap` label.
+The current release is **1.0.1**: the public API is frozen for the 1.x line. `IDistributedLock`, `IDistributedLockHandle`, `DistributedLockOptions`, the provider primitive interfaces (`IDistributedLockProvider`, `ISharedExclusiveLockProvider`), `ISharedExclusiveLock` / `LockMode`, and the bundled backends (Redis, EF Core, SqlServer, Postgres, Testing) are stable; future changes are additions only, guarded by `Microsoft.CodeAnalysis.PublicApiAnalyzers` and per-project `PublicAPI.Shipped.txt` baselines. Forward plan in [ROADMAP.md](ROADMAP.md): fair queueing beyond opt-in FIFO and a distributed counter/sequence primitive. If something on the list matters to you, open an issue with the `roadmap` label.
 
 ## More from the Orion family
 
