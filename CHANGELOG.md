@@ -7,6 +7,36 @@ All notable changes to OrionLock are documented in this file. The format is base
 
 ## [Unreleased]
 
+## [2.0.0] - 2026-07-29
+
+### Changed
+
+- **BREAKING (telemetry only): adopted the family `orion.lock.*` metric-naming convention.** Every
+  OpenTelemetry instrument was renamed from the `orionlock.*` prefix to `orion.lock.*`, matching the
+  `orion.<component>.<instrument>` convention the rest of the Orion family now uses. This is why the
+  release is a major version bump even though **no code API changed** — the meter / activity-source
+  name (`Moongazing.OrionLock`), every tag key (`backend`, `result`) and value, the span names, the
+  static-tags mechanism (`WithMetricsLabel`), and all public types are unchanged.
+
+  Rename every dashboard, alert, and recording rule. The full instrument list moved as follows (each
+  `orionlock.<name>` became `orion.lock.<name>`):
+
+  - Counters: `orion.lock.acquisitions`, `orion.lock.contentions`, `orion.lock.lease.lost`,
+    `orion.lock.acquire.timeout`, `orion.lock.acquire.cancelled`, `orion.lock.lease_renewal.failures`,
+    `orion.lock.lease.expired_before_release`, `orion.lock.lease.grace_period_exhausted`,
+    `orion.lock.health_check.result`.
+  - Histograms: `orion.lock.acquire.duration`, `orion.lock.acquire.latency`,
+    `orion.lock.acquire.attempt_count`, `orion.lock.contention.duration`,
+    `orion.lock.lease_renewal.duration`, `orion.lock.handle.holding_duration`,
+    `orion.lock.handle.renewals_per_hold`, `orion.lock.reentrancy.max_depth`,
+    `orion.lock.fairness.queue_depth`, `orion.lock.fairness.coordinator_enter_duration`,
+    `orion.lock.lease.renewal_failures_consecutive`.
+  - UpDownCounters: `orion.lock.reentrancy.depth`, `orion.lock.leases.held_concurrent`.
+  - Observable gauge: `orion.lock.health.last_check_at_unix_seconds`.
+
+  OrionLock follows the naming convention by string (it does not reference `Orion.Abstractions`), so
+  its dependency footprint is unchanged.
+
 ## [1.0.1] - 2026-07-27
 
 ### Fixed

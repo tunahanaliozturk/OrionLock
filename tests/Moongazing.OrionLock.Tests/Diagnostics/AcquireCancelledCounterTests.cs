@@ -13,7 +13,7 @@ public sealed class AcquireCancelledCounterTestsCollection { }
 [Collection(nameof(AcquireCancelledCounterTests))]
 public sealed class AcquireCancelledCounterTests
 {
-    private const string InstrumentName = "orionlock.acquire.cancelled";
+    private const string InstrumentName = "orion.lock.acquire.cancelled";
 
     private static MeterListener StartListener(System.Action<long> add)
     {

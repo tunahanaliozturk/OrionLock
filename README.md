@@ -224,7 +224,7 @@ For a Native AOT or aggressively trimmed application, reference the core and (in
 
 ## OpenTelemetry
 
-`ActivitySource` and `Meter` named `Moongazing.OrionLock`. Each acquire opens a span tagged with the key and outcome. Counters: `orionlock.acquisitions`, `orionlock.contentions`, `orionlock.lease.lost`, `orionlock.health_check.result` (tagged by `result`). Histograms: `orionlock.acquire.duration` (end-to-end blocking-acquire time), `orionlock.acquire.latency` (single backend round-trip, tagged by `backend`), `orionlock.lease_renewal.duration` (per-renewal time, tagged by `backend`). See [docs/lock-key-cardinality.md](docs/lock-key-cardinality.md) before sending high-cardinality lock keys through the meter.
+`ActivitySource` and `Meter` named `Moongazing.OrionLock`. Each acquire opens a span tagged with the key and outcome. Counters: `orion.lock.acquisitions`, `orion.lock.contentions`, `orion.lock.lease.lost`, `orion.lock.health_check.result` (tagged by `result`). Histograms: `orion.lock.acquire.duration` (end-to-end blocking-acquire time), `orion.lock.acquire.latency` (single backend round-trip, tagged by `backend`), `orion.lock.lease_renewal.duration` (per-renewal time, tagged by `backend`). See [docs/lock-key-cardinality.md](docs/lock-key-cardinality.md) before sending high-cardinality lock keys through the meter.
 
 ## Benchmarks
 
@@ -232,7 +232,7 @@ See [benchmarks.md](benchmarks.md) for the BenchmarkDotNet harness in `bench/Moo
 
 ## Roadmap
 
-The current release is **1.0.1**: the public API is frozen for the 1.x line. `IDistributedLock`, `IDistributedLockHandle`, `DistributedLockOptions`, the provider primitive interfaces (`IDistributedLockProvider`, `ISharedExclusiveLockProvider`), `ISharedExclusiveLock` / `LockMode`, and the bundled backends (Redis, EF Core, SqlServer, Postgres, Testing) are stable; future changes are additions only, guarded by `Microsoft.CodeAnalysis.PublicApiAnalyzers` and per-project `PublicAPI.Shipped.txt` baselines. Forward plan in [ROADMAP.md](ROADMAP.md): fair queueing beyond opt-in FIFO and a distributed counter/sequence primitive. If something on the list matters to you, open an issue with the `roadmap` label.
+The current release is **2.0.0**. The **code** API is unchanged from 1.x — `IDistributedLock`, `IDistributedLockHandle`, `DistributedLockOptions`, the provider primitive interfaces (`IDistributedLockProvider`, `ISharedExclusiveLockProvider`), `ISharedExclusiveLock` / `LockMode`, and the bundled backends (Redis, EF Core, SqlServer, Postgres, Testing) are stable and guarded by `Microsoft.CodeAnalysis.PublicApiAnalyzers` with per-project `PublicAPI.Shipped.txt` baselines. The major bump is a **telemetry-only** break: the OpenTelemetry metric names were renamed from `orionlock.*` to the family `orion.lock.*` convention (see the [changelog](CHANGELOG.md)); update dashboards and alerts accordingly. Forward plan in [ROADMAP.md](ROADMAP.md): fair queueing beyond opt-in FIFO and a distributed counter/sequence primitive. If something on the list matters to you, open an issue with the `roadmap` label.
 
 ## More from the Orion family
 

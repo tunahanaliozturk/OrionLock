@@ -20,7 +20,7 @@ public sealed class FifoCoordinatorEnterDurationTests
         listener.InstrumentPublished = (instrument, l) =>
         {
             if (instrument.Meter.Name == "Moongazing.OrionLock"
-                && instrument.Name == "orionlock.fairness.coordinator_enter_duration")
+                && instrument.Name == "orion.lock.fairness.coordinator_enter_duration")
             {
                 l.EnableMeasurementEvents(instrument);
             }

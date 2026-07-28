@@ -129,7 +129,7 @@ public sealed class RedisFifoWaiterCoordinatorTests : IAsyncLifetime
         listener.InstrumentPublished = (instrument, l) =>
         {
             if (instrument.Meter.Name == "Moongazing.OrionLock"
-                && instrument.Name == "orionlock.fairness.queue_depth")
+                && instrument.Name == "orion.lock.fairness.queue_depth")
             {
                 l.EnableMeasurementEvents(instrument);
             }

@@ -24,7 +24,7 @@ public sealed class ReentrancyDepthTests
         listener.InstrumentPublished = (instrument, l) =>
         {
             if (instrument.Meter.Name == "Moongazing.OrionLock"
-                && instrument.Name == "orionlock.reentrancy.depth")
+                && instrument.Name == "orion.lock.reentrancy.depth")
             {
                 l.EnableMeasurementEvents(instrument);
             }

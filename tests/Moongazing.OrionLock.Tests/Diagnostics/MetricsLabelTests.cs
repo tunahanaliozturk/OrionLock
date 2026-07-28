@@ -30,7 +30,7 @@ public sealed class MetricsLabelTests
             listener.InstrumentPublished = (instrument, l) =>
             {
                 if (instrument.Meter.Name == "Moongazing.OrionLock"
-                    && instrument.Name == "orionlock.acquisitions")
+                    && instrument.Name == "orion.lock.acquisitions")
                 {
                     l.EnableMeasurementEvents(instrument);
                 }
@@ -105,7 +105,7 @@ public sealed class MetricsLabelTests
             listener.InstrumentPublished = (instrument, l) =>
             {
                 if (instrument.Meter.Name == "Moongazing.OrionLock"
-                    && instrument.Name == "orionlock.acquisitions")
+                    && instrument.Name == "orion.lock.acquisitions")
                 {
                     l.EnableMeasurementEvents(instrument);
                 }

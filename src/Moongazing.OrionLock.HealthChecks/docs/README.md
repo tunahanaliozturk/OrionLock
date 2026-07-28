@@ -18,6 +18,6 @@ services.AddHealthChecks()
 - **Degraded** - backend reachable but the sentinel could not be acquired before `WaitTimeout` (likely contention from another probe).
 - **Unhealthy** - backend threw `OrionLockBackendException` or another exception.
 
-Each probe increments the `orionlock.health_check.result` counter on the OrionLock Meter, tagged with `result`.
+Each probe increments the `orion.lock.health_check.result` counter on the OrionLock Meter, tagged with `result`.
 
 Requires the `OrionLock` package and a registered backend. See https://github.com/tunahanaliozturk/OrionLock.

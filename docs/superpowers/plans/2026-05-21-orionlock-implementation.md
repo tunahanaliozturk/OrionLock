@@ -2212,10 +2212,10 @@ public static class OrionLockDiagnostics
 
     private static readonly Meter Meter = new(MeterName, "0.1.0");
 
-    internal static readonly Counter<long> Acquisitions = Meter.CreateCounter<long>("orionlock.acquisitions");
-    internal static readonly Counter<long> Contentions = Meter.CreateCounter<long>("orionlock.contentions");
-    internal static readonly Counter<long> LeasesLost = Meter.CreateCounter<long>("orionlock.lease.lost");
-    internal static readonly Histogram<double> AcquireDuration = Meter.CreateHistogram<double>("orionlock.acquire.duration");
+    internal static readonly Counter<long> Acquisitions = Meter.CreateCounter<long>("orion.lock.acquisitions");
+    internal static readonly Counter<long> Contentions = Meter.CreateCounter<long>("orion.lock.contentions");
+    internal static readonly Counter<long> LeasesLost = Meter.CreateCounter<long>("orion.lock.lease.lost");
+    internal static readonly Histogram<double> AcquireDuration = Meter.CreateHistogram<double>("orion.lock.acquire.duration");
 }
 ```
 
@@ -2232,7 +2232,7 @@ In `DistributedLock.cs`, add `using System.Diagnostics;` and `using Moongazing.O
         options ??= new DistributedLockOptions();
 
         using var activity = OrionLockDiagnostics.ActivitySource.StartActivity($"OrionLock.Acquire {key}");
-        activity?.SetTag("orionlock.key", key);
+        activity?.SetTag("orion.lock.key", key);
 
         var deadline = Stopwatch.StartNew();
         while (true)
@@ -2240,7 +2240,7 @@ In `DistributedLock.cs`, add `using System.Diagnostics;` and `using Moongazing.O
             var handle = await TryAcquireAsync(key, options, cancellationToken).ConfigureAwait(false);
             if (handle is not null)
             {
-                activity?.SetTag("orionlock.outcome", "acquired");
+                activity?.SetTag("orion.lock.outcome", "acquired");
                 OrionLockDiagnostics.Acquisitions.Add(1);
                 OrionLockDiagnostics.AcquireDuration.Record(deadline.Elapsed.TotalMilliseconds);
                 return handle;
@@ -2250,7 +2250,7 @@ In `DistributedLock.cs`, add `using System.Diagnostics;` and `using Moongazing.O
 
             if (deadline.Elapsed >= options.WaitTimeout)
             {
-                activity?.SetTag("orionlock.outcome", "timeout");
+                activity?.SetTag("orion.lock.outcome", "timeout");
                 throw new LockAcquisitionTimeoutException(key, deadline.Elapsed);
             }
 
@@ -2259,7 +2259,7 @@ In `DistributedLock.cs`, add `using System.Diagnostics;` and `using Moongazing.O
     }
 ```
 
-`TryAcquireAsync` stays as in Task 6. (The `orionlock.lease.lost` counter is incremented from the handle's watchdog — optionally wire it in `DistributedLockHandle` where `isHeld` flips to false: add `OrionLockDiagnostics.LeasesLost.Add(1);` next to `SafeCancelLost()`. Include that one-line addition in this task.)
+`TryAcquireAsync` stays as in Task 6. (The `orion.lock.lease.lost` counter is incremented from the handle's watchdog — optionally wire it in `DistributedLockHandle` where `isHeld` flips to false: add `OrionLockDiagnostics.LeasesLost.Add(1);` next to `SafeCancelLost()`. Include that one-line addition in this task.)
 
 - [ ] **Step 5: Run tests, expect PASS**
 

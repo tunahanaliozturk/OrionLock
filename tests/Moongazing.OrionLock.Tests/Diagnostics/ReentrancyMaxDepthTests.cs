@@ -23,7 +23,7 @@ public sealed class ReentrancyMaxDepthTests
         listener.InstrumentPublished = (instrument, l) =>
         {
             if (instrument.Meter.Name == "Moongazing.OrionLock"
-                && instrument.Name == "orionlock.reentrancy.max_depth")
+                && instrument.Name == "orion.lock.reentrancy.max_depth")
             {
                 l.EnableMeasurementEvents(instrument);
             }
@@ -61,7 +61,7 @@ public sealed class ReentrancyMaxDepthTests
         listener.InstrumentPublished = (instrument, l) =>
         {
             if (instrument.Meter.Name == "Moongazing.OrionLock"
-                && instrument.Name == "orionlock.reentrancy.max_depth")
+                && instrument.Name == "orion.lock.reentrancy.max_depth")
             {
                 l.EnableMeasurementEvents(instrument);
             }

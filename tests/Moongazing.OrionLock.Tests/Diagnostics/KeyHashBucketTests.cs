@@ -46,7 +46,7 @@ public sealed class KeyHashBucketTests
         listener.InstrumentPublished = (instrument, l) =>
         {
             if (instrument.Meter.Name == "Moongazing.OrionLock"
-                && instrument.Name == "orionlock.acquire.timeout")
+                && instrument.Name == "orion.lock.acquire.timeout")
             {
                 l.EnableMeasurementEvents(instrument);
             }

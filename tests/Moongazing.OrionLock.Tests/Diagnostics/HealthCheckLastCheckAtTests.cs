@@ -20,7 +20,7 @@ public sealed class HealthCheckLastCheckAtTests
         listener.InstrumentPublished = (instrument, l) =>
         {
             if (instrument.Meter.Name == "Moongazing.OrionLock"
-                && instrument.Name == "orionlock.health.last_check_at_unix_seconds")
+                && instrument.Name == "orion.lock.health.last_check_at_unix_seconds")
             {
                 l.EnableMeasurementEvents(instrument);
             }
