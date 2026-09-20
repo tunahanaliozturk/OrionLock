@@ -172,7 +172,10 @@ public sealed class PostgresLockProvider : IDistributedLockProvider, IDisposable
                     // - a cancellation racing the statement_timeout, or an older driver. Reading it as
                     // a budget expiry would hand the caller a timeout for something they asked for,
                     // which is the quieter and worse half of the SQL Server bug next door.
-                    try { await conn.DisposeAsync().ConfigureAwait(false); } catch { /* already failing */ }
+                    //
+                    // The connection is left to the outer catch, which unlocks best-effort and
+                    // disposes: doing it here too would only dispose twice and swallow the
+                    // ObjectDisposedException the second attempt raises.
                     throw new OperationCanceledException(cancellationToken);
                 }
             }
