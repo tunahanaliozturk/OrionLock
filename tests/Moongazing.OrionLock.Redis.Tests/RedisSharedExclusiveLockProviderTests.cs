@@ -1,8 +1,9 @@
-using System.Diagnostics;
+﻿using System.Diagnostics;
 using Moongazing.OrionLock;
 using Moongazing.OrionLock.Redis;
 using StackExchange.Redis;
 using Testcontainers.Redis;
+using Moongazing.OrionLock.Tests.Containers;
 
 namespace Moongazing.OrionLock.Redis.Tests;
 
@@ -21,7 +22,7 @@ namespace Moongazing.OrionLock.Redis.Tests;
 /// </remarks>
 public sealed class RedisContainerFixture : IAsyncLifetime
 {
-    private readonly RedisContainer container = new RedisBuilder().Build();
+    private readonly RedisContainer container = new RedisBuilder(ContainerImages.Redis).Build();
 
     /// <summary>The connection multiplexer to the running Redis, valid for the fixture's lifetime.</summary>
     public IConnectionMultiplexer Mux { get; private set; } = default!;
@@ -154,7 +155,7 @@ public sealed class RedisSharedExclusiveLockProviderTests : IClassFixture<RedisC
 
     // ---- Mutual exclusion -------------------------------------------------------------------
 
-    [Fact]
+    [DockerFact]
     public async Task ManyReaders_AcquireConcurrently()
     {
         var p = NewProvider();
@@ -168,7 +169,7 @@ public sealed class RedisSharedExclusiveLockProviderTests : IClassFixture<RedisC
         Assert.All(results, Assert.True);
     }
 
-    [Fact]
+    [DockerFact]
     public async Task Writer_Blocked_WhileReadersHeld_ThenAcquires_AfterTheyRelease()
     {
         var p = NewProvider();
@@ -187,7 +188,7 @@ public sealed class RedisSharedExclusiveLockProviderTests : IClassFixture<RedisC
         Assert.True(await p.TryAcquireAsync(key, "writer-1", LockMode.Exclusive, Lease, default));
     }
 
-    [Fact]
+    [DockerFact]
     public async Task Readers_Blocked_WhileWriterHeld_ThenAcquire_AfterItReleases()
     {
         var p = NewProvider();
@@ -200,7 +201,7 @@ public sealed class RedisSharedExclusiveLockProviderTests : IClassFixture<RedisC
         Assert.True(await p.TryAcquireAsync(key, "reader-1", LockMode.Shared, Lease, default));
     }
 
-    [Fact]
+    [DockerFact]
     public async Task SecondWriter_Blocked_WhileWriterHeld()
     {
         var p = NewProvider();
@@ -212,7 +213,7 @@ public sealed class RedisSharedExclusiveLockProviderTests : IClassFixture<RedisC
 
     // ---- Crash safety / TTL -----------------------------------------------------------------
 
-    [Fact]
+    [DockerFact]
     public async Task Writer_Reclaimed_AfterItsLeaseExpires()
     {
         var p = NewProvider();
@@ -227,7 +228,7 @@ public sealed class RedisSharedExclusiveLockProviderTests : IClassFixture<RedisC
         Assert.True(reclaimed);
     }
 
-    [Fact]
+    [DockerFact]
     public async Task Reader_Reclaimed_AfterItsLeaseExpires()
     {
         var p = NewProvider();
@@ -242,7 +243,7 @@ public sealed class RedisSharedExclusiveLockProviderTests : IClassFixture<RedisC
         Assert.True(reclaimed);
     }
 
-    [Fact]
+    [DockerFact]
     public async Task OneReaderExpiry_DoesNotFreeAnotherReader()
     {
         var p = NewProvider();
@@ -266,7 +267,7 @@ public sealed class RedisSharedExclusiveLockProviderTests : IClassFixture<RedisC
 
     // ---- Renewal ----------------------------------------------------------------------------
 
-    [Fact]
+    [DockerFact]
     public async Task Renew_Reader_KeepsHoldAlivePastOriginalLease()
     {
         var p = NewProvider();
@@ -285,7 +286,7 @@ public sealed class RedisSharedExclusiveLockProviderTests : IClassFixture<RedisC
         Assert.False(await p.TryAcquireAsync(key, "writer-1", LockMode.Exclusive, Lease, default));
     }
 
-    [Fact]
+    [DockerFact]
     public async Task Renew_Writer_KeepsHoldAlivePastOriginalLease()
     {
         var p = NewProvider();
@@ -303,7 +304,7 @@ public sealed class RedisSharedExclusiveLockProviderTests : IClassFixture<RedisC
         Assert.False(await p.TryAcquireAsync(key, "reader-1", LockMode.Shared, Lease, default));
     }
 
-    [Fact]
+    [DockerFact]
     public async Task Renew_Reader_OnlyForHolder()
     {
         var p = NewProvider();
@@ -314,7 +315,7 @@ public sealed class RedisSharedExclusiveLockProviderTests : IClassFixture<RedisC
         Assert.False(await p.TryRenewAsync(key, "reader-2", LockMode.Shared, Lease, default));
     }
 
-    [Fact]
+    [DockerFact]
     public async Task Renew_Writer_OnlyForHolder()
     {
         var p = NewProvider();
@@ -327,7 +328,7 @@ public sealed class RedisSharedExclusiveLockProviderTests : IClassFixture<RedisC
 
     // ---- Fencing ----------------------------------------------------------------------------
 
-    [Fact]
+    [DockerFact]
     public async Task StaleToken_CannotReleaseAnotherReadersShare()
     {
         var p = NewProvider();
@@ -345,7 +346,7 @@ public sealed class RedisSharedExclusiveLockProviderTests : IClassFixture<RedisC
         Assert.True(await p.TryAcquireAsync(key, "writer-1", LockMode.Exclusive, Lease, default));
     }
 
-    [Fact]
+    [DockerFact]
     public async Task StaleToken_CannotReleaseTheWritersShare()
     {
         var p = NewProvider();
@@ -361,7 +362,7 @@ public sealed class RedisSharedExclusiveLockProviderTests : IClassFixture<RedisC
         Assert.True(await p.TryAcquireAsync(key, "reader-1", LockMode.Shared, Lease, default));
     }
 
-    [Fact]
+    [DockerFact]
     public async Task StaleToken_CannotRenewAnotherHoldersShare()
     {
         var p = NewProvider();
@@ -381,7 +382,7 @@ public sealed class RedisSharedExclusiveLockProviderTests : IClassFixture<RedisC
 
     // ---- Release of an expired share is a no-op ---------------------------------------------
 
-    [Fact]
+    [DockerFact]
     public async Task ReleaseExpiredReader_IsNoOp()
     {
         var p = NewProvider();
@@ -395,7 +396,7 @@ public sealed class RedisSharedExclusiveLockProviderTests : IClassFixture<RedisC
         Assert.True(await p.TryAcquireAsync(key, "writer-1", LockMode.Exclusive, Lease, default));
     }
 
-    [Fact]
+    [DockerFact]
     public async Task ReleaseExpiredWriter_IsNoOp()
     {
         var p = NewProvider();
@@ -410,7 +411,7 @@ public sealed class RedisSharedExclusiveLockProviderTests : IClassFixture<RedisC
 
     // ---- Writer fairness (pending-writer marker, no starvation) -----------------------------
 
-    [Fact]
+    [DockerFact]
     public async Task PendingWriter_BlocksNewReaders_SoWriterIsNotStarved()
     {
         var p = NewProvider();
@@ -429,7 +430,7 @@ public sealed class RedisSharedExclusiveLockProviderTests : IClassFixture<RedisC
         Assert.True(await p.TryAcquireAsync(key, "writer-1", LockMode.Exclusive, Lease, default));
     }
 
-    [Fact]
+    [DockerFact]
     public async Task ContinuousReaderStream_DoesNotStarveWaitingWriter()
     {
         var p = NewProvider();
@@ -454,7 +455,7 @@ public sealed class RedisSharedExclusiveLockProviderTests : IClassFixture<RedisC
         Assert.True(await p.TryAcquireAsync(key, "writer-1", LockMode.Exclusive, Lease, default));
     }
 
-    [Fact]
+    [DockerFact]
     public async Task ExistingReader_MayRefreshOwnLease_WhileWriterPending()
     {
         var p = NewProvider();
@@ -468,7 +469,7 @@ public sealed class RedisSharedExclusiveLockProviderTests : IClassFixture<RedisC
         Assert.True(await p.TryAcquireAsync(key, "reader-1", LockMode.Shared, Lease, default));
     }
 
-    [Fact]
+    [DockerFact]
     public async Task PendingWriterMarker_Expires_SoReadersAreNotBlockedForever()
     {
         var p = NewProvider();
@@ -489,7 +490,7 @@ public sealed class RedisSharedExclusiveLockProviderTests : IClassFixture<RedisC
         Assert.True(unblocked);
     }
 
-    [Fact]
+    [DockerFact]
     public async Task GrantingExclusive_ClearsPendingMarker_SoLaterReaderSucceeds()
     {
         var p = NewProvider();

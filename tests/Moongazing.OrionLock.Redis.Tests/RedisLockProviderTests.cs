@@ -1,12 +1,13 @@
-using Moongazing.OrionLock.Redis;
+﻿using Moongazing.OrionLock.Redis;
 using StackExchange.Redis;
 using Testcontainers.Redis;
+using Moongazing.OrionLock.Tests.Containers;
 
 namespace Moongazing.OrionLock.Redis.Tests;
 
 public sealed class RedisLockProviderTests : IAsyncLifetime
 {
-    private readonly RedisContainer container = new RedisBuilder().Build();
+    private readonly RedisContainer container = new RedisBuilder(ContainerImages.Redis).Build();
 #pragma warning disable CA1859 // Tests intentionally exercise the interface surface used by the provider.
     private IConnectionMultiplexer mux = default!;
 #pragma warning restore CA1859
@@ -22,7 +23,7 @@ public sealed class RedisLockProviderTests : IAsyncLifetime
 
     private RedisLockProvider NewProvider() => new(mux, new RedisLockOptions());
 
-    [Fact]
+    [DockerFact]
     public async Task TryAcquire_ShouldSucceedThenBlockSecondOwner()
     {
         var p = NewProvider();
@@ -30,7 +31,7 @@ public sealed class RedisLockProviderTests : IAsyncLifetime
         Assert.False(await p.TryAcquireAsync("k", "owner-2", TimeSpan.FromSeconds(30), default));
     }
 
-    [Fact]
+    [DockerFact]
     public async Task TryAcquire_ShouldSucceed_AfterLeaseExpires()
     {
         var p = NewProvider();
@@ -41,7 +42,7 @@ public sealed class RedisLockProviderTests : IAsyncLifetime
         Assert.True(await p.TryAcquireAsync("k", "owner-2", TimeSpan.FromSeconds(30), default));
     }
 
-    [Fact]
+    [DockerFact]
     public async Task TryRenew_ShouldExtendForOwner_AndRejectNonOwner()
     {
         var p = NewProvider();
@@ -50,7 +51,7 @@ public sealed class RedisLockProviderTests : IAsyncLifetime
         Assert.False(await p.TryRenewAsync("k", "owner-2", TimeSpan.FromSeconds(30), default));
     }
 
-    [Fact]
+    [DockerFact]
     public async Task Release_ShouldOnlyReleaseForOwner()
     {
         var p = NewProvider();

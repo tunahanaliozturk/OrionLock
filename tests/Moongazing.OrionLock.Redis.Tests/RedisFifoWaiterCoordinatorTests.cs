@@ -1,16 +1,17 @@
-namespace Moongazing.OrionLock.Redis.Tests;
+﻿namespace Moongazing.OrionLock.Redis.Tests;
 
 using System.Diagnostics.Metrics;
 using Moongazing.OrionLock.Fairness;
 using Moongazing.OrionLock.Redis;
 using StackExchange.Redis;
 using Testcontainers.Redis;
+using Moongazing.OrionLock.Tests.Containers;
 
 [System.Diagnostics.CodeAnalysis.SuppressMessage("Performance", "CA1859",
     Justification = "Tests intentionally exercise the IFifoWaiterCoordinator surface.")]
 public sealed class RedisFifoWaiterCoordinatorTests : IAsyncLifetime
 {
-    private readonly RedisContainer container = new RedisBuilder().Build();
+    private readonly RedisContainer container = new RedisBuilder(ContainerImages.Redis).Build();
 #pragma warning disable CA1859 // Tests intentionally exercise the IFifoWaiterCoordinator surface.
     private IConnectionMultiplexer mux = default!;
 #pragma warning restore CA1859
@@ -31,7 +32,7 @@ public sealed class RedisFifoWaiterCoordinatorTests : IAsyncLifetime
             PollInterval = TimeSpan.FromMilliseconds(20),
         });
 
-    [Fact]
+    [DockerFact]
     public async Task First_caller_acquires_ticket_immediately()
     {
         IFifoWaiterCoordinator sut = NewCoordinator();
@@ -42,7 +43,7 @@ public sealed class RedisFifoWaiterCoordinatorTests : IAsyncLifetime
         await sut.LeaveAsync(ticket, CancellationToken.None);
     }
 
-    [Fact]
+    [DockerFact]
     public async Task Second_caller_waits_until_first_Leaves()
     {
         IFifoWaiterCoordinator sut = NewCoordinator();
@@ -69,7 +70,7 @@ public sealed class RedisFifoWaiterCoordinatorTests : IAsyncLifetime
         await sut.LeaveAsync(second, CancellationToken.None);
     }
 
-    [Fact]
+    [DockerFact]
     public async Task Distinct_keys_are_independent()
     {
         IFifoWaiterCoordinator sut = NewCoordinator();
@@ -84,7 +85,7 @@ public sealed class RedisFifoWaiterCoordinatorTests : IAsyncLifetime
         await sut.LeaveAsync(bTicket, CancellationToken.None);
     }
 
-    [Fact]
+    [DockerFact]
     public async Task Cancellation_removes_caller_from_queue()
     {
         IFifoWaiterCoordinator sut = NewCoordinator();
@@ -109,7 +110,7 @@ public sealed class RedisFifoWaiterCoordinatorTests : IAsyncLifetime
         await sut.LeaveAsync(third, CancellationToken.None);
     }
 
-    [Fact]
+    [DockerFact]
     public async Task Ticket_from_another_coordinator_throws_on_Leave()
     {
         IFifoWaiterCoordinator sut = NewCoordinator();
@@ -121,7 +122,7 @@ public sealed class RedisFifoWaiterCoordinatorTests : IAsyncLifetime
 
     private sealed record ForeignTicket(string Key) : IFifoWaiterTicket;
 
-    [Fact]
+    [DockerFact]
     public async Task EnterAsync_records_the_live_queue_depth_each_caller_joins_behind()
     {
         var samples = new System.Collections.Generic.List<int>();
@@ -163,7 +164,7 @@ public sealed class RedisFifoWaiterCoordinatorTests : IAsyncLifetime
         await sut.LeaveAsync(second, CancellationToken.None);
     }
 
-    [Fact]
+    [DockerFact]
     public async Task Stale_entries_older_than_WaiterTtl_are_pruned()
     {
         var coordinator = new RedisFifoWaiterCoordinator(

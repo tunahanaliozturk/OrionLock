@@ -1,7 +1,8 @@
-using Microsoft.Extensions.DependencyInjection;
+﻿using Microsoft.Extensions.DependencyInjection;
 using Moongazing.OrionLock;
 using Moongazing.OrionLock.DependencyInjection;
 using Moongazing.OrionLock.SqlServer;
+using Moongazing.OrionLock.Tests.Containers;
 
 namespace Moongazing.OrionLock.SqlServer.Tests;
 
@@ -11,7 +12,7 @@ public sealed class SmokeTest : IClassFixture<SqlServerContainerFixture>
 
     public SmokeTest(SqlServerContainerFixture fx) => this.fx = fx;
 
-    [Fact]
+    [DockerFact]
     public async Task AddOrionLock_UseSqlServer_AcquireDispose_Works()
     {
         var services = new ServiceCollection();
@@ -39,7 +40,7 @@ public sealed class SmokeTest : IClassFixture<SqlServerContainerFixture>
         Assert.True(second.IsHeld);
     }
 
-    [Fact]
+    [DockerFact]
     public async Task TwoConsumers_AcquireSerialise()
     {
         var services = new ServiceCollection();

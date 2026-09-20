@@ -1,7 +1,8 @@
-using Microsoft.Extensions.DependencyInjection;
+﻿using Microsoft.Extensions.DependencyInjection;
 using Moongazing.OrionLock;
 using Moongazing.OrionLock.DependencyInjection;
 using Moongazing.OrionLock.Postgres;
+using Moongazing.OrionLock.Tests.Containers;
 
 namespace Moongazing.OrionLock.Postgres.Tests;
 
@@ -11,7 +12,7 @@ public sealed class SmokeTest : IClassFixture<PostgresContainerFixture>
 
     public SmokeTest(PostgresContainerFixture fx) => this.fx = fx;
 
-    [Fact]
+    [DockerFact]
     public async Task AddOrionLock_UsePostgres_AcquireDispose_Works()
     {
         var services = new ServiceCollection();
@@ -39,7 +40,7 @@ public sealed class SmokeTest : IClassFixture<PostgresContainerFixture>
         Assert.True(second.IsHeld);
     }
 
-    [Fact]
+    [DockerFact]
     public async Task TwoConsumers_AcquireSerialise()
     {
         var services = new ServiceCollection();

@@ -1,4 +1,4 @@
-<!-- markdownlint-disable MD024 -->
+﻿<!-- markdownlint-disable MD024 -->
 # Changelog
 
 All notable changes to OrionLock are documented in this file. The format is based on
@@ -6,6 +6,18 @@ All notable changes to OrionLock are documented in this file. The format is base
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
+
+### Changed
+
+- **The container-backed tests skip instead of failing when Docker is absent.** The Redis, PostgreSQL,
+  SQL Server and EF Core suites hard-failed on a machine with no Docker daemon - 135 red tests that said
+  nothing about the code and hid the ones that did. They now carry `[DockerFact]` / `[DockerTheory]`,
+  which probe the Docker endpoint once per run and skip with a reason. Test only; no shipped code changed.
+- **Testcontainers 3.10.0 -> 4.15.0 across the test suites.** 3.10.0 pulled `SSH.NET 2023.0.0`
+  transitively, which carries [GHSA-q939-rpr3-3284](https://github.com/advisories/GHSA-q939-rpr3-3284)
+  (High) and raised NU1903 on every restore. Nothing shipped ever referenced it. Testcontainers 4 also
+  requires an explicit image, so the Redis, PostgreSQL and SQL Server tags are now pinned in one place
+  instead of taken from the library defaults.
 
 ## [2.0.0] - 2026-07-29
 
