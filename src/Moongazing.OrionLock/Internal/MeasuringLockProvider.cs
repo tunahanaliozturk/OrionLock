@@ -29,6 +29,16 @@ internal sealed class MeasuringLockProvider : IDistributedLockProvider
     /// <summary>The backend identifier used as the <c>backend</c> tag on emitted metrics.</summary>
     public string BackendName => backendName;
 
+    /// <summary>
+    /// Forwards the inner provider's TTL semantics. Without this the decorator fell back to the
+    /// interface default (<see langword="true"/>), so every session-scoped backend that overrides it to
+    /// <see langword="false"/> (PostgreSQL advisory locks, SQL Server sp_getapplock) was reported as a
+    /// TTL backend once <c>AddOrionLock</c> wrapped it - the decorator is applied to EVERY provider, so
+    /// the override was unreachable in production and only visible in tests that construct the provider
+    /// directly.
+    /// </summary>
+    public bool LeaseDurationIsTtl => inner.LeaseDurationIsTtl;
+
     public async Task<bool> TryAcquireAsync(string key, string ownerToken, TimeSpan leaseDuration, CancellationToken cancellationToken)
     {
         var sw = Stopwatch.StartNew();

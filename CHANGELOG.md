@@ -7,6 +7,17 @@ All notable changes to OrionLock are documented in this file. The format is base
 
 ## [Unreleased]
 
+### Fixed
+
+- **The internal measuring decorator no longer reports every backend as a TTL backend.**
+  `AddOrionLock` wraps the registered `IDistributedLockProvider` in an internal measuring decorator, and
+  that decorator did not forward `LeaseDurationIsTtl` — it fell back to the interface default of `true`.
+  A session-scoped backend that overrides the flag to `false` (PostgreSQL advisory locks, SQL Server
+  `sp_getapplock`) therefore had its override discarded the moment it went through DI, so anything gated
+  on the flag behaved as if the lease were a wall-clock TTL. The decorator now forwards the inner
+  provider's value. If you relied on the `orion.lock.lease.expired_before_release` counter firing for a
+  session-scoped backend, it will now correctly stay silent there.
+
 ### Changed
 
 - **CI runs with least privilege and pinned actions.** The workflow declares
