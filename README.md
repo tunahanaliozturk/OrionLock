@@ -120,6 +120,8 @@ A single `DistributedLock` instance (a DI singleton) re-acquiring a key it alrea
 
 Added in v0.4.0. `ISharedExclusiveLock` is a reader-writer lock for a resource key: any number of `Shared` (read) holders coexist, OR exactly one `Exclusive` (write) holder owns it. Acquire, `WaitTimeout`/`RetryInterval`, lease and renewal, release, and diagnostics semantics mirror the exclusive `IDistributedLock`, and every acquire returns the same `IDistributedLockHandle`.
 
+That mirroring is literal, not aspirational: both handles drive the same internal lease watchdog, so a reader-writer hold emits the same instruments in the same order as an exclusive one and fires the same `ILockEventObserver` callbacks. A parity test drives every lifecycle — renewal, backend-confirmed loss, exhausted renewal grace, TTL expiry — through both and fails if they ever diverge. Two documented exceptions: reentrancy is not modelled for reader-writer holds (each acquire takes a fresh backend hold), and the FIFO waiter coordinator is exclusive-only. To receive observer callbacks, construct `new SharedExclusiveLock(provider, observer)`; the backend registrations do not yet thread a DI-registered observer through.
+
 `UseInMemory()` from `OrionLock.Testing` registers `ISharedExclusiveLock`, so it resolves from DI like the exclusive lock:
 
 ```csharp
