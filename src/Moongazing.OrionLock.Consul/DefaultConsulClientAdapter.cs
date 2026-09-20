@@ -65,9 +65,9 @@ public sealed class DefaultConsulClientAdapter : IConsulClientAdapter, IConsulFe
     /// <inheritdoc />
     public async Task<bool> KvAcquireAsync(string key, string ownerToken, string sessionId, CancellationToken cancellationToken)
     {
-        // The key is spliced into /v1/kv/{key} as a URI path; see ConsulKvPath for what an unencoded
-        // one can be made to do.
-        var pair = new KVPair(ConsulKvPath.Encode(key, nameof(key)))
+        // The path is spliced into /v1/kv/{path} as a URI; see ConsulKvPath. The key itself was already
+        // validated by the core (Moongazing.OrionLock.LockKey) before it reached this provider.
+        var pair = new KVPair(ConsulKvPath.Encode(key))
         {
             Value = Encoding.UTF8.GetBytes(ownerToken),
             Session = sessionId,
@@ -93,7 +93,7 @@ public sealed class DefaultConsulClientAdapter : IConsulClientAdapter, IConsulFe
     /// <inheritdoc />
     public async Task<bool> KvReleaseAsync(string key, string sessionId, CancellationToken cancellationToken)
     {
-        var pair = new KVPair(ConsulKvPath.Encode(key, nameof(key)))
+        var pair = new KVPair(ConsulKvPath.Encode(key))
         {
             Session = sessionId,
         };

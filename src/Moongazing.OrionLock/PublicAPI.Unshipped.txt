@@ -32,3 +32,6 @@ static Moongazing.OrionLock.Providers.LockAcquisition.NotAcquired.get -> Moongaz
 static Moongazing.OrionLock.Providers.LockAcquisition.operator !=(Moongazing.OrionLock.Providers.LockAcquisition left, Moongazing.OrionLock.Providers.LockAcquisition right) -> bool
 static Moongazing.OrionLock.Providers.LockAcquisition.operator ==(Moongazing.OrionLock.Providers.LockAcquisition left, Moongazing.OrionLock.Providers.LockAcquisition right) -> bool
 static Moongazing.OrionLock.Providers.LockAcquisition.Unfenced.get -> Moongazing.OrionLock.Providers.LockAcquisition
+Moongazing.OrionLock.LockKey
+const Moongazing.OrionLock.LockKey.MaxLength = 200 -> int
+static Moongazing.OrionLock.LockKey.Validate(string? key, string! paramName = "key") -> void

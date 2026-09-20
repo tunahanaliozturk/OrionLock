@@ -185,6 +185,17 @@ The token is also passed to `ILockEventObserver.OnAcquired(key, durationMs, fenc
 
 A single `DistributedLock` instance (a DI singleton) re-acquiring a key it already holds returns a counted nested handle without touching the backend. The outermost dispose releases. Reentrancy collapses same-process re-acquisition only; it does not cross process boundaries.
 
+## Lock keys
+
+A key is **one opaque name**, the same on every backend. `LockKey.Validate` runs in the core before any backend sees the key, and throws `ArgumentException` on your own thread at acquire time — not later, as a driver error from whichever server happened to mind. It refuses:
+
+- **`/`.** The key is caller data that two backends splice into a namespace they do not own: Consul builds `/v1/kv/{key}` out of it and ZooKeeper builds a znode path. A `/` used to mean "hierarchy" there and nothing on the other five, so the same key addressed different things depending on the registration. Express hierarchy through the backend's own namespace knob — `RedisLockOptions.KeyPrefix`, `ConsulLockOptions.KeyPrefix`, `ZooKeeperLockOptions.RootPath`, `SqlServerLockOptions.KeyPrefix` — which every backend already has.
+- **`.` and `..`**, which URI and znode canonicalisation resolve. This cannot be delegated to encoding: .NET unescapes `%2E` back to `.`, so `..` survives percent-encoding and still collapses.
+- **Control characters** (`U+0000`–`U+001F`, `U+007F`–`U+009F`) and the ranges ZooKeeper refuses in a znode name (`U+D800`–`U+F8FF`, `U+FFF0`–`U+FFFF`), so a key fails fast and identically everywhere rather than at one server.
+- **Keys longer than `LockKey.MaxLength` (200)** — the bound the EF Core row maps `Key` at, and small enough to fit SQL Server's `sp_getapplock` `@Resource` budget with a prefix.
+
+The core validates and rejects; it does not encode. A URI path, a znode name and a Redis key are different alphabets, so each backend encodes what remains for its own wire format.
+
 ## Shared / exclusive (reader-writer) locks
 
 Added in v0.4.0. `ISharedExclusiveLock` is a reader-writer lock for a resource key: any number of `Shared` (read) holders coexist, OR exactly one `Exclusive` (write) holder owns it. Acquire, `WaitTimeout`/`RetryInterval`, lease and renewal, release, and diagnostics semantics mirror the exclusive `IDistributedLock`, and every acquire returns the same `IDistributedLockHandle`.

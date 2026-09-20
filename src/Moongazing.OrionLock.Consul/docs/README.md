@@ -62,10 +62,12 @@ the crash-and-expire conditions fencing exists for.
 
 ## Lock keys are URI path data
 
-The lock key is concatenated into Consul's `/v1/kv/{key}` HTTP path. Keys are percent-encoded per path
-segment, and a key containing an empty segment (a leading, trailing or doubled `/`) or a relative segment
-(`.`, `..`) is rejected with an `ArgumentException` — URI canonicalisation would resolve those and send
-the request somewhere other than the KV store. Use `ConsulLockOptions.KeyPrefix` for namespacing; its
-slashes are hierarchy and are preserved.
+The lock key is concatenated into Consul's `/v1/kv/{key}` HTTP path. The core rejects any key containing
+`/` (and `.`, `..`, control characters, and anything over 200 characters) with an `ArgumentException` on
+your own thread, before this backend sees it — URI canonicalisation resolves `/../` and would send the
+request somewhere other than the KV store, and percent-encoding cannot save it because .NET unescapes
+`%2E` back to `.`. What remains is percent-encoded per path segment, so `?`, `#` and `&` in a key cannot
+splice the request. Use `ConsulLockOptions.KeyPrefix` for namespacing; its slashes are hierarchy and are
+preserved.
 
 See <https://github.com/tunahanaliozturk/OrionLock>.

@@ -57,7 +57,7 @@ public sealed class DistributedLock : IDistributedLock
     public Task<IDistributedLockHandle?> TryAcquireAsync(
         string key, DistributedLockOptions? options = null, CancellationToken cancellationToken = default)
     {
-        ArgumentException.ThrowIfNullOrWhiteSpace(key);
+        LockKey.Validate(key);
         options ??= new DistributedLockOptions();
         // Establish the reentrancy owner scope HERE, in the caller's synchronous frame, so it survives
         // into the caller's critical section. See ReentrancyRegistry.EnsureOwnerScope.
@@ -69,7 +69,7 @@ public sealed class DistributedLock : IDistributedLock
     public Task<IDistributedLockHandle?> TryAcquireAsync(
         string key, TimeSpan deadline, DistributedLockOptions? options = null, CancellationToken cancellationToken = default)
     {
-        ArgumentException.ThrowIfNullOrWhiteSpace(key);
+        LockKey.Validate(key);
         options ??= new DistributedLockOptions();
         var owner = reentrancy.EnsureOwnerScope(key);
 
@@ -120,7 +120,7 @@ public sealed class DistributedLock : IDistributedLock
     public Task<IDistributedLockHandle> AcquireAsync(
         string key, DistributedLockOptions? options = null, CancellationToken cancellationToken = default)
     {
-        ArgumentException.ThrowIfNullOrWhiteSpace(key);
+        LockKey.Validate(key);
         options ??= new DistributedLockOptions();
         // Deliberately NOT an async method: EnsureOwnerScope must run in the caller's own execution
         // context (an async body's context changes are discarded when it returns), so the blocking

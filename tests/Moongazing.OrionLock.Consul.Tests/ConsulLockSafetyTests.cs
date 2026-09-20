@@ -48,13 +48,14 @@ public sealed class ConsulLockSafetyTests
     [InlineData("orionlock//k")]
     [InlineData("/orionlock/k")]
     [InlineData("orionlock/k/")]
-    public void ATraversingKey_IsRejected_RatherThanRetargetingTheRequest(string key)
+    public void ATraversingKey_IsRejectedByTheCore_BeforeItCanRetargetTheRequest(string key)
     {
         // Consul.NET concatenates the key after /v1/kv/ into a UriBuilder.Path, and .NET's URI
         // canonicalisation COLLAPSES /../ - so a key like this turns a KV acquire into a call to a
-        // different Consul endpoint. Encoding cannot save it (.NET unescapes %2E back to '.'), so it is
-        // refused.
-        Assert.Throws<ArgumentException>(() => ConsulKvPath.Encode(key, "key"));
+        // different Consul endpoint. Encoding cannot save it (.NET unescapes %2E back to '.'). The rule
+        // now lives in the core so every backend refuses the same keys; this pins that the Consul
+        // traversals in particular still cannot be expressed.
+        Assert.Throws<ArgumentException>(() => LockKey.Validate(key));
     }
 
     [Theory]
@@ -62,10 +63,10 @@ public sealed class ConsulLockSafetyTests
     [InlineData("orionlock/a#b", "orionlock/a%23b")]
     [InlineData("orionlock/a b", "orionlock/a%20b")]
     [InlineData("orionlock/a&b=c", "orionlock/a%26b%3Dc")]
-    public void UriDelimitersInAKey_ArePercentEncoded_NotSplicedIntoTheRequest(string key, string expected)
-        => Assert.Equal(expected, ConsulKvPath.Encode(key, "key"));
+    public void UriDelimitersInAPath_ArePercentEncoded_NotSplicedIntoTheRequest(string path, string expected)
+        => Assert.Equal(expected, ConsulKvPath.Encode(path));
 
     [Fact]
-    public void AnOrdinaryPrefixedKey_KeepsItsHierarchy()
-        => Assert.Equal("orionlock/tenant-1/orders", ConsulKvPath.Encode("orionlock/tenant-1/orders", "key"));
+    public void ThePrefixKeepsItsHierarchy()
+        => Assert.Equal("orionlock/tenant-1/orders", ConsulKvPath.Encode("orionlock/tenant-1/orders"));
 }

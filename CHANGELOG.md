@@ -65,6 +65,34 @@ All notable changes to OrionLock are documented in this file. The format is base
   in your model: the provider reads column names from the EF model, finds nothing mapped, and emits exactly
   the SQL it emitted before fencing existed while reporting no token. Locking behaviour is unchanged either
   way.
+### Changed
+
+- **BREAKING: a lock key is now one opaque name, validated in the core — `/` is no longer legal in a key.**
+  The key is caller data, and two backends spliced it into a namespace they do not own: the Consul
+  provider built an HTTP path out of it and ZooKeeper built a znode path. Both were hardened in place,
+  which left seven backends with three different ideas of what a key is — `/` meant "namespace hierarchy"
+  on Consul and ZooKeeper and nothing on the other five, so the same key addressed different things
+  depending only on which backend you registered. **Used to happen:** a key like `tenant-1/orders` was a
+  two-level KV path on Consul, one flattened `tenant-1~002Forders` znode on ZooKeeper, and a literal
+  string with a slash in it on Redis, SQL Server, PostgreSQL, EF Core and the in-memory backend; a key
+  like `../session/destroy/abc` was refused by Consul and ZooKeeper only, and a key with a control
+  character or 5 000 characters in it was refused by SQL Server only, at different points in the call.
+  **Happens now:** `LockKey.Validate` runs in the core before any backend sees the key and throws
+  `ArgumentException` on the caller's own thread at acquire time — naming the offending key — for a key
+  containing `/`, for the relative names `.` and `..`, for control characters (`U+0000`–`U+001F`,
+  `U+007F`–`U+009F`) and the ranges ZooKeeper refuses in a znode name (`U+D800`–`U+F8FF`,
+  `U+FFF0`–`U+FFFF`), and for a key longer than `LockKey.MaxLength` (200 — the bound the EF Core row
+  already mapped `Key` at, and one that fits SQL Server's ~240-character `@Resource` budget with a
+  prefix). The core validates and rejects only; it does not percent-encode, because a URI path, a znode
+  name and a Redis key are different alphabets — each backend still encodes what survives.
+  **What to do:** move hierarchy out of the key and into the backend's own namespace knob, which every
+  backend already has: `RedisLockOptions.KeyPrefix`, `ConsulLockOptions.KeyPrefix`,
+  `SqlServerLockOptions.KeyPrefix`, `PostgresLockOptions.KeyPrefix`, `ZooKeeperLockOptions.RootPath`,
+  `EtcdLockOptions.KeyPrefix`. `lock.AcquireAsync("tenant-1/orders")` becomes
+  `UseConsul(..., o => o.KeyPrefix = "orionlock/tenant-1/")` plus `AcquireAsync("orders")`, or simply
+  `AcquireAsync("tenant-1:orders")` if the separator carried no meaning. Keys already held on a backend
+  keep their existing on-the-wire names: this changes what you may ask for, not how a valid key is
+  encoded. `ConsulKvPath` is now only a percent-encoder and no longer rejects anything itself.
 
 ### Fixed
 
