@@ -30,12 +30,37 @@ public sealed class ConsulLockOptions
     public TimeSpan MinSessionTtl { get; set; } = TimeSpan.FromSeconds(10);
 
     /// <summary>
-    /// Consul session <c>LockDelay</c>. When omitted, Consul applies a default 15-second
-    /// LockDelay during which the released key remains unavailable to other sessions. That
-    /// silently blocks blocking waiters that timed out within OrionLock's default 10-second
-    /// <c>WaitTimeout</c>. Default <see cref="TimeSpan.Zero"/> so a release immediately puts
-    /// the lock back in the pool; tune up only for workloads that intentionally want a
-    /// quiescence window between handoffs.
+    /// Consul session <c>LockDelay</c>: after a session is INVALIDATED (node loss, TTL expiry), the
+    /// locks it held stay unavailable to any other session for this long. Default 5 seconds.
     /// </summary>
-    public TimeSpan LockDelay { get; set; } = TimeSpan.Zero;
+    /// <remarks>
+    /// <para>
+    /// This is the mechanism that makes a Consul session lock safe under partition, not a tuning knob.
+    /// Consul invalidating a session does not stop the process that held it: that process finds out only
+    /// on its next renewal attempt. With no lock delay the key is free the instant Consul gives up on the
+    /// session, so a new holder can enter the critical section while the old one is still inside it.
+    /// The delay is the window in which the old holder notices and stands down.
+    /// </para>
+    /// <para>
+    /// <b>It is only long enough if it outlasts that window.</b> With OrionLock's defaults the holder
+    /// surrenders when <c>RenewalFailureGracePeriod</c> (default = <c>LeaseDuration</c>, 30s) elapses
+    /// without a successful renewal, and Consul invalidates the session when its TTL
+    /// (<c>max(LeaseDuration, MinSessionTtl)</c>, also 30s) elapses - the two coincide, so the delay only
+    /// has to cover scheduling and clock jitter, which 5 seconds does comfortably. Raise
+    /// <c>RenewalFailureGracePeriod</c> above the session TTL and you MUST raise this by the same amount,
+    /// or the guarantee is gone.
+    /// </para>
+    /// <para>
+    /// <b>It does not slow down a normal release.</b> <c>ReleaseAsync</c> releases the KV entry before
+    /// destroying the session, so the session holds no lock when it is invalidated and the delay never
+    /// applies - the key is back in the pool immediately. The delay is paid only on the crash and
+    /// partition paths, which is exactly where it is wanted. Consul's own default is 15 seconds; 5 keeps
+    /// half of OrionLock's default 10-second <c>WaitTimeout</c> usable even on that path.
+    /// </para>
+    /// <para>
+    /// Set to <see cref="TimeSpan.Zero"/> only if you accept that a partitioned holder and its successor
+    /// can overlap.
+    /// </para>
+    /// </remarks>
+    public TimeSpan LockDelay { get; set; } = TimeSpan.FromSeconds(5);
 }

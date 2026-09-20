@@ -1,10 +1,11 @@
-<Project Sdk="Microsoft.NET.Sdk">
+﻿<Project Sdk="Microsoft.NET.Sdk">
   <PropertyGroup>
     <PackageId>OrionLock.Consul</PackageId>
     <!-- Unpublished backend held below 1.0 (not on the published pack list, never released). Overrides the repo-wide 1.0.0 in Directory.Build.props. -->
     <Version>0.6.0</Version>
     <Description>HashiCorp Consul backend for OrionLock distributed locking. Implements IDistributedLockProvider over Consul session-bound KV acquire/release semantics; lease renewal maps to Consul session renew so lease loss propagates naturally on node failure.</Description>
     <PackageTags>distributed-lock;consul;hashicorp;orionlock</PackageTags>
+    <PackageReadmeFile>docs/README.md</PackageReadmeFile>
   </PropertyGroup>
   <ItemGroup>
     <PackageReference Include="Consul" Version="1.7.14.6" />
@@ -13,5 +14,11 @@
   </ItemGroup>
   <ItemGroup>
     <ProjectReference Include="..\Moongazing.OrionLock\Moongazing.OrionLock.csproj" />
+  </ItemGroup>
+  <ItemGroup>
+    <None Include="docs/README.md" Pack="true" PackagePath="docs/" />
+  </ItemGroup>
+  <ItemGroup>
+    <InternalsVisibleTo Include="Moongazing.OrionLock.Consul.Tests" />
   </ItemGroup>
 </Project>
