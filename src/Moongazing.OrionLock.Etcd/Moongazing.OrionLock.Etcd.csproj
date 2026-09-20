@@ -1,8 +1,14 @@
 <Project Sdk="Microsoft.NET.Sdk">
   <PropertyGroup>
     <PackageId>OrionLock.Etcd</PackageId>
-    <!-- Unpublished backend held below 1.0 (not on the published pack list, never released). Overrides the repo-wide 1.0.0 in Directory.Build.props. -->
-    <Version>0.6.0</Version>
+    <!--
+      Unpublished backend, held below 1.0 and overriding the repo-wide 3.0.0 in Directory.Build.props.
+      It is not on the release job's pack list and has never been released to nuget.org. The reason is
+      test coverage, not readiness: this project's test suite has no Testcontainers reference, no etcd
+      fixture and no CI service, so the provider's behaviour against a real etcd cluster has never
+      executed anywhere. A distributed lock backend proven only against fakes is not something to ship.
+    -->
+    <Version>0.7.0</Version>
     <Description>etcd backend for OrionLock distributed locking. Implements IDistributedLockProvider over etcd v3 lease-bound keys: TryAcquire creates a lease + transactional put-if-absent, TryRenew refreshes the lease, Release revokes it.</Description>
     <PackageTags>distributed-lock;etcd;orionlock</PackageTags>
   </PropertyGroup>
