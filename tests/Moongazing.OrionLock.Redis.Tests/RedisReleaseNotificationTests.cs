@@ -197,8 +197,12 @@ public sealed class RedisReleaseNotificationTests
         // The other thing a null TTL means: StackExchange.Redis cannot tell "no key" from "key with
         // no expiry". A foreign persistent key under our prefix would otherwise be retried in a
         // tight loop for the whole budget, at full CPU.
+        var floor = TimeSpan.FromMilliseconds(50);
+        var budget = TimeSpan.FromMilliseconds(300);
+
         var db = new Mock<IDatabase>();
         var attempts = 0;
+        var clock = Stopwatch.StartNew();
         db.Setup(d => d.StringSetAsync(
                 It.IsAny<RedisKey>(), It.IsAny<RedisValue>(), It.IsAny<TimeSpan?>(),
                 It.IsAny<bool>(), It.IsAny<When>(), It.IsAny<CommandFlags>()))
@@ -210,12 +214,30 @@ public sealed class RedisReleaseNotificationTests
         var sut = new RedisLockProvider(Multiplexer(db.Object, sub), new RedisLockOptions());
 
         var acquired = await sut.WaitForAcquireAsync(
-            "k", "owner-1", Lease, TimeSpan.FromMilliseconds(300),
-            new LockWaitPolicy(TimeSpan.FromMilliseconds(50)), default);
+            "k", "owner-1", Lease, budget, new LockWaitPolicy(floor), default);
+        clock.Stop();
 
         Assert.False(acquired.Acquired);
-        // One immediate retry, then the poll floor: roughly 300 / 50 attempts, nowhere near a spin.
-        Assert.InRange(Volatile.Read(ref attempts), 2, 20);
+
+        // "Not spun on" is a statement about RATE, not about a count. Bounding the count instead -
+        // this used to read InRange(attempts, 2, 20) - bounds it against the BUDGET, and the budget
+        // is not what limits the loop; the poll floor is. That hid a real spin for as long as the
+        // spin stayed under twenty iterations, and it failed on a loaded runner for reasons that had
+        // nothing to do with spinning. The honest bound is one attempt per poll floor of time that
+        // actually passed, plus the two that arrive back to back on purpose: the first refusal and
+        // the one immediate retry that tells "no TTL" apart from "the key just vanished". A slow
+        // machine stretches the elapsed time and the allowance with it, so this cannot fail for
+        // being slow - only for spinning.
+        var allowed = 2 + (int)Math.Ceiling(clock.Elapsed / floor);
+        var observed = Volatile.Read(ref attempts);
+
+        Assert.True(
+            observed >= 2,
+            $"the immediate retry that distinguishes a vanished key from a key with no expiry did not happen: {observed} attempt(s)");
+        Assert.True(
+            observed <= allowed,
+            $"{observed} attempts in {clock.ElapsedMilliseconds}ms at a {floor.TotalMilliseconds}ms poll floor: "
+            + $"at most {allowed} can be spaced by the floor, so the rest were a spin on the store.");
     }
 
     [Fact]
