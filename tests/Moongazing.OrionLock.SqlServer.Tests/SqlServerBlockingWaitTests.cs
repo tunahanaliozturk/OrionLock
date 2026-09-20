@@ -186,7 +186,7 @@ public sealed class SqlServerBlockingWaitTests : IClassFixture<SqlServerContaine
         const int Budget = 700;
         // Both real failures happened on a saturated runner. Saturate it deliberately.
         using var hog = new CancellationTokenSource();
-        var hogs = Enumerable.Range(0, Environment.ProcessorCount * 3)
+        var hogs = Enumerable.Range(0, Environment.ProcessorCount * 16)
             .Select(_ => Task.Factory.StartNew(
                 () => { var s = new SpinWait(); while (!hog.IsCancellationRequested) { s.SpinOnce(); } },
                 TaskCreationOptions.LongRunning))
