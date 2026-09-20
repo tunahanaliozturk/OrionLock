@@ -51,10 +51,19 @@ public class ContentionBenchmarks
     [Params(2, 8, 64, 256)]
     public int Waiters { get; set; }
 
+    /// <summary>
+    /// False is the pre-v2.1 waiter: the interface default, which polls. True is a backend that
+    /// overrides <c>WaitForAcquireAsync</c> and parks the waiter until the lock frees, the way SQL
+    /// Server's lock queue, a Redis release channel, an etcd watch and a ZooKeeper predecessor
+    /// watch now do. Both run in one table so the before and the after cannot drift apart.
+    /// </summary>
+    [Params(false, true)]
+    public bool EventDrivenWait { get; set; }
+
     [GlobalSetup]
     public void Setup()
     {
-        provider = new CountingLockProvider(new BenchInMemoryLockProvider());
+        provider = new CountingLockProvider(new BenchInMemoryLockProvider(EventDrivenWait), forwardWait: EventDrivenWait);
         gateLock = new DistributedLock(provider);
         waiterLocks = new DistributedLock[Waiters];
         for (var i = 0; i < Waiters; i++)
@@ -104,10 +113,13 @@ public class ContentionBenchmarks
         // makes the measurement deterministic.
         var harnessCalls = Waiters + 1;
         var rawPerOp = provider.AcquireCalls / (double)ops;
+        var netPerOp = rawPerOp - harnessCalls;
         Console.WriteLine(
-            $"// ContentionBenchmarks Waiters={Waiters}: ops={ops}, " +
-            $"TryAcquireAsync/op={rawPerOp:F1} raw, {rawPerOp - harnessCalls:F1} net of harness " +
+            $"// ContentionBenchmarks Waiters={Waiters} EventDrivenWait={EventDrivenWait}: ops={ops}, " +
+            $"TryAcquireAsync/op={rawPerOp:F1} raw, {netPerOp:F1} net of harness " +
+            $"({netPerOp / Waiters:F2} per waiter), " +
             $"(harness = 1 gate acquire + {Waiters} barrier probes), " +
+            $"WaitForAcquireAsync/op={provider.WaitCalls / (double)ops:F1}, " +
             $"ReleaseAsync/op={provider.ReleaseCalls / (double)ops:F1} (includes the gate release)");
     }
 
