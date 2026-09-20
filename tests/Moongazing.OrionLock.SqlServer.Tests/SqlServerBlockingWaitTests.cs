@@ -82,6 +82,67 @@ public sealed class SqlServerWaitBudgetTests
             "k", "", Lease, TimeSpan.FromSeconds(1), LockWaitPolicy.Default, default));
     }
 
+    [Fact]
+    public async Task A_round_that_gives_up_early_is_re_issued_with_what_is_left_of_the_budget()
+    {
+        // sp_getapplock's @LockTimeout is enforced against SQL Server's own lock-wait accounting,
+        // not wall clock, and on a saturated host that accounting runs ahead of it: CI measured a
+        // 700 ms @LockTimeout returning -1 after 213 ms of real time while
+        // sys.dm_exec_session_wait_stats credited the same wait with 3.5 seconds. A caller who
+        // sized a budget gets the budget, so the provider keeps the clock itself.
+        var handed = new List<TimeSpan>();
+        var sw = Stopwatch.StartNew();
+
+        var result = await SqlServerLockProvider.WaitWithinBudgetAsync(
+            TimeSpan.FromMilliseconds(400),
+            new LockWaitPolicy(TimeSpan.FromMilliseconds(20)),
+            remaining =>
+            {
+                handed.Add(remaining);
+                return Task.FromResult(LockAcquisition.NotAcquired);
+            },
+            default);
+        sw.Stop();
+
+        Assert.False(result.Acquired);
+        Assert.True(handed.Count > 1, $"one round only: the early give-up was reported as the whole wait ({handed.Count} round(s))");
+        Assert.InRange(sw.ElapsedMilliseconds, 350, 5_000);
+        // Each round is handed what is LEFT, never the original figure again - otherwise the last
+        // round could park past the caller's deadline.
+        Assert.True(handed[^1] < handed[0], $"the budget handed to each round did not shrink: {handed[0]} then {handed[^1]}");
+    }
+
+    [Fact]
+    public async Task A_round_that_wins_ends_the_wait_there_and_then()
+    {
+        var attempts = 0;
+
+        var result = await SqlServerLockProvider.WaitWithinBudgetAsync(
+            TimeSpan.FromSeconds(30),
+            new LockWaitPolicy(TimeSpan.FromMilliseconds(1)),
+            _ => Task.FromResult(++attempts == 2 ? LockAcquisition.Unfenced : LockAcquisition.NotAcquired),
+            default);
+
+        Assert.True(result.Acquired);
+        Assert.Equal(2, attempts);
+    }
+
+    [Fact]
+    public async Task A_zero_budget_is_still_the_single_shot_try_it_always_was()
+    {
+        // The core never calls the wait with nothing left, but "wait up to zero" means "ask once",
+        // not "ask nothing" - and asking nothing would silently drop an acquire that was free.
+        var attempts = 0;
+
+        var result = await SqlServerLockProvider.WaitWithinBudgetAsync(
+            TimeSpan.Zero,
+            LockWaitPolicy.Default,
+            _ => { attempts++; return Task.FromResult(LockAcquisition.NotAcquired); },
+            default);
+
+        Assert.False(result.Acquired);
+        Assert.Equal(1, attempts);
+    }
 }
 
 /// <summary>

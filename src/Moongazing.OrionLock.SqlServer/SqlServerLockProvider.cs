@@ -1,5 +1,6 @@
 using System.Collections.Concurrent;
 using System.Data;
+using System.Diagnostics;
 using Microsoft.Data.SqlClient;
 using Moongazing.OrionLock;
 using Moongazing.OrionLock.Diagnostics;
@@ -82,6 +83,17 @@ public sealed class SqlServerLockProvider : IDistributedLockProvider, IDisposabl
     /// cancelled, the exception propagates through the <c>catch</c> below, and the connection - and
     /// with it the session and its place in the queue - is disposed.
     /// </para>
+    /// <para>
+    /// The budget is kept HERE, on this side's monotonic clock, rather than being handed to
+    /// <c>@LockTimeout</c> and believed. <c>sp_getapplock</c>'s timeout is enforced against SQL
+    /// Server's own lock-wait accounting, which is documented as a ceiling and is not wall clock: on
+    /// a CPU-saturated host it runs far ahead of it, and a 700 ms <c>@LockTimeout</c> has been
+    /// measured in CI giving up after 213 ms of real time while
+    /// <c>sys.dm_exec_session_wait_stats</c> credited that same wait with 3.5 seconds. The caller
+    /// sized the budget, so a round that comes back empty with budget still on the clock is
+    /// re-issued with what is left. When the server's timer is honest - the normal case - this is
+    /// still exactly one round trip.
+    /// </para>
     /// </remarks>
     public Task<LockAcquisition> WaitForAcquireAsync(
         string key, string ownerToken, TimeSpan leaseDuration, TimeSpan maxWait,
@@ -90,7 +102,61 @@ public sealed class SqlServerLockProvider : IDistributedLockProvider, IDisposabl
         ValidateKey(key);
         ArgumentException.ThrowIfNullOrWhiteSpace(ownerToken);
 
-        return GetAppLockAsync(key, ownerToken, LockTimeoutMsFor(maxWait), maxWait, cancellationToken);
+        // "Wait forever" has no budget to keep, and re-issuing it could only lose the queue place
+        // it already holds, so it stays the single blocking round trip it has always been.
+        return maxWait == Timeout.InfiniteTimeSpan
+            ? GetAppLockAsync(key, ownerToken, LockTimeoutMsFor(maxWait), maxWait, cancellationToken)
+            : WaitWithinBudgetAsync(
+                maxWait,
+                waitPolicy,
+                remaining => GetAppLockAsync(
+                    key, ownerToken, LockTimeoutMsFor(remaining), remaining, cancellationToken),
+                cancellationToken);
+    }
+
+    /// <summary>
+    /// Runs <paramref name="attemptAsync"/> until it wins the lock or <paramref name="maxWait"/> is
+    /// genuinely spent on this side's monotonic clock, handing each attempt what is LEFT of the
+    /// budget rather than the original figure.
+    /// </summary>
+    /// <remarks>
+    /// Always attempts at least once, so a zero budget is the single-shot try it was before. An
+    /// attempt that comes back empty without consuming <see cref="LockWaitPolicy.RetryInterval"/>
+    /// sleeps the difference first: the caller's own poll floor, which is what this parameter is
+    /// for. Without it a server whose lock timer refused instantly would turn a long budget into a
+    /// hot loop against the database instead of the poll the wait is meant to degrade into.
+    /// </remarks>
+    internal static async Task<LockAcquisition> WaitWithinBudgetAsync(
+        TimeSpan maxWait,
+        LockWaitPolicy waitPolicy,
+        Func<TimeSpan, Task<LockAcquisition>> attemptAsync,
+        CancellationToken cancellationToken)
+    {
+        var elapsed = Stopwatch.StartNew();
+        while (true)
+        {
+            var remaining = maxWait - elapsed.Elapsed;
+            var roundStarted = elapsed.Elapsed;
+
+            var acquisition = await attemptAsync(
+                remaining > TimeSpan.Zero ? remaining : TimeSpan.Zero).ConfigureAwait(false);
+            if (acquisition.Acquired)
+            {
+                return acquisition;
+            }
+
+            var left = maxWait - elapsed.Elapsed;
+            if (left <= TimeSpan.Zero)
+            {
+                return LockAcquisition.NotAcquired;
+            }
+
+            var floor = waitPolicy.RetryInterval - (elapsed.Elapsed - roundStarted);
+            if (floor > TimeSpan.Zero)
+            {
+                await Task.Delay(floor < left ? floor : left, cancellationToken).ConfigureAwait(false);
+            }
+        }
     }
 
     /// <summary>
