@@ -120,11 +120,19 @@ public sealed class SqlServerLockProvider : IDistributedLockProvider, IDisposabl
     /// budget rather than the original figure.
     /// </summary>
     /// <remarks>
-    /// Always attempts at least once, so a zero budget is the single-shot try it was before. An
-    /// attempt that comes back empty without consuming <see cref="LockWaitPolicy.RetryInterval"/>
+    /// <para>
+    /// The FIRST attempt is unconditional, so a zero budget is the single-shot try it was before.
+    /// Every later one is gated on the deadline: a round issued after the budget is gone can still
+    /// win, and a lock handed to a caller who already stopped waiting - and who may by then have
+    /// taken the other branch - is worse than the early give-up this method exists to prevent. Late
+    /// is not a wasted wait, it is a lock nobody is holding on purpose.
+    /// </para>
+    /// <para>
+    /// An attempt that comes back empty without consuming <see cref="LockWaitPolicy.RetryInterval"/>
     /// sleeps the difference first: the caller's own poll floor, which is what this parameter is
     /// for. Without it a server whose lock timer refused instantly would turn a long budget into a
     /// hot loop against the database instead of the poll the wait is meant to degrade into.
+    /// </para>
     /// </remarks>
     internal static async Task<LockAcquisition> WaitWithinBudgetAsync(
         TimeSpan maxWait,
@@ -133,10 +141,17 @@ public sealed class SqlServerLockProvider : IDistributedLockProvider, IDisposabl
         CancellationToken cancellationToken)
     {
         var elapsed = Stopwatch.StartNew();
+        var attempted = false;
         while (true)
         {
             var remaining = maxWait - elapsed.Elapsed;
+            if (attempted && remaining <= TimeSpan.Zero)
+            {
+                return LockAcquisition.NotAcquired;
+            }
+
             var roundStarted = elapsed.Elapsed;
+            attempted = true;
 
             var acquisition = await attemptAsync(
                 remaining > TimeSpan.Zero ? remaining : TimeSpan.Zero).ConfigureAwait(false);

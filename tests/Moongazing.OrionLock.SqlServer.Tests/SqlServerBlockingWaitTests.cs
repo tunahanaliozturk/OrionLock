@@ -128,6 +128,43 @@ public sealed class SqlServerWaitBudgetTests
     }
 
     [Fact]
+    public async Task No_round_is_issued_once_the_budget_is_gone()
+    {
+        // The contract this whole fix exists to restore is "returns false WITHOUT taking the lock".
+        // A round issued after the deadline can still WIN, and a lock handed to a caller who has
+        // already stopped waiting - and who may by then have taken the other branch - is worse than
+        // the early give-up: early is a wasted wait, late is a lock nobody is holding on purpose.
+        // A retry interval longer than the budget is what exposes it: the delay gets clipped to the
+        // remainder, and the loop then came back round for one more attempt with nothing left.
+        var budget = TimeSpan.FromMilliseconds(200);
+        var lateAttempts = 0;
+        var clock = Stopwatch.StartNew();
+
+        var result = await SqlServerLockProvider.WaitWithinBudgetAsync(
+            budget,
+            new LockWaitPolicy(TimeSpan.FromMilliseconds(500)),
+            _ =>
+            {
+                if (clock.Elapsed >= budget)
+                {
+                    // A real sp_getapplock round can win here. Say so, so the assertion below is
+                    // about the lock and not only about the bookkeeping.
+                    Interlocked.Increment(ref lateAttempts);
+                    return Task.FromResult(LockAcquisition.Unfenced);
+                }
+                return Task.FromResult(LockAcquisition.NotAcquired);
+            },
+            default);
+        clock.Stop();
+
+        Assert.False(result.Acquired);
+        Assert.True(
+            Volatile.Read(ref lateAttempts) == 0,
+            $"{lateAttempts} round(s) were issued after the {budget.TotalMilliseconds}ms budget had gone, and one of them took the lock");
+        Assert.InRange(clock.ElapsedMilliseconds, 190, 400);
+    }
+
+    [Fact]
     public async Task A_zero_budget_is_still_the_single_shot_try_it_always_was()
     {
         // The core never calls the wait with nothing left, but "wait up to zero" means "ask once",

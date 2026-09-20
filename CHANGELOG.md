@@ -294,6 +294,11 @@ All notable changes to OrionLock are documented in this file. The format is base
   blocking call it always was rather than something that could lose its place in the queue. A round that
   returns without consuming `LockWaitPolicy.RetryInterval` sleeps the difference first, so a server whose
   timer refused instantly degrades into the poll the caller configured instead of a hot loop.
+  The deadline is checked before every retry, not only after one: a round issued once the budget was gone
+  could still WIN, and a lock handed to a caller who has already stopped waiting — and who may by then
+  have taken the other branch — is worse than giving up early. Early is a wasted wait; late is a lock
+  nobody is holding on purpose. The first attempt stays unconditional, so a zero budget is still the
+  single-shot try it always was.
 
 - **A cancelled SQL Server waiter is told it was cancelled, not that the backend failed.** Cancelling
   a command blocked inside `sp_getapplock` tears the command down, and `Microsoft.Data.SqlClient`
