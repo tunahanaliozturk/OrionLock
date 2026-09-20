@@ -131,16 +131,17 @@ BenchmarkDotNet average:
 
 | Waiters | Polling: TryAcquire/waiter | Event-driven: TryAcquire/waiter | Polling drain | Event-driven drain |
 | ------- | -------------------------- | ------------------------------- | ------------- | ------------------ |
-| 2       | 2.5                        | 1.00                            | 5.8 ms        | 0.7 ms             |
-| 8       | 4.0                        | 1.00                            | 50.2 ms       | 0.7 ms             |
-| 64      | 4.2                        | 1.00                            | 107.8 ms      | 1.7 ms             |
-| 256     | 3.0 - 13.2                 | 1.00                            | 15.6 - 464 ms | 1.1 - 3.1 ms       |
+| 2       | 3.5                        | 1.00                            | 30 ms         | 0.7 ms             |
+| 8       | 3.6 - 4.0                  | 1.00                            | 35 - 51 ms    | 0.5 - 0.9 ms       |
+| 64      | 7.3 - 8.2                  | 1.00                            | 214 - 294 ms  | 0.6 - 1.5 ms       |
+| 256     | 10.6                       | 1.00                            | 341 ms        | 1.5 ms             |
 
 The event-driven column is exactly 1.00 per waiter in every run and at every waiter count: each
 waiter makes one refused attempt, parks, and is handed the lock. The polling column is what it is -
 scheduling-dependent, and worse the more waiters there are, which is the shape the retry loop has
-always had. The spread at 256 is the point rather than a defect of the measurement: a poll's cost
-depends on how the thread pool happens to land, and the parked waiter's does not.
+always had; the ranges above are four runs on one machine, not a confidence interval. That spread is
+the point rather than a defect of the measurement: a poll's cost depends on how the thread pool
+happens to land, and the parked waiter's does not.
 
 ### RenewalScaleBenchmarks
 

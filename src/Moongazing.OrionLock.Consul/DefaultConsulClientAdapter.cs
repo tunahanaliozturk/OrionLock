@@ -100,7 +100,7 @@ public sealed class DefaultConsulClientAdapter : IConsulClientAdapter, IConsulFe
     /// </remarks>
     public async Task<bool> WaitForKeyFreeAsync(string key, TimeSpan maxWait, CancellationToken cancellationToken)
     {
-        var path = ConsulKvPath.Encode(key, nameof(key));
+        var path = ConsulKvPath.Encode(key);
 
         var current = await client.KV.Get(path, cancellationToken).ConfigureAwait(false);
         if (IsFree(current.Response))

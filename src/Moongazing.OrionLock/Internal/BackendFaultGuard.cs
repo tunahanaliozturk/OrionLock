@@ -58,6 +58,27 @@ internal sealed class BackendFaultGuard : IDistributedLockProvider
         string key, string ownerToken, TimeSpan leaseDuration, CancellationToken cancellationToken)
         => GuardAsync(key, "acquire", () => inner.TryAcquireFencedAsync(key, ownerToken, leaseDuration, cancellationToken));
 
+    /// <summary>
+    /// Forwards the inner provider's event-driven wait, for the same reason as
+    /// <see cref="TryAcquireFencedAsync"/> and <see cref="LeaseDurationIsTtl"/> above. This is the
+    /// THIRD default member on the contract and the third place the same omission would bite: this
+    /// guard wraps every provider <see cref="DistributedLock"/> is handed, so without this line the
+    /// interface default - the poll loop - runs for every backend, and SQL Server's lock queue,
+    /// PostgreSQL's blocking advisory lock, the Redis release channel, the etcd watch, the Consul
+    /// blocking query and the ZooKeeper predecessor watch are all unreachable in production while
+    /// every one of their own tests still passes.
+    /// </summary>
+    /// <remarks>
+    /// The whole wait is guarded as ONE operation, which is what it is: a backend fault raised while
+    /// blocked in the store's own queue is an acquire fault, reported exactly as a fault from the
+    /// single-shot attempt would be.
+    /// </remarks>
+    public Task<LockAcquisition> WaitForAcquireAsync(
+        string key, string ownerToken, TimeSpan leaseDuration, TimeSpan maxWait,
+        LockWaitPolicy waitPolicy, CancellationToken cancellationToken)
+        => GuardAsync(key, "acquire", () => inner.WaitForAcquireAsync(
+            key, ownerToken, leaseDuration, maxWait, waitPolicy, cancellationToken));
+
     public Task<bool> TryRenewAsync(string key, string ownerToken, TimeSpan leaseDuration, CancellationToken cancellationToken)
         => GuardAsync(key, "renew", () => inner.TryRenewAsync(key, ownerToken, leaseDuration, cancellationToken));
 
