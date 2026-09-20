@@ -9,6 +9,33 @@ public interface IDistributedLockProvider
     /// <summary>Tries once, without waiting, to acquire <paramref name="key"/> for <paramref name="ownerToken"/>.</summary>
     Task<bool> TryAcquireAsync(string key, string ownerToken, TimeSpan leaseDuration, CancellationToken cancellationToken);
 
+    /// <summary>
+    /// The same single attempt as <see cref="TryAcquireAsync"/>, but also reporting the fencing token
+    /// this acquisition minted. The core calls THIS overload; the default implementation delegates to
+    /// <see cref="TryAcquireAsync"/> and reports no token, so a backend that cannot mint one needs no
+    /// change at all.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// A fencing token is a number that strictly increases with every successful acquisition OF THE SAME
+    /// KEY, across processes. The holder passes it to the resource it is protecting and the resource
+    /// rejects any write carrying a token lower than the highest it has already seen - which is the only
+    /// known defence against a holder that paused (GC, VM migration), lost its lease without noticing and
+    /// then woke up and wrote. See <c>docs/fencing-tokens.md</c>.
+    /// </para>
+    /// <para>
+    /// A backend that overrides this MUST mint the token in the SAME atomic step that grants the lock,
+    /// and MUST return <see langword="null"/> if the best it can offer is only nearly monotonic. Callers
+    /// trust a token; a number that looks like one but occasionally repeats or goes backwards is worse
+    /// than admitting there is none.
+    /// </para>
+    /// </remarks>
+    async Task<LockAcquisition> TryAcquireFencedAsync(
+        string key, string ownerToken, TimeSpan leaseDuration, CancellationToken cancellationToken)
+        => await TryAcquireAsync(key, ownerToken, leaseDuration, cancellationToken).ConfigureAwait(false)
+            ? LockAcquisition.Unfenced
+            : LockAcquisition.NotAcquired;
+
     /// <summary>Extends the lease if and only if <paramref name="ownerToken"/> still owns it.</summary>
     Task<bool> TryRenewAsync(string key, string ownerToken, TimeSpan leaseDuration, CancellationToken cancellationToken);
 

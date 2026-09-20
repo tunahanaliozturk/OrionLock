@@ -22,6 +22,17 @@ SQL Server (`SYSUTCDATETIME()`) and SQLite (`CURRENT_TIMESTAMP`).
 Note that SQLite's `CURRENT_TIMESTAMP` has whole-second resolution, so leases shorter than about two
 seconds are not meaningful there. Use a real server for sub-second leases.
 
+### Fencing tokens
+
+`OrionLock_Locks` carries a `FencingToken` column, bumped by the same `UPDATE` that takes the row, and
+`handle.FencingToken` returns it. Because the row is never deleted — release nulls the owner and leaves the
+row — the counter only ever moves forward, which is what makes it usable as a fencing token.
+
+**The column is new: run a migration.** If you cannot yet, call `.Ignore(x => x.FencingToken)` on the
+entity in your own `OnModelCreating`; the provider reads column names from the EF model, finds nothing
+mapped, and emits exactly the SQL it emitted before fencing existed while reporting no token. Locking
+behaviour is unchanged either way.
+
 ### Identifiers
 
 Table and column names are taken from your EF model and quoted with the active provider's own rules, so

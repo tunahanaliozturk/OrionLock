@@ -40,11 +40,21 @@ internal sealed class MeasuringLockProvider : IDistributedLockProvider
     public bool LeaseDurationIsTtl => inner.LeaseDurationIsTtl;
 
     public async Task<bool> TryAcquireAsync(string key, string ownerToken, TimeSpan leaseDuration, CancellationToken cancellationToken)
+        => (await TryAcquireFencedAsync(key, ownerToken, leaseDuration, cancellationToken).ConfigureAwait(false)).Acquired;
+
+    /// <summary>
+    /// Forwards the inner provider's fenced acquire so a backend that mints fencing tokens still
+    /// reports them once <c>AddOrionLock</c> has wrapped it. Without this the decorator would fall back
+    /// to the interface default - which reports no token - and every fencing-capable backend would go
+    /// dark in production while still passing the unit tests that construct the provider directly.
+    /// </summary>
+    public async Task<LockAcquisition> TryAcquireFencedAsync(
+        string key, string ownerToken, TimeSpan leaseDuration, CancellationToken cancellationToken)
     {
         var sw = Stopwatch.StartNew();
         try
         {
-            return await inner.TryAcquireAsync(key, ownerToken, leaseDuration, cancellationToken).ConfigureAwait(false);
+            return await inner.TryAcquireFencedAsync(key, ownerToken, leaseDuration, cancellationToken).ConfigureAwait(false);
         }
         finally
         {

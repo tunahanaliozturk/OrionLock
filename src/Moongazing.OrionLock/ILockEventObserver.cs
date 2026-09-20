@@ -30,6 +30,21 @@ public interface ILockEventObserver
     /// <param name="durationMs">Wall-clock between the AcquireAsync call entry and handle creation.</param>
     void OnAcquired(string key, double durationMs);
 
+    /// <summary>
+    /// Notify the observer of a successful acquire, including the fencing token it minted. This is the
+    /// overload the lock pipeline calls; the default implementation forwards to the two-argument
+    /// <see cref="OnAcquired(string, double)"/>, so an observer written before fencing existed keeps
+    /// working unchanged and one that cares about the token overrides this instead.
+    /// </summary>
+    /// <param name="key">Lock key.</param>
+    /// <param name="durationMs">Wall-clock between the AcquireAsync call entry and handle creation.</param>
+    /// <param name="fencingToken">
+    /// The token this acquisition minted, or <see langword="null"/> when the backend cannot mint one.
+    /// An audit trail that records it can, after the fact, order two holders that both believed they
+    /// held the same key - which is precisely the sequence a lease-based lock cannot prevent.
+    /// </param>
+    void OnAcquired(string key, double durationMs, long? fencingToken) => OnAcquired(key, durationMs);
+
     /// <summary>Notify the observer of an acquire timeout (the caller gave up).</summary>
     /// <param name="key">Lock key.</param>
     /// <param name="waitMs">Wall-clock spent waiting before the timeout fired.</param>

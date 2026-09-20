@@ -47,6 +47,27 @@ public sealed class PostgresLockProvider : IDistributedLockProvider, IDisposable
     }
 
     /// <inheritdoc />
+    /// <remarks>
+    /// <para>
+    /// <b>No fencing token.</b> An advisory lock is a row-less, table-less entry in a shared memory
+    /// structure: nothing about it persists, so there is nowhere to keep a per-key counter. The whole
+    /// point of this provider over the EF Core lock table is that it needs no schema, and minting a
+    /// token would need one - a sequence or a counter table the caller has to create and grant on.
+    /// </para>
+    /// <para>
+    /// The schema-free candidates do not survive inspection. <c>pg_current_xact_id()</c> is strictly
+    /// increasing, but calling it burns a real transaction id on every acquire, which is wraparound
+    /// pressure and autovacuum work nobody signed up for by taking a lock.
+    /// <c>pg_snapshot_xmax(pg_current_snapshot())</c> and <c>pg_current_wal_lsn()</c> cost nothing but
+    /// are only non-decreasing: two acquisitions with no intervening transaction or WAL write read the
+    /// SAME value, and two holders sharing a token is the exact failure a fencing token exists to
+    /// prevent.
+    /// </para>
+    /// <para>
+    /// So this provider reports <see langword="null"/>. If you need fencing on PostgreSQL, use the EF
+    /// Core backend, whose lock row carries a counter incremented by the same UPDATE that takes it.
+    /// </para>
+    /// </remarks>
     public async Task<bool> TryAcquireAsync(string key, string ownerToken, TimeSpan leaseDuration, CancellationToken cancellationToken)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(key);

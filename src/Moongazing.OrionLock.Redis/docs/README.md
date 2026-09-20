@@ -14,7 +14,26 @@ services.AddOrionLock()
     .UseRedisSharedExclusive();
 ```
 
-It keeps a Lua-scripted writer marker, a per-reader sorted set scored by lease expiry (so one reader's expiry never frees another's), and a lease-bounded pending-writer marker that holds off new readers so a waiting writer is not starved. All lease math uses the Redis server clock, and renew/release are fencing-token checked.
+It keeps a Lua-scripted writer marker, a per-reader sorted set scored by lease expiry (so one reader's expiry never frees another's), and a lease-bounded pending-writer marker that holds off new readers so a waiting writer is not starved. All lease math uses the Redis server clock, and renew/release are owner-token checked.
+
+## Fencing tokens
+
+Off by default. Turn it on and every acquire also returns a `handle.FencingToken`: an `INCR` on a per-key
+counter issued in the same Lua call as the `SET NX PX`, so the token and the lock are taken atomically and
+the number strictly increases per key across processes.
+
+```csharp
+services.AddOrionLock().UseRedis("localhost:6379", o => o.FencingTokens = true);
+```
+
+It is opt-in because the counter key can never expire or be deleted — one that restarted would hand a
+later holder a token an earlier one already spent — so enabling it leaves one small permanent
+`orionlock-fence:{key}` key per lock key you take.
+
+Counters live under that reserved `orionlock-fence:` prefix so no lock key can also be somebody's
+counter; with fencing on, a lock key that would resolve into that namespace is rejected with an
+`ArgumentException`. With the default `orionlock:` prefix the rejection can never fire. See the OrionLock
+docs on fencing tokens for what to do with the number.
 
 ## Lease durations
 

@@ -8,7 +8,7 @@ using Mvccpb;
 /// Default <see cref="IEtcdClientAdapter"/> over the official <c>dotnet-etcd</c> client.
 /// Production wiring; unit tests substitute their own adapter.
 /// </summary>
-public sealed class DefaultEtcdClientAdapter : IEtcdClientAdapter
+public sealed class DefaultEtcdClientAdapter : IEtcdClientAdapter, IEtcdFencingAdapter
 {
     private readonly IEtcdClient client;
 
@@ -142,6 +142,16 @@ public sealed class DefaultEtcdClientAdapter : IEtcdClientAdapter
 
     /// <inheritdoc />
     public async Task<bool> KvPutIfAbsentAsync(string key, string value, long leaseId, CancellationToken cancellationToken)
+        => (await KvPutIfAbsentFencedAsync(key, value, leaseId, cancellationToken).ConfigureAwait(false))
+            .Acquired;
+
+    /// <inheritdoc />
+    /// <remarks>
+    /// The revision comes from the transaction's OWN response header, so it is the revision this put
+    /// committed at - not one read back afterwards, which could already have moved on.
+    /// </remarks>
+    public async Task<Moongazing.OrionLock.Providers.LockAcquisition> KvPutIfAbsentFencedAsync(
+        string key, string value, long leaseId, CancellationToken cancellationToken)
     {
         // Atomic transaction: IF the key has version == 0 (does not exist) THEN PUT it
         // under the supplied lease, ELSE do nothing. Returns Succeeded = true on grant.
@@ -164,7 +174,16 @@ public sealed class DefaultEtcdClientAdapter : IEtcdClientAdapter
         });
 
         var response = await client.TransactionAsync(txn, null, default, cancellationToken).ConfigureAwait(false);
-        return response.Succeeded;
+        if (!response.Succeeded)
+        {
+            return Moongazing.OrionLock.Providers.LockAcquisition.NotAcquired;
+        }
+
+        // A real etcd response always carries a header. If one somehow does not, we still took the lock -
+        // report it held with no token rather than losing a lock we are holding.
+        return response.Header is { } header
+            ? Moongazing.OrionLock.Providers.LockAcquisition.Fenced(header.Revision)
+            : Moongazing.OrionLock.Providers.LockAcquisition.Unfenced;
     }
 
     /// <inheritdoc />

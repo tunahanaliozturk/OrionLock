@@ -48,6 +48,23 @@ public sealed class EtcdLockProvider : IDistributedLockProvider
     /// <inheritdoc />
     public async Task<bool> TryAcquireAsync(
         string key, string ownerToken, TimeSpan leaseDuration, CancellationToken cancellationToken)
+        => (await TryAcquireFencedAsync(key, ownerToken, leaseDuration, cancellationToken).ConfigureAwait(false))
+            .Acquired;
+
+    /// <inheritdoc />
+    /// <remarks>
+    /// The fencing token is the mvcc revision the acquiring transaction committed at, taken from that
+    /// transaction's own response header. etcd's revision is cluster-wide and strictly increasing for
+    /// every committed write, and it survives deletion of the key and expiry of the lease - so a later
+    /// acquisition of the same key always commits at a higher revision than an earlier one, across
+    /// processes, with nothing for OrionLock to maintain and no extra round trip to pay.
+    /// <para>
+    /// An <see cref="IEtcdClientAdapter"/> that does not also implement
+    /// <see cref="IEtcdFencingAdapter"/> reports no token; the acquire is otherwise identical.
+    /// </para>
+    /// </remarks>
+    public async Task<LockAcquisition> TryAcquireFencedAsync(
+        string key, string ownerToken, TimeSpan leaseDuration, CancellationToken cancellationToken)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(key);
         ArgumentException.ThrowIfNullOrWhiteSpace(ownerToken);
@@ -55,11 +72,16 @@ public sealed class EtcdLockProvider : IDistributedLockProvider
         var ttl = LeaseTtlSeconds(leaseDuration);
         var leaseId = await etcd.LeaseGrantAsync(ttl, cancellationToken).ConfigureAwait(false);
 
-        bool acquired;
+        LockAcquisition put;
         try
         {
-            acquired = await etcd.KvPutIfAbsentAsync(FullKey(key), ownerToken, leaseId, cancellationToken)
-                .ConfigureAwait(false);
+            put = etcd is IEtcdFencingAdapter fencing
+                ? await fencing.KvPutIfAbsentFencedAsync(FullKey(key), ownerToken, leaseId, cancellationToken)
+                    .ConfigureAwait(false)
+                : await etcd.KvPutIfAbsentAsync(FullKey(key), ownerToken, leaseId, cancellationToken)
+                    .ConfigureAwait(false)
+                    ? LockAcquisition.Unfenced
+                    : LockAcquisition.NotAcquired;
         }
         catch
         {
@@ -70,10 +92,10 @@ public sealed class EtcdLockProvider : IDistributedLockProvider
             throw;
         }
 
-        if (!acquired)
+        if (!put.Acquired)
         {
             await etcd.LeaseRevokeAsync(leaseId, CancellationToken.None).ConfigureAwait(false);
-            return false;
+            return LockAcquisition.NotAcquired;
         }
 
         try
@@ -88,7 +110,7 @@ public sealed class EtcdLockProvider : IDistributedLockProvider
             await etcd.LeaseRevokeAsync(leaseId, CancellationToken.None).ConfigureAwait(false);
             throw;
         }
-        return true;
+        return put;
     }
 
     /// <inheritdoc />

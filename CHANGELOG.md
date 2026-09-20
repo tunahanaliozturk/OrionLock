@@ -7,6 +7,65 @@ All notable changes to OrionLock are documented in this file. The format is base
 
 ## [Unreleased]
 
+### Added
+
+- **Fencing tokens: `IDistributedLockHandle.FencingToken`.** A distributed lock cannot stop a holder from
+  being wrong about still holding it. Your process pauses — a stop-the-world GC, a VM migration, a
+  throttled container — for longer than its lease. None of your code runs, so nothing notices: `IsHeld`
+  is never false and `LostToken` never trips, because renewal never ran to fail. The backend expires the
+  key, another process acquires it legitimately, and then yours resumes mid-critical-section and writes.
+  Every lease-based lock has this hole; the only known fix is a fencing token.
+
+  `handle.FencingToken` is a `long?` that strictly increases with each acquisition **of that key**, across
+  processes. Pass it to the resource you are protecting and have the resource refuse any write carrying a
+  token **lower** than the highest it has already accepted — then the resumed process is turned away by
+  the only participant in a position to know. A token equal to the mark is the current holder writing
+  again and must be accepted: the token identifies the acquisition, not the write, and stays stable for
+  the whole hold. The check must also be one statement with the write, not a `SELECT` then an `UPDATE`;
+  [README](README.md#fencing-tokens) and [docs/fencing-tokens.md](docs/fencing-tokens.md) have the SQL
+  (`last_fence <= @fence`) and the reasoning.
+
+  **Which backends provide one.** `null` means the backend has nothing it can make strictly monotonic, and
+  OrionLock reports that rather than inventing a counter you would then trust:
+
+  | Backend | Token | Default |
+  | --- | --- | --- |
+  | etcd | mvcc revision of the acquiring transaction | on, no extra round trip |
+  | Redis | `INCR` on a per-key counter, in the same Lua call as the `SET NX PX` | off — `RedisLockOptions.FencingTokens` |
+  | EF Core | `FencingToken` column, bumped by the same `UPDATE` that takes the row | on, after a migration |
+  | Consul | KV `ModifyIndex` (the Raft log index) | off — `ConsulLockOptions.FencingTokens` |
+  | Testing (in-memory) | per-key counter | on |
+  | ZooKeeper, PostgreSQL, SQL Server | — | `null` |
+
+  Redis is opt-in because the counter key can never expire or be deleted — one that restarted would
+  reissue a token an earlier holder already spent — so enabling it leaves one small permanent key per lock
+  key. Those counters live under a reserved `orionlock-fence:` prefix, and with fencing on, a lock key
+  that would resolve into that namespace is rejected with an `ArgumentException` rather than becoming both
+  a lock and another key's counter; with the default `orionlock:` key prefix that can never happen.
+  Consul is opt-in because its acquire returns no index, so the token costs one extra GET — and a read
+  that comes back empty fails the acquire (releasing the key) rather than returning an untokened hold over
+  a lock that may already be gone.
+  ZooKeeper reports `null` because both numbers it offers (the sequential znode's suffix and the parent's
+  `cversion`) reset when the provider prunes the empty parent znode; PostgreSQL advisory locks and SQL
+  Server `sp_getapplock` report `null` because they keep no per-key state to count, and the schema-free
+  alternatives are only non-decreasing, not strictly increasing. Use the EF Core backend on those two when
+  you need fencing.
+
+  **What to do.** Nothing, if you do not want a token: existing callers, existing observers and existing
+  custom `IDistributedLockProvider` implementations all compile and behave identically. If you do want one,
+  call `handle.RequireFencingToken()` rather than reading the property — it throws when the backend mints
+  none, instead of letting a `null` reach your comparison and silently disable the protection. The token is
+  also on `ILockEventObserver.OnAcquired(key, durationMs, fencingToken)` and on the acquire span as
+  `orionlock.fencing_token` (never a metric tag — it is unique per acquisition). `FencingGuard` does the
+  high-water-mark bookkeeping for a resource that genuinely lives in this process.
+
+- **`OrionLock.EntityFrameworkCore`: a `FencingToken` column on `OrionLock_Locks`.** Requires a migration;
+  see [docs/migrations/orionlock-locks-table.md](docs/migrations/orionlock-locks-table.md) for the
+  `dotnet ef` command and the per-provider DDL. If you cannot add the column yet, `Ignore()` the property
+  in your model: the provider reads column names from the EF model, finds nothing mapped, and emits exactly
+  the SQL it emitted before fencing existed while reporting no token. Locking behaviour is unchanged either
+  way.
+
 ### Fixed
 
 - **BREAKING (behaviour): reentrancy is now scoped to the flow that holds the lock, not to the key.**

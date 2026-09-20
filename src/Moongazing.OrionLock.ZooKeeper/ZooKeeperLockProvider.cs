@@ -55,6 +55,27 @@ public sealed class ZooKeeperLockProvider : IDistributedLockProvider
     private string ParentPath(string lockKey) => $"{options.RootPath}/{ZooKeeperKeyName.Encode(lockKey)}";
 
     /// <inheritdoc />
+    /// <remarks>
+    /// <para>
+    /// <b>No fencing token.</b> The two numbers ZooKeeper offers here both reset, so neither is usable:
+    /// </para>
+    /// <para>
+    /// The sequential znode's 10-digit suffix comes from the PARENT's <c>cversion</c>, and this provider
+    /// deletes the parent once its last child is gone (see <c>TryPruneParentAsync</c> - the parent is
+    /// PERSISTENT, and without pruning every key ever locked leaves a znode in an ensemble that holds its
+    /// whole tree in memory). A key that is locked, released and locked again therefore gets sequence
+    /// <c>0000000000</c> twice: two acquisitions, one token. The parent's <c>cversion</c> is the same
+    /// counter and dies with it.
+    /// </para>
+    /// <para>
+    /// What WOULD work is the created znode's <c>czxid</c> - the ZooKeeper transaction id, which is
+    /// ensemble-wide, strictly increasing and never reset, exactly like etcd's revision. ZooKeeper's
+    /// create does not return a <c>Stat</c>, so reading it means an extra <c>exists</c> round trip per
+    /// acquire and a new method on <see cref="IZooKeeperClientAdapter"/>. That is the upgrade path; until
+    /// someone needs it, this provider reports <see langword="null"/> rather than a sequence number that
+    /// repeats.
+    /// </para>
+    /// </remarks>
     public async Task<bool> TryAcquireAsync(
         string key, string ownerToken, TimeSpan leaseDuration, CancellationToken cancellationToken)
     {

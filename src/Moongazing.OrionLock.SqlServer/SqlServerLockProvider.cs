@@ -49,6 +49,14 @@ public sealed class SqlServerLockProvider : IDistributedLockProvider, IDisposabl
     }
 
     /// <inheritdoc />
+    /// <remarks>
+    /// <b>No fencing token,</b> for the same reason as the PostgreSQL advisory-lock provider:
+    /// <c>sp_getapplock</c> writes nothing that outlives the session, so there is no per-key state to
+    /// count acquisitions in. Minting a token would mean a <c>SEQUENCE</c> or a counter table the caller
+    /// must create and grant on - a schema requirement this provider exists precisely to avoid. Use the
+    /// EF Core backend on SQL Server when you need fencing; its lock row carries a counter bumped by the
+    /// same UPDATE that takes it.
+    /// </remarks>
     public async Task<bool> TryAcquireAsync(string key, string ownerToken, TimeSpan leaseDuration, CancellationToken cancellationToken)
     {
         ValidateKey(key);

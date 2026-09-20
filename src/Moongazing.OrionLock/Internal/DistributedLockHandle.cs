@@ -1,4 +1,4 @@
-using Moongazing.OrionLock.Providers;
+﻿using Moongazing.OrionLock.Providers;
 
 namespace Moongazing.OrionLock.Internal;
 
@@ -30,8 +30,8 @@ internal sealed class DistributedLockHandle : IDistributedLockHandle
     /// </summary>
     public DistributedLockHandle(
         IDistributedLockProvider provider, string key, string ownerToken, DistributedLockOptions options,
-        ILockEventObserver? eventObserver)
-        : this(provider, key, ownerToken, options, nowUtc: null, eventObserver)
+        ILockEventObserver? eventObserver, long? fencingToken = null)
+        : this(provider, key, ownerToken, options, nowUtc: null, eventObserver, fencingToken)
     {
     }
 
@@ -42,7 +42,7 @@ internal sealed class DistributedLockHandle : IDistributedLockHandle
     /// </summary>
     internal DistributedLockHandle(
         IDistributedLockProvider provider, string key, string ownerToken, DistributedLockOptions options,
-        Func<DateTime>? nowUtc, ILockEventObserver? eventObserver = null)
+        Func<DateTime>? nowUtc, ILockEventObserver? eventObserver = null, long? fencingToken = null)
     {
         ArgumentNullException.ThrowIfNull(provider);
         ArgumentNullException.ThrowIfNull(options);
@@ -55,6 +55,7 @@ internal sealed class DistributedLockHandle : IDistributedLockHandle
             options,
             nowUtc,
             eventObserver);
+        FencingToken = fencingToken;
     }
 
     /// <inheritdoc />
@@ -65,6 +66,15 @@ internal sealed class DistributedLockHandle : IDistributedLockHandle
 
     /// <inheritdoc />
     public CancellationToken LostToken => lease.LostToken;
+
+    /// <inheritdoc />
+    /// <remarks>
+    /// Captured at construction from the acquisition that created this handle and never changes: the
+    /// token identifies THIS acquisition, so a renewal must not advance it (a resource that has seen
+    /// token N from us would otherwise start rejecting our own later writes as stale) and a lost lease
+    /// must not clear it (the number stays a true statement about the acquisition that minted it).
+    /// </remarks>
+    public long? FencingToken { get; }
 
     /// <inheritdoc />
     public ValueTask DisposeAsync() => lease.DisposeAsync();

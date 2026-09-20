@@ -32,3 +32,30 @@ public interface IEtcdClientAdapter
     /// </summary>
     Task<bool> KvDeleteIfMatchAsync(string key, string expectedValue, CancellationToken cancellationToken);
 }
+
+/// <summary>
+/// Optional companion to <see cref="IEtcdClientAdapter"/> for an adapter that can report the mvcc
+/// revision a successful put committed at. <see cref="DefaultEtcdClientAdapter"/> implements it;
+/// <see cref="EtcdLockProvider"/> uses it when present and falls back to
+/// <see cref="IEtcdClientAdapter.KvPutIfAbsentAsync"/> when it is not, so an existing custom adapter
+/// keeps working and simply reports no fencing token.
+/// </summary>
+/// <remarks>
+/// etcd's revision is the single counter behind the whole keyspace: every committed write advances it,
+/// and it never goes backwards or resets - not on key deletion, not on lease expiry, not on leader
+/// change. That makes it monotonic per key for free, which is a stronger guarantee than a per-key
+/// counter the lock would have to maintain itself, and it comes back in the transaction's own response
+/// header, so reading it costs no extra round trip.
+/// </remarks>
+public interface IEtcdFencingAdapter
+{
+    /// <summary>
+    /// The same transactional put-if-absent as <see cref="IEtcdClientAdapter.KvPutIfAbsentAsync"/>,
+    /// additionally reporting the revision the put committed at as the fencing token. A successful put
+    /// whose response carried no revision is reported as
+    /// <see cref="Providers.LockAcquisition.Unfenced"/> - acquired, no token - and never as a failure:
+    /// the lock IS held at that point, and saying otherwise would strand it.
+    /// </summary>
+    Task<Providers.LockAcquisition> KvPutIfAbsentFencedAsync(
+        string key, string value, long leaseId, CancellationToken cancellationToken);
+}

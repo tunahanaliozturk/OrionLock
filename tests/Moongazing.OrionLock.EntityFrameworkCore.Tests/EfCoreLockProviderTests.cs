@@ -74,6 +74,78 @@ internal static class EfCoreLockProviderScenarios
         var results = await Task.WhenAll(tasks);
         Assert.Equal(1, results.Count(r => r));
     }
+
+    public static async Task FencingTokenStrictlyIncreasesAcrossAcquisitions(IServiceScopeFactory f)
+    {
+        var p = new EfCoreLockProvider(f);
+        var k = NewKey();
+
+        var tokens = new List<long>();
+        for (var i = 0; i < 4; i++)
+        {
+            var taken = await p.TryAcquireFencedAsync(k, $"owner-{i}", TimeSpan.FromSeconds(30), default);
+            Assert.True(taken.Acquired);
+            tokens.Add(Assert.NotNull(taken.FencingToken));
+            await p.ReleaseAsync(k, $"owner-{i}", default);
+        }
+
+        // First use inserts the row at 1; every later acquisition bumps the column in the same UPDATE
+        // that takes it. Release leaves the row in place, so the counter never restarts.
+        Assert.Equal([1L, 2L, 3L, 4L], tokens);
+    }
+
+    public static async Task FencingTokenIsUniqueAcrossParallelAcquirers(IServiceScopeFactory f)
+    {
+        var p = new EfCoreLockProvider(f);
+        var k = NewKey();
+        var tokens = new List<long>();
+
+        for (var round = 0; round < 5; round++)
+        {
+            // Twenty callers race; exactly one wins, and the one that wins must be handed a number no
+            // previous winner was given. A token read in a query separate from the UPDATE could see a
+            // later holder's value here.
+            var results = await Task.WhenAll(Enumerable.Range(0, 20)
+                .Select(i => p.TryAcquireFencedAsync(k, $"r{round}-owner-{i}", TimeSpan.FromSeconds(30), default)));
+
+            var winners = results.Where(r => r.Acquired).ToArray();
+            var winner = Assert.Single(winners);
+            tokens.Add(Assert.NotNull(winner.FencingToken));
+
+            var winnerIndex = Array.IndexOf(results, winner);
+            await p.ReleaseAsync(k, $"r{round}-owner-{winnerIndex}", default);
+        }
+
+        Assert.Equal(tokens.OrderBy(t => t).Distinct().ToList(), tokens);
+    }
+
+    public static async Task FencingIsSkippedWhenTheColumnIsNotMapped(IServiceScopeFactory f)
+    {
+        // The escape hatch for a database that has not had the column added yet: Ignore() the property
+        // and the provider emits the pre-fencing SQL and reports no token, rather than failing every
+        // acquire against a column the database does not have.
+        var p = new EfCoreLockProvider(f);
+        var k = NewKey();
+
+        var taken = await p.TryAcquireFencedAsync(k, "owner-1", TimeSpan.FromSeconds(30), default);
+
+        Assert.True(taken.Acquired);
+        Assert.Null(taken.FencingToken);
+        Assert.False((await p.TryAcquireFencedAsync(k, "owner-2", TimeSpan.FromSeconds(30), default)).Acquired);
+    }
+}
+
+/// <summary>
+/// A context whose model deliberately drops <see cref="OrionLockRow.FencingToken"/>, standing in for a
+/// consumer whose database predates the column.
+/// </summary>
+public sealed class UnfencedLockTestDbContext(DbContextOptions<UnfencedLockTestDbContext> options) : DbContext(options)
+{
+    protected override void OnModelCreating(ModelBuilder modelBuilder)
+    {
+        modelBuilder.ApplyConfiguration(new OrionLockRowEntityTypeConfiguration());
+        modelBuilder.Entity<OrionLockRow>().Ignore(x => x.FencingToken);
+    }
 }
 
 public sealed class EfCoreLockProviderTests : IAsyncLifetime, IDisposable
@@ -129,6 +201,56 @@ public sealed class EfCoreLockProviderTests : IAsyncLifetime, IDisposable
     [Fact]
     public Task TryAcquire_ShouldHandOutExactlyOne_AcrossParallelCallers()
         => EfCoreLockProviderScenarios.ExactlyOneWinnerAcrossParallelCallers(Factory);
+
+    [Fact]
+    public Task FencingToken_ShouldStrictlyIncrease_AcrossAcquisitions()
+        => EfCoreLockProviderScenarios.FencingTokenStrictlyIncreasesAcrossAcquisitions(Factory);
+
+    [Fact]
+    public Task FencingToken_ShouldBeUnique_AcrossParallelAcquirers()
+        => EfCoreLockProviderScenarios.FencingTokenIsUniqueAcrossParallelAcquirers(Factory);
+}
+
+/// <summary>
+/// The same provider against a model that has no <c>FencingToken</c> column, which is what an upgraded
+/// consumer sees before they have run the migration.
+/// </summary>
+public sealed class EfCoreUnfencedLockProviderTests : IAsyncLifetime, IDisposable
+{
+    private SqliteConnection connection = default!;
+    private IServiceProvider services = default!;
+
+    public Task InitializeAsync()
+    {
+        connection = new SqliteConnection("Filename=:memory:");
+        connection.Open();
+
+        var sc = new ServiceCollection();
+        sc.AddDbContext<UnfencedLockTestDbContext>(o => o.UseSqlite(connection));
+        sc.AddScoped<DbContext>(sp => sp.GetRequiredService<UnfencedLockTestDbContext>());
+        services = sc.BuildServiceProvider();
+
+        using var scope = services.CreateScope();
+        scope.ServiceProvider.GetRequiredService<UnfencedLockTestDbContext>().Database.EnsureCreated();
+        return Task.CompletedTask;
+    }
+
+    public Task DisposeAsync()
+    {
+        Dispose();
+        return Task.CompletedTask;
+    }
+
+    public void Dispose()
+    {
+        connection?.Dispose();
+        (services as IDisposable)?.Dispose();
+    }
+
+    [Fact]
+    public Task Acquire_ShouldStillWork_AndReportNoToken()
+        => EfCoreLockProviderScenarios.FencingIsSkippedWhenTheColumnIsNotMapped(
+            services.GetRequiredService<IServiceScopeFactory>());
 }
 
 /// <summary>
@@ -158,6 +280,14 @@ public sealed class PostgresEfCoreLockProviderTests(PostgresRwContainerFixture f
     [DockerFact]
     public Task TryAcquire_ShouldHandOutExactlyOne_AcrossParallelCallers()
         => EfCoreLockProviderScenarios.ExactlyOneWinnerAcrossParallelCallers(fixture.ScopeFactory);
+
+    [DockerFact]
+    public Task FencingToken_ShouldStrictlyIncrease_AcrossAcquisitions()
+        => EfCoreLockProviderScenarios.FencingTokenStrictlyIncreasesAcrossAcquisitions(fixture.ScopeFactory);
+
+    [DockerFact]
+    public Task FencingToken_ShouldBeUnique_AcrossParallelAcquirers()
+        => EfCoreLockProviderScenarios.FencingTokenIsUniqueAcrossParallelAcquirers(fixture.ScopeFactory);
 }
 
 /// <summary>
@@ -186,4 +316,12 @@ public sealed class SqlServerEfCoreLockProviderTests(SqlServerRwContainerFixture
     [DockerFact]
     public Task TryAcquire_ShouldHandOutExactlyOne_AcrossParallelCallers()
         => EfCoreLockProviderScenarios.ExactlyOneWinnerAcrossParallelCallers(fixture.ScopeFactory);
+
+    [DockerFact]
+    public Task FencingToken_ShouldStrictlyIncrease_AcrossAcquisitions()
+        => EfCoreLockProviderScenarios.FencingTokenStrictlyIncreasesAcrossAcquisitions(fixture.ScopeFactory);
+
+    [DockerFact]
+    public Task FencingToken_ShouldBeUnique_AcrossParallelAcquirers()
+        => EfCoreLockProviderScenarios.FencingTokenIsUniqueAcrossParallelAcquirers(fixture.ScopeFactory);
 }
