@@ -25,7 +25,10 @@ public sealed class InProcessFifoWaiterCoordinator : IFifoWaiterCoordinator
         ArgumentException.ThrowIfNullOrEmpty(key);
         cancellationToken.ThrowIfCancellationRequested();
 
-        var ticket = new WaiterTicket(key);
+        // The ticket carries the caller's token so the OCE it raises names the token that actually
+        // cancelled it; without this the init-only property stayed default and every cancellation
+        // reported CancellationToken.None.
+        var ticket = new WaiterTicket(key) { CancellationToken = cancellationToken };
         bool head;
         int waitersAhead;
 
@@ -65,7 +68,19 @@ public sealed class InProcessFifoWaiterCoordinator : IFifoWaiterCoordinator
 
     private static async Task<IFifoWaiterTicket> WrapAsync(WaiterTicket ticket)
     {
-        await ticket.Tcs.Task.ConfigureAwait(false);
+        try
+        {
+            await ticket.Tcs.Task.ConfigureAwait(false);
+        }
+        catch
+        {
+            // A cancelled waiter never receives its ticket, so it can never call LeaveAsync - the one
+            // place that disposes the registration. Without this the registration (and through it the
+            // ticket) stayed rooted in the caller's CancellationTokenSource for that source's lifetime.
+            ticket.Registration.Dispose();
+            throw;
+        }
+
         return ticket;
     }
 

@@ -127,6 +127,25 @@ public sealed class FifoWaiterCoordinatorTests
     }
 
     [Fact]
+    public async Task InProcess_cancelled_waiter_reports_the_callers_token()
+    {
+        // The ticket's CancellationToken was never assigned, so every cancellation surfaced as
+        // CancellationToken.None and a caller could not tell its own cancellation apart from any other.
+        IFifoWaiterCoordinator c = new InProcessFifoWaiterCoordinator();
+
+        var head = await c.EnterAsync("k", CancellationToken.None);
+        using var cts = new CancellationTokenSource();
+        var secondTask = c.EnterAsync("k", cts.Token);
+
+        await cts.CancelAsync();
+
+        var ex = await Assert.ThrowsAnyAsync<OperationCanceledException>(() => secondTask);
+        Assert.Equal(cts.Token, ex.CancellationToken);
+
+        await c.LeaveAsync(head, CancellationToken.None);
+    }
+
+    [Fact]
     public async Task InProcess_LeaveAsync_rejects_foreign_ticket()
     {
         IFifoWaiterCoordinator c = new InProcessFifoWaiterCoordinator();

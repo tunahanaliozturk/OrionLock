@@ -82,6 +82,15 @@ All notable changes to OrionLock are documented in this file. The format is base
   about 10 seconds. The poll delay is now clamped to the time left, matching the reader-writer lock and
   the deadline overloads. If you had padded timeouts to absorb the overshoot, you can drop the padding.
 
+- **`InProcessFifoWaiterCoordinator` reports the caller's cancellation token and stops leaking
+  registrations.** A cancelled FIFO waiter raised an `OperationCanceledException` carrying
+  `CancellationToken.None` instead of the token the caller passed, so callers could not tell their own
+  cancellation apart from anyone else's. The same waiter also never disposed its
+  `CancellationTokenRegistration` — it is only disposed in `LeaveAsync`, which a caller that never
+  received its ticket can never reach — so each cancelled wait stayed rooted in the caller's
+  `CancellationTokenSource` until that source was disposed. Both are fixed; a cancellation-heavy
+  workload sharing one long-lived token no longer accumulates dead registrations.
+
 - **The internal measuring decorator no longer reports every backend as a TTL backend.**
   `AddOrionLock` wraps the registered `IDistributedLockProvider` in an internal measuring decorator, and
   that decorator did not forward `LeaseDurationIsTtl` — it fell back to the interface default of `true`.
