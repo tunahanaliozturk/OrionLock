@@ -63,4 +63,29 @@ public sealed class ConsulLockOptions
     /// </para>
     /// </remarks>
     public TimeSpan LockDelay { get; set; } = TimeSpan.FromSeconds(5);
+
+    /// <summary>
+    /// Whether every acquire also reports a fencing token, exposed as
+    /// <see cref="IDistributedLockHandle.FencingToken"/>. Default <see langword="false"/>.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// The token is the key's <c>ModifyIndex</c>: Consul's Raft log index, which is cluster-global,
+    /// advances on every committed write and is never reset - so it is strictly increasing per key
+    /// across acquisitions and processes. See <see cref="IConsulFencingAdapter"/> for why the
+    /// obvious-looking <c>LockIndex</c> is NOT usable.
+    /// </para>
+    /// <para>
+    /// <b>It costs a round trip, which is why it is opt-in.</b> Consul's acquire returns a bare
+    /// <c>true</c>/<c>false</c> with no index attached, so the provider reads the entry back after a
+    /// successful acquire - one extra GET per acquire, paid only by callers that asked for a token. The
+    /// read is safe because we already hold the key at that point: nobody else can acquire it, and the
+    /// next holder must write again, which necessarily lands above whatever we read.
+    /// </para>
+    /// <para>
+    /// If that read fails, the acquire fails: the provider releases the key and destroys the session
+    /// before rethrowing, rather than returning a hold with a silently missing token.
+    /// </para>
+    /// </remarks>
+    public bool FencingTokens { get; set; }
 }

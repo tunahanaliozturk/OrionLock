@@ -7,7 +7,7 @@ using global::Consul;
 /// Default <see cref="IConsulClientAdapter"/> over the official
 /// <see cref="IConsulClient"/>. Production wiring; unit tests substitute their own adapter.
 /// </summary>
-public sealed class DefaultConsulClientAdapter : IConsulClientAdapter
+public sealed class DefaultConsulClientAdapter : IConsulClientAdapter, IConsulFencingAdapter
 {
     private readonly IConsulClient client;
 
@@ -74,6 +74,20 @@ public sealed class DefaultConsulClientAdapter : IConsulClientAdapter
         };
         var result = await client.KV.Acquire(pair, cancellationToken).ConfigureAwait(false);
         return result.Response;
+    }
+
+    /// <inheritdoc />
+    /// <remarks>
+    /// A separate GET, because Consul's acquire response body is a bare <c>true</c>/<c>false</c> and
+    /// carries no index - which is exactly why fencing on this backend is opt-in.
+    /// </remarks>
+    public async Task<long?> KvModifyIndexAsync(string key, CancellationToken cancellationToken)
+    {
+        var result = await client.KV.Get(ConsulKvPath.Encode(key, nameof(key)), cancellationToken)
+            .ConfigureAwait(false);
+        // ModifyIndex is a ulong on the wire; Consul's Raft index will not reach the point where this
+        // stops fitting in a long before the cluster has other problems.
+        return result.Response is { } pair ? (long)pair.ModifyIndex : null;
     }
 
     /// <inheritdoc />
