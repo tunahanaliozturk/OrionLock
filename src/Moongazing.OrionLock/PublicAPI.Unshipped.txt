@@ -1,7 +1,9 @@
-﻿#nullable enable
-Moongazing.OrionLock.SharedExclusiveLock.SharedExclusiveLock(Moongazing.OrionLock.Providers.ISharedExclusiveLockProvider! provider, Moongazing.OrionLock.ILockEventObserver? eventObserver) -> void
-~override Moongazing.OrionLock.Providers.LockAcquisition.Equals(object obj) -> bool
-~override Moongazing.OrionLock.Providers.LockAcquisition.ToString() -> string
+#nullable enable
+Moongazing.OrionLock.DependencyInjection.OrionLockBuilder.UseBackend(string! backendName, System.Func<System.IServiceProvider!, Moongazing.OrionLock.Providers.IDistributedLockProvider!>! factory) -> Moongazing.OrionLock.DependencyInjection.OrionLockBuilder!
+Moongazing.OrionLock.DistributedLockOptions.MaxHoldDuration.get -> System.TimeSpan?
+Moongazing.OrionLock.DistributedLockOptions.MaxHoldDuration.set -> void
+Moongazing.OrionLock.DistributedLockOptions.RetryBackoffCeiling.get -> System.TimeSpan?
+Moongazing.OrionLock.DistributedLockOptions.RetryBackoffCeiling.set -> void
 Moongazing.OrionLock.Fencing.FencingExtensions
 Moongazing.OrionLock.Fencing.FencingGuard
 Moongazing.OrionLock.Fencing.FencingGuard.Accept(string! key, long token) -> void
@@ -13,9 +15,16 @@ Moongazing.OrionLock.Fencing.FencingTokenRegressedException.FencingTokenRegresse
 Moongazing.OrionLock.Fencing.FencingTokenRegressedException.HighestSeen.get -> long
 Moongazing.OrionLock.Fencing.FencingTokenRegressedException.Key.get -> string!
 Moongazing.OrionLock.Fencing.FencingTokenRegressedException.Presented.get -> long
+Moongazing.OrionLock.IDistributedLockHandle.EffectiveLeaseDuration.get -> System.TimeSpan
 Moongazing.OrionLock.IDistributedLockHandle.FencingToken.get -> long?
+Moongazing.OrionLock.IDistributedLockHandle.ThrowIfLost() -> void
 Moongazing.OrionLock.ILockEventObserver.OnAcquired(string! key, double durationMs, long? fencingToken) -> void
+Moongazing.OrionLock.LockKey
+Moongazing.OrionLock.Providers.IDistributedLockProvider.EffectiveLeaseDuration(System.TimeSpan requested) -> System.TimeSpan
+Moongazing.OrionLock.Providers.IDistributedLockProvider.MinimumLeaseDuration.get -> System.TimeSpan
 Moongazing.OrionLock.Providers.IDistributedLockProvider.TryAcquireFencedAsync(string! key, string! ownerToken, System.TimeSpan leaseDuration, System.Threading.CancellationToken cancellationToken) -> System.Threading.Tasks.Task<Moongazing.OrionLock.Providers.LockAcquisition>!
+Moongazing.OrionLock.Providers.IDistributedLockProvider.WaitForAcquireAsync(string! key, string! ownerToken, System.TimeSpan leaseDuration, System.TimeSpan maxWait, Moongazing.OrionLock.Providers.LockWaitPolicy waitPolicy, System.Threading.CancellationToken cancellationToken) -> System.Threading.Tasks.Task<Moongazing.OrionLock.Providers.LockAcquisition>!
+Moongazing.OrionLock.Providers.ISharedExclusiveLockProvider.EffectiveLeaseDuration(System.TimeSpan requested) -> System.TimeSpan
 Moongazing.OrionLock.Providers.LockAcquisition
 Moongazing.OrionLock.Providers.LockAcquisition.Acquired.get -> bool
 Moongazing.OrionLock.Providers.LockAcquisition.Acquired.init -> void
@@ -25,21 +34,30 @@ Moongazing.OrionLock.Providers.LockAcquisition.FencingToken.get -> long?
 Moongazing.OrionLock.Providers.LockAcquisition.FencingToken.init -> void
 Moongazing.OrionLock.Providers.LockAcquisition.LockAcquisition() -> void
 Moongazing.OrionLock.Providers.LockAcquisition.LockAcquisition(bool Acquired, long? FencingToken) -> void
+Moongazing.OrionLock.Providers.LockWaitPolicy
+Moongazing.OrionLock.Providers.LockWaitPolicy.BackoffCeiling.get -> System.TimeSpan?
+Moongazing.OrionLock.Providers.LockWaitPolicy.BackoffCeiling.init -> void
+Moongazing.OrionLock.Providers.LockWaitPolicy.Deconstruct(out System.TimeSpan RetryInterval, out System.TimeSpan? BackoffCeiling) -> void
+Moongazing.OrionLock.Providers.LockWaitPolicy.Equals(Moongazing.OrionLock.Providers.LockWaitPolicy other) -> bool
+Moongazing.OrionLock.Providers.LockWaitPolicy.LockWaitPolicy() -> void
+Moongazing.OrionLock.Providers.LockWaitPolicy.LockWaitPolicy(System.TimeSpan RetryInterval, System.TimeSpan? BackoffCeiling = null) -> void
+Moongazing.OrionLock.Providers.LockWaitPolicy.RetryInterval.get -> System.TimeSpan
+Moongazing.OrionLock.Providers.LockWaitPolicy.RetryInterval.init -> void
+Moongazing.OrionLock.SharedExclusiveLock.SharedExclusiveLock(Moongazing.OrionLock.Providers.ISharedExclusiveLockProvider! provider, Moongazing.OrionLock.ILockEventObserver? eventObserver) -> void
+const Moongazing.OrionLock.LockKey.MaxLength = 200 -> int
 override Moongazing.OrionLock.Providers.LockAcquisition.GetHashCode() -> int
+override Moongazing.OrionLock.Providers.LockWaitPolicy.GetHashCode() -> int
 static Moongazing.OrionLock.Fencing.FencingExtensions.RequireFencingToken(this Moongazing.OrionLock.IDistributedLockHandle! handle) -> long
+static Moongazing.OrionLock.LockKey.Validate(string? key, string! paramName = "key") -> void
 static Moongazing.OrionLock.Providers.LockAcquisition.Fenced(long fencingToken) -> Moongazing.OrionLock.Providers.LockAcquisition
 static Moongazing.OrionLock.Providers.LockAcquisition.NotAcquired.get -> Moongazing.OrionLock.Providers.LockAcquisition
+static Moongazing.OrionLock.Providers.LockAcquisition.Unfenced.get -> Moongazing.OrionLock.Providers.LockAcquisition
 static Moongazing.OrionLock.Providers.LockAcquisition.operator !=(Moongazing.OrionLock.Providers.LockAcquisition left, Moongazing.OrionLock.Providers.LockAcquisition right) -> bool
 static Moongazing.OrionLock.Providers.LockAcquisition.operator ==(Moongazing.OrionLock.Providers.LockAcquisition left, Moongazing.OrionLock.Providers.LockAcquisition right) -> bool
-static Moongazing.OrionLock.Providers.LockAcquisition.Unfenced.get -> Moongazing.OrionLock.Providers.LockAcquisition
-Moongazing.OrionLock.LockKey
-const Moongazing.OrionLock.LockKey.MaxLength = 200 -> int
-static Moongazing.OrionLock.LockKey.Validate(string? key, string! paramName = "key") -> void
-Moongazing.OrionLock.DependencyInjection.OrionLockBuilder.UseBackend(string! backendName, System.Func<System.IServiceProvider!, Moongazing.OrionLock.Providers.IDistributedLockProvider!>! factory) -> Moongazing.OrionLock.DependencyInjection.OrionLockBuilder!
-Moongazing.OrionLock.IDistributedLockHandle.EffectiveLeaseDuration.get -> System.TimeSpan
-Moongazing.OrionLock.Providers.IDistributedLockProvider.MinimumLeaseDuration.get -> System.TimeSpan
-Moongazing.OrionLock.Providers.IDistributedLockProvider.EffectiveLeaseDuration(System.TimeSpan requested) -> System.TimeSpan
-Moongazing.OrionLock.DistributedLockOptions.MaxHoldDuration.get -> System.TimeSpan?
-Moongazing.OrionLock.DistributedLockOptions.MaxHoldDuration.set -> void
-Moongazing.OrionLock.IDistributedLockHandle.ThrowIfLost() -> void
-Moongazing.OrionLock.Providers.ISharedExclusiveLockProvider.EffectiveLeaseDuration(System.TimeSpan requested) -> System.TimeSpan
+static Moongazing.OrionLock.Providers.LockWaitPolicy.Default.get -> Moongazing.OrionLock.Providers.LockWaitPolicy
+static Moongazing.OrionLock.Providers.LockWaitPolicy.operator !=(Moongazing.OrionLock.Providers.LockWaitPolicy left, Moongazing.OrionLock.Providers.LockWaitPolicy right) -> bool
+static Moongazing.OrionLock.Providers.LockWaitPolicy.operator ==(Moongazing.OrionLock.Providers.LockWaitPolicy left, Moongazing.OrionLock.Providers.LockWaitPolicy right) -> bool
+~override Moongazing.OrionLock.Providers.LockAcquisition.Equals(object obj) -> bool
+~override Moongazing.OrionLock.Providers.LockAcquisition.ToString() -> string
+~override Moongazing.OrionLock.Providers.LockWaitPolicy.Equals(object obj) -> bool
+~override Moongazing.OrionLock.Providers.LockWaitPolicy.ToString() -> string

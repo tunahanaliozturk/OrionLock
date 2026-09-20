@@ -46,8 +46,50 @@ public static class DistributedLockProviderExtensions
         ArgumentException.ThrowIfNullOrEmpty(key);
         ArgumentException.ThrowIfNullOrEmpty(ownerToken);
 
+        // Polls the UNFENCED single attempt, which is what this helper has always done and what its
+        // callers' test doubles substitute. PollUntilAcquiredAsync below is the same loop over the
+        // fenced overload, for the provider contract that has to carry the token through.
+        var acquisition = await PollUntilAcquiredAsync(
+            provider,
+            key,
+            ownerToken,
+            leaseDuration,
+            acquireTimeout,
+            options,
+            attempt: async ct => await provider.TryAcquireAsync(key, ownerToken, leaseDuration, ct).ConfigureAwait(false)
+                ? LockAcquisition.Unfenced
+                : LockAcquisition.NotAcquired,
+            cancellationToken).ConfigureAwait(false);
+        return acquisition.Acquired;
+    }
+
+    /// <summary>
+    /// The poll loop behind <see cref="IDistributedLockProvider.WaitForAcquireAsync"/>'s default
+    /// implementation: repeated single attempts with exponential-ceiling jitter until one wins or
+    /// the budget runs out, carrying the winning attempt's fencing token out with it.
+    /// </summary>
+    /// <remarks>
+    /// Shared with the public <c>WaitForAcquireAsync</c> extension above, which supplies the
+    /// unfenced attempt instead. One loop rather than two, because the deadline clamping and the
+    /// never-call-past-the-deadline gate are the parts that are easy to get subtly wrong twice.
+    /// </remarks>
+    internal static async Task<LockAcquisition> PollUntilAcquiredAsync(
+        IDistributedLockProvider provider,
+        string key,
+        string ownerToken,
+        TimeSpan leaseDuration,
+        TimeSpan acquireTimeout,
+        WaitForAcquireOptions? options = null,
+        Func<CancellationToken, Task<LockAcquisition>>? attempt = null,
+        CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(provider);
+        ArgumentException.ThrowIfNullOrEmpty(key);
+        ArgumentException.ThrowIfNullOrEmpty(ownerToken);
+
         var opts = options ?? WaitForAcquireOptions.Default;
         opts.ValidateAndNormalise();
+        attempt ??= ct => provider.TryAcquireFencedAsync(key, ownerToken, leaseDuration, ct);
 
         var deadline = acquireTimeout == Timeout.InfiniteTimeSpan
             ? (DateTime?)null
@@ -59,23 +101,24 @@ public static class DistributedLockProviderExtensions
         {
             cancellationToken.ThrowIfCancellationRequested();
 
-            // Re-check the deadline BEFORE every TryAcquire. The previous iteration's
+            // Re-check the deadline BEFORE every attempt. The previous iteration's
             // clipped delay can leave just enough time for one final unnecessary
-            // TryAcquire that runs past the requested timeout; this gate ensures the
+            // attempt that runs past the requested timeout; this gate ensures the
             // helper never makes a call after the deadline.
             if (deadline is not null && DateTime.UtcNow >= deadline.Value)
             {
-                return false;
+                return LockAcquisition.NotAcquired;
             }
 
-            if (await provider.TryAcquireAsync(key, ownerToken, leaseDuration, cancellationToken).ConfigureAwait(false))
+            var acquisition = await attempt(cancellationToken).ConfigureAwait(false);
+            if (acquisition.Acquired)
             {
-                return true;
+                return acquisition;
             }
 
             if (deadline is not null && DateTime.UtcNow >= deadline.Value)
             {
-                return false;
+                return LockAcquisition.NotAcquired;
             }
 
             var delay = ComputeJitteredDelay(opts, attempts, rng);
@@ -84,7 +127,7 @@ public static class DistributedLockProviderExtensions
                 var remaining = deadline.Value - DateTime.UtcNow;
                 if (remaining <= TimeSpan.Zero)
                 {
-                    return false;
+                    return LockAcquisition.NotAcquired;
                 }
                 if (delay > remaining)
                 {
@@ -96,7 +139,12 @@ public static class DistributedLockProviderExtensions
         }
     }
 
-    private static TimeSpan ComputeJitteredDelay(WaitForAcquireOptions opts, int attempts, Random rng)
+    /// <summary>
+    /// Exponential ceiling with full jitter, used by every retry loop in the library rather than
+    /// only by this helper. With <c>MaxDelay == InitialDelay</c> the jitter window collapses and
+    /// the result is a flat <c>InitialDelay</c>, which is the pre-v2.1 behaviour.
+    /// </summary>
+    internal static TimeSpan ComputeJitteredDelay(WaitForAcquireOptions opts, int attempts, Random rng)
     {
         // Exponential ceiling: InitialDelay * 2^attempts, capped at MaxDelay.
         var ceiling = opts.InitialDelay.TotalMilliseconds * Math.Pow(2, Math.Min(attempts, 30));

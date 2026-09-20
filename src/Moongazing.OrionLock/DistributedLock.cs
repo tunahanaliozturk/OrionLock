@@ -1,4 +1,4 @@
-﻿using System.Diagnostics;
+using System.Diagnostics;
 using Moongazing.OrionLock.Diagnostics;
 using Moongazing.OrionLock.Internal;
 using Moongazing.OrionLock.Providers;
@@ -107,8 +107,71 @@ public sealed class DistributedLock : IDistributedLock
         // logical acquirer and break fencing identity; reusing one keeps the deadline overload's fencing
         // identity stable, matching the reader-writer deadline overloads.
         var ownerToken = Guid.NewGuid().ToString("N");
-        return DeadlineAcquire.TryAcquireUntilDeadlineAsync(
-            (k, o, ct) => TryAcquireAsync(k, ownerToken, owner, o!, ct), key, deadline, options, cancellationToken);
+        return TryAcquireUntilDeadlineAsync(key, ownerToken, owner, deadline, options, cancellationToken);
+    }
+
+    /// <summary>
+    /// Sleeps the fallback poll interval after a wait that came back without a grant while budget
+    /// remained - the dropped-subscription case. Without it a backend whose subscription keeps
+    /// dropping would be re-asked in a tight loop for the rest of the caller's wait budget.
+    /// </summary>
+    private static async Task BackoffAfterEarlyWaitAsync(
+        TimeSpan remaining, Providers.WaitForAcquireOptions pollOptions, Random rng, int attempts,
+        CancellationToken cancellationToken)
+    {
+        if (remaining <= TimeSpan.Zero)
+        {
+            return;
+        }
+        var backoff = Providers.DistributedLockProviderExtensions.ComputeJitteredDelay(pollOptions, attempts, rng);
+        await Task.Delay(backoff < remaining ? backoff : remaining, cancellationToken).ConfigureAwait(false);
+    }
+
+    /// <summary>
+    /// Try-until-deadline for the exclusive path. Structurally the same as
+    /// <see cref="DeadlineAcquire.TryAcquireUntilDeadlineAsync"/> - a non-positive deadline performs
+    /// exactly one attempt and expiry returns <see langword="null"/> rather than throwing - but it
+    /// waits through <see cref="Providers.IDistributedLockProvider.WaitForAcquireAsync"/>, which the
+    /// shared helper cannot: the reader-writer provider it also serves is a different contract.
+    /// </summary>
+    private async Task<IDistributedLockHandle?> TryAcquireUntilDeadlineAsync(
+        string key, string ownerToken, object owner, TimeSpan deadline,
+        DistributedLockOptions options, CancellationToken cancellationToken)
+    {
+        var elapsed = Stopwatch.StartNew();
+        var waitPolicy = options.ToWaitPolicy();
+        var pollOptions = waitPolicy.ToPollOptions();
+        var rng = pollOptions.RandomFactory();
+        var attempts = 0;
+        while (true)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+
+            attempts++;
+            var handle = await TryAcquireAsync(key, ownerToken, owner, options, cancellationToken)
+                .ConfigureAwait(false);
+            if (handle is not null)
+            {
+                return handle;
+            }
+
+            var remaining = deadline - elapsed.Elapsed;
+            if (remaining <= TimeSpan.Zero)
+            {
+                return null;
+            }
+
+            var waited = await provider.WaitForAcquireAsync(
+                key, ownerToken, options.LeaseDuration, remaining, waitPolicy, cancellationToken)
+                .ConfigureAwait(false);
+            if (waited.Acquired)
+            {
+                return RegisterAcquired(key, ownerToken, owner, options, waited.FencingToken);
+            }
+
+            await BackoffAfterEarlyWaitAsync(
+                deadline - elapsed.Elapsed, pollOptions, rng, attempts, cancellationToken).ConfigureAwait(false);
+        }
     }
 
     private async Task<IDistributedLockHandle?> TryAcquireAsync(
@@ -128,19 +191,35 @@ public sealed class DistributedLock : IDistributedLock
             .TryAcquireFencedAsync(key, ownerToken, options.LeaseDuration, cancellationToken)
             .ConfigureAwait(false);
 
-        if (!acquired.Acquired)
-        {
-            return null;
-        }
+        return acquired.Acquired
+            ? RegisterAcquired(key, ownerToken, owner, options, acquired.FencingToken)
+            : null;
+    }
 
+    /// <summary>
+    /// Wraps a lease the backend has ALREADY granted in a handle and registers it for reentrancy.
+    /// Split out of <see cref="TryAcquireAsync(string, string, object, DistributedLockOptions, CancellationToken)"/>
+    /// because <see cref="Providers.IDistributedLockProvider.WaitForAcquireAsync"/> also returns a
+    /// granted lease, and re-calling TryAcquire to "collect" it would both cost an extra round trip
+    /// and fail - the lock is already held, by us.
+    /// <para>
+    /// <c>fencingToken</c> is the token the granting attempt minted, threaded through rather than
+    /// re-read: a lock taken by WAITING is as entitled to its token as one taken on the first
+    /// attempt, and dropping it here would leave fencing working on an idle key and silently dark
+    /// under exactly the contention it exists to protect against.
+    /// </para>
+    /// </summary>
+    private IDistributedLockHandle RegisterAcquired(
+        string key, string ownerToken, object owner, DistributedLockOptions options, long? fencingToken)
+    {
         // v0.3.25: thread the lifecycle observer into the handle so it can fire
         // OnLeaseLost / OnReleased.
         var real = new DistributedLockHandle(
-            provider, key, ownerToken, options, eventObserver, acquired.FencingToken);
+            provider, key, ownerToken, options, eventObserver, fencingToken);
         // v0.3.13: increment the held-concurrent gauge ONLY when a real backend lease is
-        // taken. Reentrant nested acquisitions (returned above) and contention path
-        // returns (null) are excluded. The handle's DisposeAsync / watchdog-loss paths
-        // decrement exactly once via DecrementOnceIfHeld.
+        // taken. Reentrant nested acquisitions and contention path returns (null) are
+        // excluded. The handle's DisposeAsync / watchdog-loss paths decrement exactly once
+        // via DecrementOnceIfHeld.
         OrionLockDiagnostics.IncrementLeasesHeld();
         return reentrancy.Register(key, owner, real);
     }
@@ -196,7 +275,46 @@ public sealed class DistributedLock : IDistributedLock
             var ownerToken = Guid.NewGuid().ToString("N");
             var deadline = Stopwatch.StartNew();
             var contended = false;
+            var waitPolicy = options.ToWaitPolicy();
+            var pollOptions = waitPolicy.ToPollOptions();
+            var rng = pollOptions.RandomFactory();
             int attempts = 0;
+
+            IDistributedLockHandle Granted(IDistributedLockHandle handle)
+            {
+                activity?.SetTag("orionlock.outcome", "acquired");
+                // The token goes on the SPAN and nowhere near a metric tag: it is unique per
+                // acquisition, so as a metric dimension it would mint a fresh time series for every
+                // single acquire. Spans are sampled and stored per-trace, which is what makes the
+                // same value affordable there. See docs/lock-key-cardinality.md - the reasoning is
+                // identical to the one that keeps the raw key off the Meter.
+                if (handle.FencingToken is { } fencingToken)
+                {
+                    activity?.SetTag("orionlock.fencing_token", fencingToken);
+                }
+                OrionLockDiagnostics.RecordAcquisition();
+                OrionLockDiagnostics.RecordAcquireDuration(deadline.Elapsed.TotalMilliseconds);
+                // v0.3.22: per-acquire attempt count for retry-interval sizing. Only successful
+                // acquires emit so cancelled / timed-out paths do not skew the distribution.
+                // v2.1: this counts the attempts THIS LOOP issued. A backend that blocks or
+                // subscribes does its own waiting inside one WaitForAcquireAsync call, so the
+                // histogram collapses towards 2 for those - which is the win, stated in the
+                // metric rather than hidden by it.
+                OrionLockDiagnostics.RecordAcquireAttemptCount(attempts);
+                // v0.3.15: only contended acquires emit on the contention histogram
+                // so its p99 reflects actual contention pressure rather than being
+                // diluted by uncontested happy paths.
+                if (contended)
+                {
+                    OrionLockDiagnostics.RecordContentionDuration(deadline.Elapsed.TotalMilliseconds);
+                }
+                // v0.3.25: wire-up of the v0.3.24 contract. Safe-invoke swallows
+                // observer faults so audit-side outages cannot break acquires.
+                eventObserver.SafeOnAcquired(
+                    key, deadline.Elapsed.TotalMilliseconds, handle.FencingToken);
+                return handle;
+            }
+
             while (true)
             {
                 attempts++;
@@ -204,34 +322,7 @@ public sealed class DistributedLock : IDistributedLock
                     key, ownerToken, owner, options, cancellationToken).ConfigureAwait(false);
                 if (handle is not null)
                 {
-                    activity?.SetTag("orionlock.outcome", "acquired");
-                    // The token goes on the SPAN and nowhere near a metric tag: it is unique per
-                    // acquisition, so as a metric dimension it would mint a fresh time series for every
-                    // single acquire. Spans are sampled and stored per-trace, which is what makes the
-                    // same value affordable there. See docs/lock-key-cardinality.md - the reasoning is
-                    // identical to the one that keeps the raw key off the Meter.
-                    if (handle.FencingToken is { } fencingToken)
-                    {
-                        activity?.SetTag("orionlock.fencing_token", fencingToken);
-                    }
-                    OrionLockDiagnostics.RecordAcquisition();
-                    OrionLockDiagnostics.RecordAcquireDuration(deadline.Elapsed.TotalMilliseconds);
-                    // v0.3.22: per-acquire attempt count for retry-interval sizing.
-                    // Only successful acquires emit so cancelled / timed-out paths do
-                    // not skew the distribution.
-                    OrionLockDiagnostics.RecordAcquireAttemptCount(attempts);
-                    // v0.3.15: only contended acquires emit on the contention histogram
-                    // so its p99 reflects actual contention pressure rather than being
-                    // diluted by uncontested happy paths.
-                    if (contended)
-                    {
-                        OrionLockDiagnostics.RecordContentionDuration(deadline.Elapsed.TotalMilliseconds);
-                    }
-                    // v0.3.25: wire-up of the v0.3.24 contract. Safe-invoke swallows
-                    // observer faults so audit-side outages cannot break acquires.
-                    eventObserver.SafeOnAcquired(
-                        key, deadline.Elapsed.TotalMilliseconds, handle.FencingToken);
-                    return handle;
+                    return Granted(handle);
                 }
 
                 contended = true;
@@ -250,11 +341,28 @@ public sealed class DistributedLock : IDistributedLock
                     throw new LockAcquisitionTimeoutException(key, deadline.Elapsed);
                 }
 
-                // Clamp the poll delay to the time left until WaitTimeout so a full RetryInterval near
-                // the deadline cannot overshoot the caller's wait budget by up to one interval, matching
-                // SharedExclusiveLock.AcquireAsync and the deadline overload.
-                var delay = options.RetryInterval < remaining ? options.RetryInterval : remaining;
-                await Task.Delay(delay, cancellationToken).ConfigureAwait(false);
+                // v2.1: hand the wait to the backend with the caller's REMAINING budget, so a store
+                // that can block or subscribe returns the instant the lock frees instead of being
+                // asked again every RetryInterval. The default implementation of this member is the
+                // poll loop this line replaced, so a provider that does not override it behaves
+                // exactly as before - the delay is still clamped to the remaining budget, and it is
+                // still the same owner token across every attempt.
+                attempts++;
+                var waited = await provider.WaitForAcquireAsync(
+                    key, ownerToken, options.LeaseDuration, remaining, waitPolicy, cancellationToken)
+                    .ConfigureAwait(false);
+                if (waited.Acquired)
+                {
+                    return Granted(RegisterAcquired(key, ownerToken, owner, options, waited.FencingToken));
+                }
+
+                // False means the budget ran out OR the backend's subscription dropped early. The
+                // loop handles both, but an early false must not turn into a hot spin against a
+                // backend whose subscription keeps dropping: sleep the caller's retry floor first,
+                // which is exactly the poll the wait degraded back to.
+                await BackoffAfterEarlyWaitAsync(
+                    options.WaitTimeout - deadline.Elapsed, pollOptions, rng, attempts, cancellationToken)
+                    .ConfigureAwait(false);
             }
         }
         catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)

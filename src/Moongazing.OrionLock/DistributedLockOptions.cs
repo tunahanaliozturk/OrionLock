@@ -10,7 +10,26 @@ public sealed class DistributedLockOptions
     public TimeSpan WaitTimeout { get; set; } = TimeSpan.FromSeconds(10);
 
     /// <summary>Delay between acquisition attempts inside a blocking acquire. Default 250 ms.</summary>
+    /// <remarks>
+    /// Since v2.1 this is the FLOOR of the wait, not the whole of it: a backend that can block or
+    /// subscribe returns the moment the lock frees and never sleeps an interval at all. It still
+    /// bounds the poll a backend falls back to, and it is still the shortest a fallback poll sleeps
+    /// when <see cref="RetryBackoffCeiling"/> raises the upper bound.
+    /// </remarks>
     public TimeSpan RetryInterval { get; set; } = TimeSpan.FromMilliseconds(250);
+
+    /// <summary>
+    /// Upper bound of the fallback poll's exponential backoff. <see langword="null"/> - the default -
+    /// keeps the flat <see cref="RetryInterval"/> every release before v2.1 used.
+    /// </summary>
+    /// <remarks>
+    /// Set it and each unsuccessful poll sleeps a random duration in
+    /// <c>[RetryInterval, min(RetryInterval * 2^attempts, RetryBackoffCeiling)]</c>. The randomness
+    /// is the point: a flat interval keeps N waiters that arrived together waking on the same tick
+    /// forever, so the store sees an N-wide burst every interval for the whole queue drain. A value
+    /// below <see cref="RetryInterval"/> is ignored (the floor wins).
+    /// </remarks>
+    public TimeSpan? RetryBackoffCeiling { get; set; }
 
     /// <summary>When true, a background watchdog re-extends the lease while the handle is alive. Default true.</summary>
     public bool AutoRenew { get; set; } = true;
@@ -140,4 +159,6 @@ public sealed class DistributedLockOptions
         MaxHoldDuration ?? (LeaseDuration.Ticks > TimeSpan.MaxValue.Ticks / 10
             ? TimeSpan.MaxValue
             : TimeSpan.FromTicks(LeaseDuration.Ticks * 10));
+    /// <summary>The wait shape these options describe, as the provider contract takes it.</summary>
+    internal Providers.LockWaitPolicy ToWaitPolicy() => new(RetryInterval, RetryBackoffCeiling);
 }

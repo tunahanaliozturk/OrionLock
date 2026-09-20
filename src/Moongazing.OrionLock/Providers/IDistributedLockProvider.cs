@@ -81,4 +81,57 @@ public interface IDistributedLockProvider
     /// </remarks>
     TimeSpan EffectiveLeaseDuration(TimeSpan requested)
         => LeaseDurationIsTtl ? requested : Timeout.InfiniteTimeSpan;
+
+    /// <summary>
+    /// Waits up to <paramref name="maxWait"/> for <paramref name="key"/> to become acquirable and
+    /// takes it for <paramref name="ownerToken"/>. Reports the acquisition exactly as
+    /// <see cref="TryAcquireFencedAsync"/> does, including the fencing token; a
+    /// <see cref="LockAcquisition.Acquired"/> of <see langword="false"/> means the budget ran out or
+    /// the backend's wait ended early without a grant. Cancellation surfaces as
+    /// <see cref="OperationCanceledException"/>.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// The default implementation is the poll loop the core used to run inline: repeated
+    /// <see cref="TryAcquireFencedAsync"/> with the caller's
+    /// <see cref="LockWaitPolicy.RetryInterval"/> as the floor. Every existing and third-party
+    /// provider therefore keeps behaving exactly as it did without touching a line of its code.
+    /// </para>
+    /// <para>
+    /// It reports a <see cref="LockAcquisition"/> rather than a bare <see langword="bool"/> for one
+    /// reason: a lock taken by WAITING is as entitled to its fencing token as one taken by the first
+    /// attempt. A bool here would mint no token for any contended acquire, so fencing would hold on
+    /// an idle key and quietly go dark under exactly the contention it exists to protect against.
+    /// An override MUST therefore carry the token its winning attempt produced.
+    /// </para>
+    /// <para>
+    /// Override it when the store can say "the lock is free now" instead of being asked 40 times a
+    /// second: SQL Server's own lock queue, PostgreSQL's blocking <c>pg_advisory_lock</c>, a Redis
+    /// release notification, an etcd watch, a Consul blocking query, a ZooKeeper predecessor watch.
+    /// An override MUST still honour <paramref name="maxWait"/> and
+    /// <paramref name="cancellationToken"/>, and MUST leave no connection, watch or subscription
+    /// parked behind a caller that gave up.
+    /// </para>
+    /// <para>
+    /// Reporting not-acquired before <paramref name="maxWait"/> elapses is legal and is how a
+    /// dropped subscription is reported: the core re-checks the remaining budget and calls again, so
+    /// the wait degrades to polling rather than failing.
+    /// </para>
+    /// </remarks>
+    /// <param name="key">Lock key.</param>
+    /// <param name="ownerToken">Caller-supplied owner identity, stable across the whole wait.</param>
+    /// <param name="leaseDuration">TTL applied on success.</param>
+    /// <param name="maxWait">Remaining wait budget. Never negative; may be <see cref="Timeout.InfiniteTimeSpan"/>.</param>
+    /// <param name="waitPolicy">What to do while waiting when the backend has to fall back to polling.</param>
+    /// <param name="cancellationToken">Cancellation token.</param>
+    Task<LockAcquisition> WaitForAcquireAsync(
+        string key,
+        string ownerToken,
+        TimeSpan leaseDuration,
+        TimeSpan maxWait,
+        LockWaitPolicy waitPolicy,
+        CancellationToken cancellationToken)
+        => DistributedLockProviderExtensions.PollUntilAcquiredAsync(
+            this, key, ownerToken, leaseDuration, maxWait, waitPolicy.ToPollOptions(),
+            attempt: null, cancellationToken);
 }
