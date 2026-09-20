@@ -144,7 +144,7 @@ public sealed class EtcdLockProvider : IDistributedLockProvider
     /// loop it replaced.
     /// </para>
     /// </remarks>
-    public async Task<bool> WaitForAcquireAsync(
+    public async Task<LockAcquisition> WaitForAcquireAsync(
         string key, string ownerToken, TimeSpan leaseDuration, TimeSpan maxWait,
         LockWaitPolicy waitPolicy, CancellationToken cancellationToken)
     {
@@ -158,26 +158,31 @@ public sealed class EtcdLockProvider : IDistributedLockProvider
         {
             cancellationToken.ThrowIfCancellationRequested();
 
-            if (await TryAcquireAsync(key, ownerToken, leaseDuration, cancellationToken).ConfigureAwait(false))
+            // The FENCED attempt, so a lock taken by WAITING carries the same token a lock taken on
+            // the first attempt would have - otherwise fencing would work on an idle key and go
+            // dark under exactly the contention it exists to protect against.
+            var acquisition = await TryAcquireFencedAsync(key, ownerToken, leaseDuration, cancellationToken)
+                .ConfigureAwait(false);
+            if (acquisition.Acquired)
             {
-                return true;
+                return acquisition;
             }
 
             var remaining = maxWait - elapsed.Elapsed;
             if (!infinite && remaining <= TimeSpan.Zero)
             {
-                return false;
+                return LockAcquisition.NotAcquired;
             }
 
             if (!await etcd.WaitForKeyDeletedAsync(
                     FullKey(key), infinite ? Timeout.InfiniteTimeSpan : remaining, cancellationToken)
                 .ConfigureAwait(false))
             {
-                // Budget spent, no watch available, or the stream dropped. Returning false is how
-                // the contract says so: the core re-checks the budget, sleeps the caller's retry
-                // floor, and asks again - which is the poll loop, reached only when the watch is
-                // not doing its job.
-                return false;
+                // Budget spent, no watch available, or the stream dropped. Reporting not-acquired
+                // is how the contract says so: the core re-checks the budget, sleeps the caller's
+                // retry floor, and asks again - which is the poll loop, reached only when the watch
+                // is not doing its job.
+                return LockAcquisition.NotAcquired;
             }
 
             // The key is gone. Race for it at the top of the loop: every waiter watching this key

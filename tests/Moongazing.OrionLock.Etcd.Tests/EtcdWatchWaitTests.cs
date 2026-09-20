@@ -28,7 +28,7 @@ public sealed class EtcdWatchWaitTests
         var acquired = await sut.WaitForAcquireAsync(
             Key, "owner-1", Lease, TimeSpan.FromSeconds(30), LockWaitPolicy.Default, default);
 
-        Assert.True(acquired);
+        Assert.True(acquired.Acquired);
         Assert.Equal(1, etcd.WatchCalls);
         // Two attempts: the losing one (grant + put + revoke) and the winning one (grant + put).
         Assert.Equal(2, etcd.PutCalls);
@@ -45,8 +45,8 @@ public sealed class EtcdWatchWaitTests
         var etcd = new CountingEtcdClient { GrantOnAttempt = 4, WatchAnswers = [true, true, true] };
         var sut = new EtcdLockProvider(etcd);
 
-        Assert.True(await sut.WaitForAcquireAsync(
-            Key, "owner-1", Lease, TimeSpan.FromSeconds(30), LockWaitPolicy.Default, default));
+        Assert.True((await sut.WaitForAcquireAsync(
+            Key, "owner-1", Lease, TimeSpan.FromSeconds(30), LockWaitPolicy.Default, default)).Acquired);
 
         Assert.Equal(3, etcd.WatchCalls);
         Assert.Equal(4, etcd.PutCalls);
@@ -64,7 +64,7 @@ public sealed class EtcdWatchWaitTests
         var acquired = await sut.WaitForAcquireAsync(
             Key, "owner-1", Lease, TimeSpan.FromSeconds(30), LockWaitPolicy.Default, default);
 
-        Assert.False(acquired);
+        Assert.False(acquired.Acquired);
         Assert.Equal(1, etcd.WatchCalls);
         Assert.Equal(1, etcd.PutCalls);
     }
@@ -77,8 +77,8 @@ public sealed class EtcdWatchWaitTests
         var etcd = new WatchlessEtcdClient();
         var sut = new EtcdLockProvider(etcd);
 
-        Assert.False(await sut.WaitForAcquireAsync(
-            Key, "owner-1", Lease, TimeSpan.FromSeconds(30), LockWaitPolicy.Default, default));
+        Assert.False((await sut.WaitForAcquireAsync(
+            Key, "owner-1", Lease, TimeSpan.FromSeconds(30), LockWaitPolicy.Default, default)).Acquired);
         Assert.Equal(1, etcd.PutCalls);
     }
 
@@ -88,8 +88,8 @@ public sealed class EtcdWatchWaitTests
         var etcd = new CountingEtcdClient { GrantOnAttempt = 99, WatchAnswers = [] };
         var sut = new EtcdLockProvider(etcd);
 
-        Assert.False(await sut.WaitForAcquireAsync(
-            Key, "owner-1", Lease, TimeSpan.Zero, LockWaitPolicy.Default, default));
+        Assert.False((await sut.WaitForAcquireAsync(
+            Key, "owner-1", Lease, TimeSpan.Zero, LockWaitPolicy.Default, default)).Acquired);
 
         Assert.Equal(1, etcd.PutCalls);
         Assert.Equal(0, etcd.WatchCalls);
@@ -101,8 +101,8 @@ public sealed class EtcdWatchWaitTests
         var etcd = new CountingEtcdClient { GrantOnAttempt = 2, WatchAnswers = [true] };
         var sut = new EtcdLockProvider(etcd, new EtcdLockOptions { KeyPrefix = "/app/locks/" });
 
-        Assert.True(await sut.WaitForAcquireAsync(
-            Key, "owner-1", Lease, TimeSpan.FromSeconds(9), LockWaitPolicy.Default, default));
+        Assert.True((await sut.WaitForAcquireAsync(
+            Key, "owner-1", Lease, TimeSpan.FromSeconds(9), LockWaitPolicy.Default, default)).Acquired);
 
         Assert.Equal("/app/locks/" + Key, etcd.WatchedKey);
         Assert.True(etcd.WatchedBudget > TimeSpan.Zero && etcd.WatchedBudget <= TimeSpan.FromSeconds(9));

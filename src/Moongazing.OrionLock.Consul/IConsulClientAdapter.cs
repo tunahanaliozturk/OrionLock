@@ -22,6 +22,22 @@ public interface IConsulClientAdapter
 
     /// <summary>KV release-with-session. Returns true when the release matched the session.</summary>
     Task<bool> KvReleaseAsync(string key, string sessionId, CancellationToken cancellationToken);
+
+    /// <summary>
+    /// Consul blocking query: reads the key with its modify index and does not answer until the
+    /// entry changes or <paramref name="maxWait"/> elapses. Returns <see langword="true"/> when the
+    /// key came back free - no session holding it, or no entry at all - so the caller should race
+    /// for it. Returns <see langword="false"/> when the wait produced nothing worth retrying for.
+    /// </summary>
+    /// <remarks>
+    /// A default interface method so an existing third-party adapter keeps compiling and simply
+    /// keeps polling: the default answers <see langword="false"/> at once, which
+    /// <see cref="ConsulLockProvider"/> reads as "no blocking query available" and hands the wait
+    /// back to the core's poll loop. An implementation MUST NOT leave a request outstanding after
+    /// it returns.
+    /// </remarks>
+    Task<bool> WaitForKeyFreeAsync(string key, TimeSpan maxWait, CancellationToken cancellationToken)
+        => Task.FromResult(false);
 }
 
 /// <summary>

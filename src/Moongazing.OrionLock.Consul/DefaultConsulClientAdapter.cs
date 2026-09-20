@@ -1,4 +1,4 @@
-﻿namespace Moongazing.OrionLock.Consul;
+namespace Moongazing.OrionLock.Consul;
 
 using System.Text;
 using global::Consul;
@@ -89,6 +89,50 @@ public sealed class DefaultConsulClientAdapter : IConsulClientAdapter, IConsulFe
         // stops fitting in a long before the cluster has other problems.
         return result.Response is { } pair ? (long)pair.ModifyIndex : null;
     }
+
+    /// <inheritdoc />
+    /// <remarks>
+    /// Two requests for the whole wait: one to learn the key's current modify index, one blocking
+    /// query that Consul holds open until the entry changes past that index or the wait time
+    /// elapses. The wait time is Consul's own, so the connection is released by the server rather
+    /// than abandoned by the client, and cancellation propagates into the HTTP call - nothing is
+    /// left outstanding when a caller gives up.
+    /// </remarks>
+    public async Task<bool> WaitForKeyFreeAsync(string key, TimeSpan maxWait, CancellationToken cancellationToken)
+    {
+        var path = ConsulKvPath.Encode(key, nameof(key));
+
+        var current = await client.KV.Get(path, cancellationToken).ConfigureAwait(false);
+        if (IsFree(current.Response))
+        {
+            // Already free between the caller's failed attempt and this read; say so rather than
+            // blocking for a change that has already happened.
+            return true;
+        }
+
+        // Consul caps its own wait at 10 minutes and adds jitter; anything longer is simply held
+        // for as long as it will hold it, and the caller loops.
+        var wait = maxWait == Timeout.InfiniteTimeSpan || maxWait > TimeSpan.FromMinutes(10)
+            ? TimeSpan.FromMinutes(10)
+            : maxWait;
+        if (wait <= TimeSpan.Zero)
+        {
+            return false;
+        }
+
+        var blocked = await client.KV.Get(
+            path,
+            new QueryOptions { WaitIndex = current.LastIndex, WaitTime = wait },
+            cancellationToken).ConfigureAwait(false);
+
+        return IsFree(blocked.Response);
+    }
+
+    // A KV entry with no session on it is not held: either the holder released it, or its session
+    // expired and Consul applied the 'release' behaviour. A missing entry is free for the same
+    // reason. Anything else is still somebody's.
+    private static bool IsFree(KVPair? pair)
+        => pair is null || string.IsNullOrEmpty(pair.Session);
 
     /// <inheritdoc />
     public async Task<bool> KvReleaseAsync(string key, string sessionId, CancellationToken cancellationToken)
