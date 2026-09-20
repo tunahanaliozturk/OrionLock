@@ -21,6 +21,19 @@ using Moongazing.OrionLock.Providers;
 /// </remarks>
 public sealed class ZooKeeperLockProvider : IDistributedLockProvider
 {
+    /// <inheritdoc />
+    /// <remarks>
+    /// A ZooKeeper hold is scoped to the ephemeral znode's SESSION, not to a TTL: the lock lives until
+    /// the child znode is deleted or the session expires, and the <c>leaseDuration</c> this provider is
+    /// handed is never written anywhere (see <see cref="TryAcquireAsync"/>). Leaving the interface
+    /// default of <see langword="true"/> made the core account for a TTL that does not exist, so a caller
+    /// legitimately still holding the lock past <c>LeaseDuration</c> raised a false
+    /// <c>expired_before_release</c> event, and a connection blip that delayed a renew past the same
+    /// window was reported as a lost lease although the session - and therefore the lock - was intact.
+    /// Same reasoning as the session-scoped PostgreSQL and SQL Server advisory-lock providers.
+    /// </remarks>
+    public bool LeaseDurationIsTtl => false;
+
     private readonly IZooKeeperClientAdapter zk;
     private readonly ZooKeeperLockOptions options;
 
