@@ -82,6 +82,235 @@ public sealed class SqlServerWaitBudgetTests
             "k", "", Lease, TimeSpan.FromSeconds(1), LockWaitPolicy.Default, default));
     }
 
+    [Fact]
+    public async Task A_round_that_gives_up_early_is_re_issued_with_what_is_left_of_the_budget()
+    {
+        // sp_getapplock's @LockTimeout is enforced against SQL Server's own lock-wait accounting,
+        // not wall clock, and on a saturated host that accounting runs ahead of it: CI measured a
+        // 700 ms @LockTimeout returning -1 after 213 ms of real time while
+        // sys.dm_exec_session_wait_stats credited the same wait with 3.5 seconds. A caller who
+        // sized a budget gets the budget, so the provider keeps the clock itself.
+        var handed = new List<TimeSpan>();
+        var sw = Stopwatch.StartNew();
+
+        var result = await SqlServerLockProvider.WaitWithinBudgetAsync(
+            TimeSpan.FromMilliseconds(400),
+            new LockWaitPolicy(TimeSpan.FromMilliseconds(20)).ToPollOptions(),
+            remaining =>
+            {
+                handed.Add(remaining);
+                return Task.FromResult(LockAcquisition.NotAcquired);
+            },
+            default);
+        sw.Stop();
+
+        Assert.False(result.Acquired);
+        Assert.True(handed.Count > 1, $"one round only: the early give-up was reported as the whole wait ({handed.Count} round(s))");
+        Assert.InRange(sw.ElapsedMilliseconds, 350, 5_000);
+        // Each round is handed what is LEFT, never the original figure again - otherwise the last
+        // round could park past the caller's deadline.
+        Assert.True(handed[^1] < handed[0], $"the budget handed to each round did not shrink: {handed[0]} then {handed[^1]}");
+    }
+
+    [Fact]
+    public async Task A_round_that_wins_ends_the_wait_there_and_then()
+    {
+        var attempts = 0;
+
+        var result = await SqlServerLockProvider.WaitWithinBudgetAsync(
+            TimeSpan.FromSeconds(30),
+            new LockWaitPolicy(TimeSpan.FromMilliseconds(1)).ToPollOptions(),
+            _ => Task.FromResult(++attempts == 2 ? LockAcquisition.Unfenced : LockAcquisition.NotAcquired),
+            default);
+
+        Assert.True(result.Acquired);
+        Assert.Equal(2, attempts);
+    }
+
+    /// <summary>
+    /// A generator that always draws the top of the jitter window, so
+    /// <c>ComputeJitteredDelay</c> returns exactly the exponential ceiling for each round and the
+    /// whole sequence is a fixed, checkable series rather than something timed and hoped for.
+    /// </summary>
+    private sealed class TopOfTheJitterWindow : Random
+    {
+        public override double NextDouble() => 1.0;
+    }
+
+    [Fact]
+    public async Task The_retry_delay_follows_the_whole_policy_not_just_its_floor()
+    {
+        // This loop runs exactly when a server is refusing early and repeatedly - which is exactly
+        // when every waiter retrying on the same flat tick is a thundering herd. Reading only
+        // RetryInterval and ignoring BackoffCeiling gave callers who had configured exponential
+        // jitter a synchronised flat retry instead. LockWaitPolicy was ignored outright by this
+        // provider before the budget fix; honouring half of it is the state to avoid.
+        var backoff = new LockWaitPolicy(
+            TimeSpan.FromMilliseconds(20), BackoffCeiling: TimeSpan.FromMilliseconds(400)).ToPollOptions();
+        backoff.RandomFactory = () => new TopOfTheJitterWindow();
+
+        var at = new List<long>();
+        var clock = Stopwatch.StartNew();
+
+        await SqlServerLockProvider.WaitWithinBudgetAsync(
+            TimeSpan.FromMilliseconds(800),
+            backoff,
+            _ =>
+            {
+                at.Add(clock.ElapsedMilliseconds);
+                return Task.FromResult(LockAcquisition.NotAcquired);
+            },
+            default);
+        clock.Stop();
+
+        // Top of the window every time, so the delays are exactly 20, 40, 80, 160 - doubling to the
+        // 400 ms ceiling. A flat RetryInterval makes every one of these 20.
+        var expected = new[] { 20, 40, 80, 160 };
+        Assert.True(at.Count >= expected.Length + 1, $"only {at.Count} rounds in 800ms, expected at least {expected.Length + 1}");
+
+        for (var i = 0; i < expected.Length; i++)
+        {
+            var gap = at[i + 1] - at[i];
+            Assert.True(
+                gap >= expected[i] - 5,
+                $"gap {i} was {gap}ms but the policy asks for {expected[i]}ms: the delay is being taken from the retry interval alone, "
+                + $"so a configured BackoffCeiling buys nothing. Gaps: [{string.Join(", ", at.Zip(at.Skip(1), (a, b) => b - a))}]");
+            Assert.True(
+                gap < expected[i] + 200,
+                $"gap {i} was {gap}ms, far past the {expected[i]}ms the policy asks for. Gaps: [{string.Join(", ", at.Zip(at.Skip(1), (a, b) => b - a))}]");
+        }
+    }
+
+    [Fact]
+    public async Task No_round_is_issued_once_the_budget_is_gone()
+    {
+        // The contract this whole fix exists to restore is "returns false WITHOUT taking the lock".
+        // A round issued after the deadline can still WIN, and a lock handed to a caller who has
+        // already stopped waiting - and who may by then have taken the other branch - is worse than
+        // the early give-up: early is a wasted wait, late is a lock nobody is holding on purpose.
+        // A retry interval longer than the budget is what exposes it: the delay gets clipped to the
+        // remainder, and the loop then came back round for one more attempt with nothing left.
+        var budget = TimeSpan.FromMilliseconds(200);
+        var dispatchedWithNothingLeft = 0;
+        var clock = Stopwatch.StartNew();
+
+        var result = await SqlServerLockProvider.WaitWithinBudgetAsync(
+            budget,
+            new LockWaitPolicy(TimeSpan.FromMilliseconds(500)).ToPollOptions(),
+            remaining =>
+            {
+                // Judged on the LOOP's own figure - the budget it had when it dispatched this round
+                // - and not on a clock this fake reads for itself. Between the deadline check and
+                // the call the thread can be descheduled, so a round the loop legitimately started
+                // can still EXECUTE after the deadline; a fake that timestamps its own invocation
+                // reports that as a violation and goes red for preemption rather than for the bug.
+                // What the loop can actually promise is that it never STARTS a round having seen
+                // the budget gone, and this parameter is exactly what it saw.
+                if (remaining <= TimeSpan.Zero)
+                {
+                    // A real sp_getapplock round can win here. Say so, so the assertion below is
+                    // about the lock and not only about the bookkeeping.
+                    Interlocked.Increment(ref dispatchedWithNothingLeft);
+                    return Task.FromResult(LockAcquisition.Unfenced);
+                }
+                return Task.FromResult(LockAcquisition.NotAcquired);
+            },
+            default);
+        clock.Stop();
+
+        Assert.False(result.Acquired);
+        Assert.True(
+            Volatile.Read(ref dispatchedWithNothingLeft) == 0,
+            $"{dispatchedWithNothingLeft} round(s) were dispatched with none of the {budget.TotalMilliseconds}ms budget left, and one of them took the lock");
+        // The floor is the real assertion: the wait lasted its budget. The ceiling is only a
+        // runaway guard - a correct loop still overshoots by one round plus whatever the scheduler
+        // adds, and neither of those is boundable on a shared runner, so a tight ceiling here would
+        // go red for slowness rather than for overshoot.
+        Assert.InRange(clock.ElapsedMilliseconds, 190, 5_000);
+    }
+
+    [Fact]
+    public async Task The_last_sliver_of_a_budget_is_not_spun_on()
+    {
+        // Task.Delay truncates its delay to whole milliseconds, so a sub-millisecond remainder
+        // sleeps for NOTHING and the loop comes straight back round with the budget still
+        // technically positive. Measured on this loop before the guard: 828 rounds inside half a
+        // millisecond, every one of them a fresh connection and an sp_getapplock against the
+        // server. It is the same defect the Redis waiter had, and the same shape of answer: a
+        // sliver too small to sleep on is the budget ending.
+        //
+        // The sliver is CONSTRUCTED rather than waited for: the first round consumes the budget
+        // down to half a millisecond, which is an ordinary thing for a real sp_getapplock round to
+        // do. Left purely to chance the sliver turns up in roughly one run in ten, and a regression
+        // test that mostly does not run is not one. The construction still misses when the spin to
+        // the mark overshoots the deadline, so the scenario is repeated - a miss costs an iteration,
+        // not the test.
+        //
+        // Asserted as a RATE, not as a count. A count would be a proxy the machine can violate: a
+        // Task.Delay that comes back a millisecond or two early leaves real budget behind, and the
+        // round the loop then dispatches is correct, not a spin. What is never correct is issuing
+        // rounds faster than the interval the caller configured. Elapsed time is the denominator,
+        // so a slow machine stretches the allowance instead of failing - the same shape as the
+        // Redis spin assertion, and for the same reason.
+        var budget = TimeSpan.FromMilliseconds(200);
+        var interval = TimeSpan.FromMilliseconds(500);
+        var sliverStartsAt = budget - TimeSpan.FromTicks(TimeSpan.TicksPerMillisecond / 2);
+
+        for (var attempt = 0; attempt < 6; attempt++)
+        {
+            var rounds = 0;
+            var clock = Stopwatch.StartNew();
+
+            var result = await SqlServerLockProvider.WaitWithinBudgetAsync(
+                budget,
+                new LockWaitPolicy(interval).ToPollOptions(),
+                async _ =>
+                {
+                    if (Interlocked.Increment(ref rounds) == 1)
+                    {
+                        await Task.Delay(sliverStartsAt - TimeSpan.FromMilliseconds(40));
+                        // The last stretch is spun rather than slept, because Task.Delay cannot land
+                        // on a sub-millisecond mark and landing on it is the whole point. The margin covers the
+                        // ~15ms granularity of the delay itself, which would otherwise sail past the mark.
+                        while (clock.Elapsed < sliverStartsAt)
+                        {
+                            Thread.SpinWait(10);
+                        }
+                    }
+                    return LockAcquisition.NotAcquired;
+                },
+                default);
+            clock.Stop();
+
+            // The first round is owed nothing, every later one owes a full interval.
+            var allowed = 1 + (int)Math.Ceiling(clock.Elapsed / interval);
+            var observed = Volatile.Read(ref rounds);
+
+            Assert.False(result.Acquired);
+            Assert.True(
+                observed <= allowed,
+                $"{observed} rounds in {clock.ElapsedMilliseconds}ms at a {interval.TotalMilliseconds}ms retry interval: "
+                + $"at most {allowed} can be spaced by that interval, so the rest were a spin on the server - "
+                + "the remainder after the last sleep was too small to sleep on again.");
+        }
+    }
+
+    [Fact]
+    public async Task A_zero_budget_is_still_the_single_shot_try_it_always_was()
+    {
+        // The core never calls the wait with nothing left, but "wait up to zero" means "ask once",
+        // not "ask nothing" - and asking nothing would silently drop an acquire that was free.
+        var attempts = 0;
+
+        var result = await SqlServerLockProvider.WaitWithinBudgetAsync(
+            TimeSpan.Zero,
+            LockWaitPolicy.Default.ToPollOptions(),
+            _ => { attempts++; return Task.FromResult(LockAcquisition.NotAcquired); },
+            default);
+
+        Assert.False(result.Acquired);
+        Assert.Equal(1, attempts);
+    }
 }
 
 /// <summary>

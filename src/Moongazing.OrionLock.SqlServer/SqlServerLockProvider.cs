@@ -1,5 +1,6 @@
 using System.Collections.Concurrent;
 using System.Data;
+using System.Diagnostics;
 using Microsoft.Data.SqlClient;
 using Moongazing.OrionLock;
 using Moongazing.OrionLock.Diagnostics;
@@ -26,6 +27,13 @@ public sealed class SqlServerLockProvider : IDistributedLockProvider, IDisposabl
     public bool LeaseDurationIsTtl => false;
 
     private const int MaxResourceLength = 240;
+
+    /// <summary>
+    /// The shortest wait the retry loop can actually take. <see cref="Task.Delay(TimeSpan, CancellationToken)"/>
+    /// truncates to whole milliseconds, so a budget with less than this left cannot be slept on and
+    /// is spent. The Redis waiter carries the same constant for the same reason.
+    /// </summary>
+    internal static readonly TimeSpan ShortestSleep = TimeSpan.FromMilliseconds(1);
 
     private readonly string connectionString;
     private readonly SqlServerLockOptions options;
@@ -82,6 +90,17 @@ public sealed class SqlServerLockProvider : IDistributedLockProvider, IDisposabl
     /// cancelled, the exception propagates through the <c>catch</c> below, and the connection - and
     /// with it the session and its place in the queue - is disposed.
     /// </para>
+    /// <para>
+    /// The budget is kept HERE, on this side's monotonic clock, rather than being handed to
+    /// <c>@LockTimeout</c> and believed. <c>sp_getapplock</c>'s timeout is enforced against SQL
+    /// Server's own lock-wait accounting, which is documented as a ceiling and is not wall clock: on
+    /// a CPU-saturated host it runs far ahead of it, and a 700 ms <c>@LockTimeout</c> has been
+    /// measured in CI giving up after 213 ms of real time while
+    /// <c>sys.dm_exec_session_wait_stats</c> credited that same wait with 3.5 seconds. The caller
+    /// sized the budget, so a round that comes back empty with budget still on the clock is
+    /// re-issued with what is left. When the server's timer is honest - the normal case - this is
+    /// still exactly one round trip.
+    /// </para>
     /// </remarks>
     public Task<LockAcquisition> WaitForAcquireAsync(
         string key, string ownerToken, TimeSpan leaseDuration, TimeSpan maxWait,
@@ -90,7 +109,98 @@ public sealed class SqlServerLockProvider : IDistributedLockProvider, IDisposabl
         ValidateKey(key);
         ArgumentException.ThrowIfNullOrWhiteSpace(ownerToken);
 
-        return GetAppLockAsync(key, ownerToken, LockTimeoutMsFor(maxWait), maxWait, cancellationToken);
+        // "Wait forever" has no budget to keep, and re-issuing it could only lose the queue place
+        // it already holds, so it stays the single blocking round trip it has always been.
+        return maxWait == Timeout.InfiniteTimeSpan
+            ? GetAppLockAsync(key, ownerToken, LockTimeoutMsFor(maxWait), maxWait, cancellationToken)
+            : WaitWithinBudgetAsync(
+                maxWait,
+                waitPolicy.ToPollOptions(),
+                remaining => GetAppLockAsync(
+                    key, ownerToken, LockTimeoutMsFor(remaining), remaining, cancellationToken),
+                cancellationToken);
+    }
+
+    /// <summary>
+    /// Runs <paramref name="attemptAsync"/> until it wins the lock or <paramref name="maxWait"/> is
+    /// genuinely spent on this side's monotonic clock, handing each attempt what is LEFT of the
+    /// budget rather than the original figure.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// The FIRST attempt is unconditional, so a zero budget is the single-shot try it was before.
+    /// Every later one is gated on the deadline: a round issued after the budget is gone can still
+    /// win, and a lock handed to a caller who already stopped waiting - and who may by then have
+    /// taken the other branch - is worse than the early give-up this method exists to prevent. Late
+    /// is not a wasted wait, it is a lock nobody is holding on purpose.
+    /// </para>
+    /// <para>
+    /// The gate is <see cref="ShortestSleep"/>, not zero, for the same reason the Redis waiter's is:
+    /// <see cref="Task.Delay(TimeSpan, CancellationToken)"/> truncates its delay to whole
+    /// milliseconds, so a sub-millisecond sliver of budget sleeps for nothing and the loop comes
+    /// straight back round - measured here at 828 rounds inside half a millisecond, each one a
+    /// connection and an <c>sp_getapplock</c> in the real provider. A sliver too small to sleep on
+    /// IS the budget ending.
+    /// </para>
+    /// <para>
+    /// An attempt that comes back empty without consuming the caller's backoff sleeps the
+    /// difference first. The figure comes from <paramref name="backoff"/> in full - the
+    /// exponential ceiling and the jitter, not only <see cref="LockWaitPolicy.RetryInterval"/> -
+    /// through the same <c>ComputeJitteredDelay</c> every other retry loop in the library uses.
+    /// Honouring only the floor would be worse here than anywhere else: this loop runs precisely
+    /// when a server is refusing early and repeatedly, which is precisely when N waiters retrying
+    /// on the same flat tick is a thundering herd. Without any delay at all, a server whose lock
+    /// timer refused instantly would turn a long budget into a hot loop against the database
+    /// instead of the poll the wait is meant to degrade into.
+    /// </para>
+    /// </remarks>
+    internal static async Task<LockAcquisition> WaitWithinBudgetAsync(
+        TimeSpan maxWait,
+        WaitForAcquireOptions backoff,
+        Func<TimeSpan, Task<LockAcquisition>> attemptAsync,
+        CancellationToken cancellationToken)
+    {
+        var elapsed = Stopwatch.StartNew();
+        var attempted = false;
+        // One generator for the whole wait, created once and never shared, exactly as
+        // PollUntilAcquiredAsync does it - a fresh one per round would re-draw from the same seed
+        // and flatten the jitter this exists to provide.
+        var rng = backoff.RandomFactory();
+        var rounds = 0;
+        while (true)
+        {
+            var remaining = maxWait - elapsed.Elapsed;
+            if (attempted && remaining < ShortestSleep)
+            {
+                return LockAcquisition.NotAcquired;
+            }
+
+            var roundStarted = elapsed.Elapsed;
+            attempted = true;
+
+            var acquisition = await attemptAsync(
+                remaining > TimeSpan.Zero ? remaining : TimeSpan.Zero).ConfigureAwait(false);
+            if (acquisition.Acquired)
+            {
+                return acquisition;
+            }
+
+            var left = maxWait - elapsed.Elapsed;
+            if (left <= TimeSpan.Zero)
+            {
+                return LockAcquisition.NotAcquired;
+            }
+
+            // Time already burnt in the round counts towards the interval: the promise is at most
+            // one attempt per interval, not an interval of idling on top of every attempt.
+            var delay = DistributedLockProviderExtensions.ComputeJitteredDelay(backoff, rounds, rng)
+                - (elapsed.Elapsed - roundStarted);
+            rounds++;
+            if (delay > TimeSpan.Zero)
+            {
+                await Task.Delay(delay < left ? delay : left, cancellationToken).ConfigureAwait(false);
+            }
+        }
     }
 
     /// <summary>

@@ -23,6 +23,15 @@
     <InternalsVisibleTo Include="Moongazing.OrionLock.Testing.Tests" />
     <InternalsVisibleTo Include="Moongazing.OrionLock.HealthChecks" />
     <InternalsVisibleTo Include="Moongazing.OrionLock.HealthChecks.Tests" />
+    <!--
+      The SQL Server backend overrides WaitForAcquireAsync and so runs its own retry loop, which
+      needs the same exponential-ceiling-with-jitter figure PollUntilAcquiredAsync uses. That lives
+      in ComputeJitteredDelay, and reaching it here is what keeps ONE backoff implementation in the
+      library - a second one in a backend package is how the shapes drift apart, which is the reason
+      LockWaitPolicy.ToPollOptions is public in the first place.
+    -->
+    <InternalsVisibleTo Include="Moongazing.OrionLock.SqlServer" />
+    <InternalsVisibleTo Include="Moongazing.OrionLock.SqlServer.Tests" />
   </ItemGroup>
   <ItemGroup>
     <None Include="docs/README.md" Pack="true" PackagePath="docs/" />
