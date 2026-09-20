@@ -7,6 +7,120 @@ All notable changes to OrionLock are documented in this file. The format is base
 
 ## [Unreleased]
 
+## [3.0.0] - 2026-09-20
+
+Nine merged pull requests covering correctness, security, performance and two new
+capabilities (fencing tokens, and waiters that park on the store instead of polling it).
+The published packages move 2.0.0 -> 3.0.0. `OrionLock.Consul`, `OrionLock.Etcd`,
+`OrionLock.ZooKeeper` and `Moongazing.OrionLock.HealthChecks` move 0.6.0 -> 0.7.0 and
+remain unpublished - see the last entry under **Changed** for why.
+
+### Breaking changes
+
+Everything a 2.x consumer has to act on, in one place. Each item is expanded in the
+sections below.
+
+1. **A lock key is now one opaque name and `/` is illegal in it.** `LockKey.Validate` runs
+   in the core before any backend sees the key and throws `ArgumentException` for `/`, for
+   `.` and `..`, for control characters, for the ranges ZooKeeper refuses in a znode name,
+   and for anything longer than 200 characters.
+   **Do:** move hierarchy out of the key and into the backend's own namespace knob -
+   `RedisLockOptions.KeyPrefix`, `ConsulLockOptions.KeyPrefix`, `SqlServerLockOptions.KeyPrefix`,
+   `PostgresLockOptions.KeyPrefix`, `EtcdLockOptions.KeyPrefix`, `ZooKeeperLockOptions.RootPath`.
+   `AcquireAsync("tenant-1/orders")` becomes a prefix plus `AcquireAsync("orders")`, or just
+   `AcquireAsync("tenant-1:orders")` if the separator carried no meaning.
+
+2. **That namespace knob is validated too, at registration time.** A `ConsulLockOptions.KeyPrefix`
+   or `ZooKeeperLockOptions.RootPath` that is not legal per-segment now fails when you build the
+   host, not at the first acquire.
+   **Do:** if startup begins throwing with a message naming `KeyPrefix` or `RootPath`, fix the
+   prefix. The other backends pass their prefix as a protocol field or SQL parameter and are
+   unaffected.
+
+3. **Registering two different backends on one builder throws.** `AddOrionLock().UseInMemory().UseRedis("...")`
+   used to run the in-memory fake in production, silently.
+   **Do:** keep the one `Use*` call you meant and delete the other. Re-registering the *same*
+   backend still replaces it. A test host that deliberately overrides production starts a fresh
+   builder with another `AddOrionLock()`.
+
+4. **`UseRedis(connectionString)` now connects with that connection string.** It used to lose to
+   an `IConnectionMultiplexer` the application had already registered, and your locks went to the
+   cache's Redis.
+   **Do:** nothing if you meant the connection string. If you were relying on the old behaviour to
+   share the application's connection, switch to the no-argument `UseRedis()` overload, which is
+   the explicit opt-in to sharing. An app pointing OrionLock at a *different* Redis than its cache
+   now opens a second multiplexer, as it asked to.
+
+5. **A `LeaseDuration` the backend cannot honour is refused rather than silently raised.**
+   `ArgumentOutOfRangeException` on your own thread at acquire time. Consul's floor is 10 s
+   (`ConsulLockOptions.MinSessionTtl`), etcd's is 5 s (`EtcdLockOptions.MinLeaseTtlSeconds`);
+   no other backend has one.
+   **Do:** raise `LeaseDuration` to the floor, or pick a backend with a finer lease. The old code
+   was giving you the floor anyway, without telling you.
+
+6. **`IDistributedLockHandle.EffectiveLeaseDuration` is a new abstract interface member.** It has
+   no sensible default to infer, so it is the one member in this release that does not ship with
+   one.
+   **Do:** a custom `IDistributedLockHandle` implementation must add it. Custom
+   `IDistributedLockProvider` / `ISharedExclusiveLockProvider` implementations need no change -
+   `MinimumLeaseDuration`, `EffectiveLeaseDuration` and `WaitForAcquireAsync` all have defaults.
+   If you *decorate* a provider, forward all three: a decorator that does not forward them makes
+   every override below it unreachable.
+
+7. **Driver exceptions no longer escape an acquire.** `SqlException`, `PostgresException`,
+   `RpcException`, `KeeperException`, `RedisException`, `DbException` and HTTP failures are wrapped
+   in `OrionLockBackendException` with the original as `InnerException`.
+   **Do:** replace per-backend `catch` clauses with one `catch (OrionLockBackendException)`. A
+   `catch (RedisException)` or `catch (SqlException)` around an acquire will stop matching.
+
+8. **`DistributedLockOptions.MaxHoldDuration` bounds the renewal watchdog, defaulting to ten
+   leases.** Past it the watchdog stops renewing, `IsHeld` goes false, `LostToken` trips and the
+   hold is released best-effort.
+   **Do:** a critical section that legitimately runs longer than ten leases must raise
+   `MaxHoldDuration`. It is a leak backstop, not a work deadline, and it applies only when
+   `AutoRenew` is on.
+
+9. **Reentrancy is scoped to the flow that holds the lock, not to the key.** Two unrelated callers
+   on the shared `IDistributedLock` singleton asking for the same key both used to get a handle.
+   **Do:** expect in-process callers that were silently sharing a lease to start contending -
+   `AcquireAsync` can now throw `LockAcquisitionTimeoutException`, and `TryAcquireAsync` return
+   `null`, where they previously returned immediately. That is the correct behaviour, but it can
+   surface as new contention under load.
+
+10. **With `AutoRenew = false` on a TTL backend, `IsHeld` goes false and `LostToken` trips at the
+    lease deadline.** It never used to.
+    **Do:** if you used `AutoRenew = false` with a short lease for long work and read `IsHeld`,
+    raise `LeaseDuration` or turn auto-renew on. That was always the real state.
+
+11. **`DistributedLockOptions` is validated at every acquire entry point.** A non-positive
+    `LeaseDuration`, a negative `WaitTimeout` (including `Timeout.InfiniteTimeSpan`), a non-positive
+    `RetryInterval` or a non-positive `RenewalFailureGracePeriod` throws `ArgumentOutOfRangeException`.
+    **Do:** fix the value. Configurations that silently misbehaved now fail loudly at the call site.
+
+12. **`ConsulLockOptions.LockDelay` now defaults to 5 seconds instead of `TimeSpan.Zero`.**
+    **Do:** nothing, unless you raise `RenewalFailureGracePeriod` above the Consul session TTL, in
+    which case raise `LockDelay` by the same amount. Set it back to `TimeSpan.Zero` only if you
+    accept that a partitioned holder and its successor can overlap.
+
+13. **Telemetry: `orion.lock.acquire.attempt_count` means something different on the exclusive
+    path.** It now counts the attempts the core issued, which for a backend that blocks or
+    subscribes collapses towards 2 per acquire. The reader-writer path still polls, so its attempt
+    count keeps its original meaning.
+    **Do:** re-baseline any alert on that instrument, and split the two paths by the
+    `orionlock.mode` span tag before charting them together.
+
+14. **Telemetry: reader-writer holds now emit instruments and observer callbacks they never did.**
+    `ILockEventObserver` registered in DI now fires for `ISharedExclusiveLock` holds, and the
+    renewal / grace / attempt instruments carry reader-writer traffic.
+    **Do:** expect existing alerts on those instruments to start seeing traffic they never saw,
+    and expect an audit-trail observer to start receiving reader-writer events.
+
+15. **Redis FIFO waiter coordinator: the sorted-set score encoding changed.** During a rolling
+    upgrade, waiters queued on the same key by old and new coordinators order against each other
+    incorrectly for one window.
+    **Do:** drain the key or accept one window of mis-ordering. Only affects
+    `UseRedisFifoWaiterCoordinator`.
+
 ### Added
 
 - **Fencing tokens: `IDistributedLockHandle.FencingToken`.** A distributed lock cannot stop a holder from
@@ -66,6 +180,49 @@ All notable changes to OrionLock are documented in this file. The format is base
   the SQL it emitted before fencing existed while reporting no token. Locking behaviour is unchanged either
   way.
 
+- **`IDistributedLockProvider.WaitForAcquireAsync`: a backend can now be told when the lock is free
+  instead of being asked.** Every waiter polled. `AcquireAsync`, the deadline overloads and the
+  reader-writer acquire all waited by sleeping a flat `RetryInterval`, so 256 waiters on one key cost
+  1044 provider calls to hand the lock around, and a hand-off could not beat one Windows timer tick
+  however the interval was configured. The new member is a **default interface method whose default
+  body is exactly that poll loop**, so every existing and third-party provider keeps behaving as it
+  did without a line of change; a backend that can block server-side or subscribe to a release
+  notification overrides it and returns the instant the lock frees. The core hands it the caller's
+  REMAINING budget, and `WaitTimeout`, cancellation and the deadline overloads are unchanged. A wait
+  that ends early without a grant - a dropped subscription - is reported as `false`, and the core
+  degrades to polling rather than failing the caller. The member is on the exclusive provider only:
+  `ISharedExclusiveLockProvider` has no counterpart yet, so a reader-writer acquire still polls.
+  See **Changed** for what each shipped backend now does while waiting.
+
+- **`IDistributedLockProvider.MinimumLeaseDuration` and `IDistributedLockProvider.EffectiveLeaseDuration(TimeSpan)`**,
+  both default interface methods, and **`IDistributedLockHandle.EffectiveLeaseDuration`**, which is
+  abstract. `ISharedExclusiveLockProvider` gained the same pair of provider members. See the lease entry
+  under **Changed**.
+
+- **`IDistributedLockHandle.ThrowIfLost()`**, a default interface method, so no existing implementation
+  breaks. It is the checked counterpart of `IsHeld`, for the point in a critical section where continuing
+  without the lock would be wrong. It is also the only thing that raises `LeaseLostException`, which until
+  now was defined and thrown nowhere at all.
+
+- **`DistributedLockOptions.MaxHoldDuration`.** Null by default, resolving to ten times `LeaseDuration`.
+  The backstop for a handle that is never disposed; see the entry under **Fixed**.
+
+- **`DistributedLockOptions.RetryBackoffCeiling`.** Null by default, which keeps the flat
+  `RetryInterval` every earlier release used. Set it and each fallback poll sleeps a random duration
+  in `[RetryInterval, min(RetryInterval * 2^attempts, ceiling)]`, so N waiters that arrived together
+  stop waking on the same tick for the whole queue drain. `RetryInterval` remains the floor.
+
+- **`LockWaitPolicy`**, the wait shape handed to a provider, and **`LockWaitPolicy.ToPollOptions()`**,
+  so a backend's poll fallback uses the shipped backoff rather than each package rebuilding it.
+
+- **`RedisLockOptions.UseReleaseNotifications` and `ReleaseChannelSuffix`**, and
+  **`InMemoryLockProvider.WaitForAcquireAsync`** - the reference implementation of an event-driven
+  wait, and the way a test proves a waiter parks rather than spins without needing a container.
+
+- **`IEtcdClientAdapter.WaitForKeyDeletedAsync`, `IConsulClientAdapter.WaitForKeyFreeAsync` and
+  `IZooKeeperClientAdapter.WaitForNodeDeletedAsync`** are new default interface methods answering
+  `false`, so a custom adapter written before this keeps compiling and simply keeps polling.
+
 ### Changed
 
 - **BREAKING: a lock key is now one opaque name, validated in the core — `/` is no longer legal in a key.**
@@ -94,6 +251,17 @@ All notable changes to OrionLock are documented in this file. The format is base
   `AcquireAsync("tenant-1:orders")` if the separator carried no meaning. Keys already held on a backend
   keep their existing on-the-wire names: this changes what you may ask for, not how a valid key is
   encoded. `ConsulKvPath` is now only a percent-encoder and no longer rejects anything itself.
+
+- **The configured namespace prefix is validated too, not just the key.** `LockKey` covers the
+  caller-supplied key, but `ConsulLockOptions.KeyPrefix` is concatenated in front of it and spliced into
+  the same `/v1/kv/{path}` HTTP path, and `ZooKeeperLockOptions.RootPath` is concatenated into the same
+  znode path. A prefix of `"../session/destroy/"` with an ordinary key therefore canonicalised out of
+  the KV namespace and retargeted a lock acquire at Consul's session endpoint — the traversal the key
+  rule exists to stop, arriving through the half of the path the key rule cannot see. Both are now held
+  to the same per-segment rule a lock key is, at registration time, so a bad prefix fails at startup
+  with a message naming `KeyPrefix` / `RootPath` instead of at the first acquire. Backends whose prefix
+  is parameterised rather than concatenated into a path (Redis, etcd, SQL Server, PostgreSQL, EF Core —
+  all of which pass it as a protocol field or a SQL parameter) are unaffected and unchanged.
 
 - **BREAKING: every backend registers the same way, and registering two backends now throws.**
   The library carried two opposite DI conventions behind one identical composition-root shape. Redis,
@@ -152,43 +320,6 @@ All notable changes to OrionLock are documented in this file. The format is base
   value that was asked for. `ISharedExclusiveLockProvider` gained the same member (with a default), so a
   reader-writer hold reports the same truth an exclusive one does.
 
-- **The configured namespace prefix is validated too, not just the key.** `LockKey` covers the
-  caller-supplied key, but `ConsulLockOptions.KeyPrefix` is concatenated in front of it and spliced into
-  the same `/v1/kv/{path}` HTTP path, and `ZooKeeperLockOptions.RootPath` is concatenated into the same
-  znode path. A prefix of `"../session/destroy/"` with an ordinary key therefore canonicalised out of
-  the KV namespace and retargeted a lock acquire at Consul's session endpoint — the traversal the key
-  rule exists to stop, arriving through the half of the path the key rule cannot see. Both are now held
-  to the same per-segment rule a lock key is, at registration time, so a bad prefix fails at startup
-  with a message naming `KeyPrefix` / `RootPath` instead of at the first acquire. Backends whose prefix
-  is parameterised rather than concatenated into a path (Redis, etcd, SQL Server, PostgreSQL, EF Core —
-  all of which pass it as a protocol field or a SQL parameter) are unaffected and unchanged.
-
-- **`IDistributedLockProvider.WaitForAcquireAsync`: a backend can now be told when the lock is free
-  instead of being asked.** Every waiter polled. `AcquireAsync`, the deadline overloads and the
-  reader-writer acquire all waited by sleeping a flat `RetryInterval`, so 256 waiters on one key cost
-  1044 provider calls to hand the lock around, and a hand-off could not beat one Windows timer tick
-  however the interval was configured. The new member is a **default interface method whose default
-  body is exactly that poll loop**, so every existing and third-party provider keeps behaving as it
-  did without a line of change; a backend that can block server-side or subscribe to a release
-  notification overrides it and returns the instant the lock frees. The core hands it the caller's
-  REMAINING budget, and `WaitTimeout`, cancellation and the deadline overloads are unchanged. A wait
-  that ends early without a grant - a dropped subscription - is reported as `false`, and the core
-  degrades to polling rather than failing the caller.
-
-- **`DistributedLockOptions.RetryBackoffCeiling`.** Null by default, which keeps the flat
-  `RetryInterval` every earlier release used. Set it and each fallback poll sleeps a random duration
-  in `[RetryInterval, min(RetryInterval * 2^attempts, ceiling)]`, so N waiters that arrived together
-  stop waking on the same tick for the whole queue drain. `RetryInterval` remains the floor.
-
-- **`LockWaitPolicy`**, the wait shape handed to a provider, and **`LockWaitPolicy.ToPollOptions()`**,
-  so a backend's poll fallback uses the shipped backoff rather than each package rebuilding it.
-
-- **`RedisLockOptions.UseReleaseNotifications` and `ReleaseChannelSuffix`**, and
-  **`InMemoryLockProvider.WaitForAcquireAsync`** - the reference implementation of an event-driven
-  wait, and the way a test proves a waiter parks rather than spins without needing a container.
-
-### Changed
-
 - **SQL Server no longer throws away SQL Server's lock queue.** `sp_getapplock` takes a
   `@LockTimeout` and the provider passed `0`, which asks the lock manager for an answer now and
   discards the queue behind it. A contended wait now passes the caller's remaining budget, so it is
@@ -232,9 +363,9 @@ All notable changes to OrionLock are documented in this file. The format is base
   as the old loop waited. Arrival order is honoured again. The child is deleted on every path that
   does not win, since an abandoned one blocks every waiter behind it until the session expires.
 
-- **`IEtcdClientAdapter.WaitForKeyDeletedAsync`, `IConsulClientAdapter.WaitForKeyFreeAsync` and
-  `IZooKeeperClientAdapter.WaitForNodeDeletedAsync`** are new default interface methods answering
-  `false`, so a custom adapter written before this keeps compiling and simply keeps polling.
+- **The in-memory provider parks on a release signal**, so `UseInMemory()` is an event-driven wait
+  too and a test can prove a waiter parks rather than spins without needing a container. EF Core and
+  any third-party provider that does not override `WaitForAcquireAsync` still poll, exactly as before.
 
 - **Every retry loop in the library now goes through the jittered backoff** that already existed in
   `DistributedLockProviderExtensions.ComputeJitteredDelay` and was called only by tests. With
@@ -244,14 +375,59 @@ All notable changes to OrionLock are documented in this file. The format is base
 - **`orion.lock.acquire.attempt_count` on the EXCLUSIVE path now counts the attempts the core
   issued**, which for a backend that blocks or subscribes collapses towards 2 per acquire - the wait
   is one backend interaction rather than N. The reduction is the win, stated in the metric rather
-  than hidden by it. The reader-writer path emits the same instrument but still polls, so its
-  attempt count keeps its original meaning; if you chart the two together, split them by the
-  `orionlock.mode` span or they will not be comparable.
+  than hidden by it. The reader-writer path emits the same instrument but still polls - it has no
+  `WaitForAcquireAsync` to hand the wait to - so its attempt count keeps its original meaning; if you
+  chart the two together, split them by the `orionlock.mode` span or they will not be comparable.
 
-- **`MeasuringLockProvider` forwards the new member.** It decorates every provider `AddOrionLock`
+- **`MeasuringLockProvider` forwards the new members.** It decorates every provider `AddOrionLock`
   registers, so without that every backend override above would be unreachable in production while
   still passing its own tests - exactly the trap `LeaseDurationIsTtl` fell into. The regression test
-  covers both members now.
+  covers `WaitForAcquireAsync`, `MinimumLeaseDuration`, `EffectiveLeaseDuration` and
+  `LeaseDurationIsTtl`.
+
+- **BREAKING (Consul, default value): `ConsulLockOptions.LockDelay` now defaults to 5 seconds instead of
+  `TimeSpan.Zero`.** The zero default removed the mechanism that makes a Consul session lock safe under
+  partition: Consul invalidating a session does not stop the process that held it, so with no delay a new
+  holder can enter the critical section while the old one is still inside it. This is the fix for "a key
+  freed by session invalidation was available before its old holder knew". The delay is *not* paid on
+  a normal release — `ReleaseAsync` releases the KV entry before destroying the session — only on the
+  crash and partition paths. If you raise `RenewalFailureGracePeriod` above the Consul session TTL you
+  must raise `LockDelay` by the same amount; the package README states the rule. Set it back to
+  `TimeSpan.Zero` only if you accept that a partitioned holder and its successor can overlap.
+
+- **CI runs with least privilege and pinned actions.** The workflow declares
+  `permissions: contents: read` (the publish job keeps its own `packages: write`), every checkout
+  sets `persist-credentials: false` so the token is not written into `.git/config` before the job
+  builds and runs branch code, and `actions/checkout` / `actions/setup-dotnet` are pinned to commit
+  SHAs. The NuGet and GitHub Packages tokens move off the command line into `env:`, the release
+  build and pack run with `ContinuousIntegrationBuild=true`, and the GitHub Packages push no longer
+  hides failures behind `continue-on-error`: it tolerates an already-published version and fails on
+  anything else. The pre-pull step now names the SQL Server image the tests actually use
+  (`2022-latest`), which it stopped doing when the suites moved to Testcontainers 4.
+
+- **The container-backed tests skip instead of failing when Docker is absent.** The Redis, PostgreSQL,
+  SQL Server and EF Core suites hard-failed on a machine with no Docker daemon - 135 red tests that said
+  nothing about the code and hid the ones that did. They now carry `[DockerFact]` / `[DockerTheory]`,
+  which probe the Docker endpoint once per run and skip with a reason. Test only; no shipped code changed.
+
+- **Testcontainers 3.10.0 -> 4.15.0 across the test suites.** 3.10.0 pulled `SSH.NET 2023.0.0`
+  transitively, which carries [GHSA-q939-rpr3-3284](https://github.com/advisories/GHSA-q939-rpr3-3284)
+  (High) and raised NU1903 on every restore. Nothing shipped ever referenced it. Testcontainers 4 also
+  requires an explicit image, so the Redis, PostgreSQL and SQL Server tags are now pinned in one place
+  instead of taken from the library defaults.
+
+- **`OrionLock.Consul`, `OrionLock.Etcd`, `OrionLock.ZooKeeper` and `Moongazing.OrionLock.HealthChecks`
+  move 0.6.0 -> 0.7.0 and stay unpublished.** They are not on the release job's pack list and have never
+  been released to nuget.org. The reason is worth stating rather than leaving to be inferred: **those
+  three backends have no container test coverage at all.** Their test projects carry no Testcontainers
+  reference, no fixture and no CI service, so every test in them runs against a fake adapter and the
+  providers' behaviour against a real etcd cluster, Consul agent or ZooKeeper ensemble has never executed
+  anywhere. Everything this release says about them — the etcd watch, the Consul blocking query, the
+  ZooKeeper predecessor watch, the fencing verdicts, the round-trip counts — is proven at fake level
+  only. Shipping a distributed lock backend on that basis is not something to do quietly, so they stay
+  off nuget.org until a container suite exists. `Moongazing.OrionLock.HealthChecks` holds no lock
+  semantics of its own, but its suite has no Testcontainers reference either: it has only ever probed the
+  in-memory provider and throwing fakes.
 
 ### Fixed
 
@@ -340,11 +516,6 @@ All notable changes to OrionLock are documented in this file. The format is base
   modelled this shape), `ArgumentException` and friends (the caller's mistake), `InvalidOperationException`
   (an OrionLock invariant) and `ObjectDisposedException` pass through untouched, with their stacks
   intact. The full set is now on `IDistributedLock` and in the README.
-
-- **`LeaseLostException` is thrown somewhere.** It was defined and raised nowhere at all.
-  `IDistributedLockHandle.ThrowIfLost()` is its home: the checked counterpart of `IsHeld`, for the point
-  in a critical section where continuing without the lock would be wrong. Added as a default interface
-  method, so no existing implementation breaks.
 
 - **An undisposed handle now stops instead of holding the lock forever.** The renewal watchdog task
   roots the handle, so a forgotten `await using` — the likeliest mistake with this API — was never
@@ -473,6 +644,15 @@ All notable changes to OrionLock are documented in this file. The format is base
   `LeaseDurationIsTtl`; on session-scoped backends the watchdog keeps retrying instead. Both the
   exclusive and the reader-writer handle.
 
+- **The internal measuring decorator no longer reports every backend as a TTL backend.**
+  `AddOrionLock` wraps the registered `IDistributedLockProvider` in an internal measuring decorator, and
+  that decorator did not forward `LeaseDurationIsTtl` — it fell back to the interface default of `true`.
+  A session-scoped backend that overrides the flag to `false` (PostgreSQL advisory locks, SQL Server
+  `sp_getapplock`) therefore had its override discarded the moment it went through DI, so anything gated
+  on the flag behaved as if the lease were a wall-clock TTL. The decorator now forwards the inner
+  provider's value. If you relied on the `orion.lock.lease.expired_before_release` counter firing for a
+  session-scoped backend, it will now correctly stay silent there.
+
 - **The blocking `AcquireAsync` now polls under one owner token instead of a new one per retry.** Every
   retry minted a fresh owner token, so a contended acquire looked to the backend like a stream of
   different acquirers — which breaks fencing identity and can orphan state a partly-succeeded attempt
@@ -495,14 +675,26 @@ All notable changes to OrionLock are documented in this file. The format is base
   `CancellationTokenSource` until that source was disposed. Both are fixed; a cancellation-heavy
   workload sharing one long-lived token no longer accumulates dead registrations.
 
-- **The internal measuring decorator no longer reports every backend as a TTL backend.**
-  `AddOrionLock` wraps the registered `IDistributedLockProvider` in an internal measuring decorator, and
-  that decorator did not forward `LeaseDurationIsTtl` — it fell back to the interface default of `true`.
-  A session-scoped backend that overrides the flag to `false` (PostgreSQL advisory locks, SQL Server
-  `sp_getapplock`) therefore had its override discarded the moment it went through DI, so anything gated
-  on the flag behaved as if the lease were a wall-clock TTL. The decorator now forwards the inner
-  provider's value. If you relied on the `orion.lock.lease.expired_before_release` counter firing for a
-  session-scoped backend, it will now correctly stay silent there.
+- **A reader-writer hold now emits the signals the exclusive one always did, observer included.** The
+  README promised the reader-writer surface's lease, renewal, release and diagnostics semantics mirror
+  the exclusive `IDistributedLock`. They did not. A `Shared` or `Exclusive` hold taken through
+  `ISharedExclusiveLock` never emitted `orion.lock.lease.renewal_failures_consecutive`,
+  `orion.lock.lease.grace_period_exhausted`, `orion.lock.handle.renewals_per_hold` or
+  `orion.lock.acquire.attempt_count`, and — worst of the set — never invoked a registered
+  `ILockEventObserver` at all: `OnAcquired`, `OnAcquireTimedOut`, `OnLeaseLost` and `OnReleased` were
+  all silent for every reader-writer hold, so a consumer registering an observer for an audit trail got
+  a complete blank with nothing in the API to suggest it. Both handles now drive one internal
+  `LeaseWatchdog`, so the two paths emit the same instruments in the same order by construction rather
+  than by intention. `SharedExclusiveLock` gained a `(provider, eventObserver)` overload, and all four
+  shipped reader-writer registrations — `UseRedisSharedExclusive`, `UsePostgresSharedExclusive`,
+  `UseEntityFrameworkCoreSharedExclusive` and `UseInMemory` — resolve `ILockEventObserver` from DI and
+  pass it through, so an observer registered in the container reaches reader-writer holds exactly as it
+  reaches exclusive ones. Nothing on the exclusive path changed, and no signal changed its ordering or
+  timing. If you alert on these instruments, expect reader-writer traffic to start appearing in them.
+  The one thing that still differs: the reader-writer acquire polls, because
+  `ISharedExclusiveLockProvider` has no `WaitForAcquireAsync`, so `attempt_count` does not collapse
+  there the way it does on the exclusive path.
+
 - **EF Core: two hosts with clock drift could hold the same exclusive lock.** `EfCoreLockProvider`
   computed lease deadlines from `DateTime.UtcNow` on the application host, then compared them against a
   deadline some other host had written with *its* clock. Hosts whose clocks differed by more than the
@@ -510,12 +702,14 @@ All notable changes to OrionLock are documented in this file. The format is base
   the same single authoritative clock the reader-writer providers already use — so drift between your
   application hosts no longer affects mutual exclusion. Note that SQLite's `CURRENT_TIMESTAMP` has
   whole-second resolution, so leases under about two seconds are not meaningful on SQLite.
+
 - **EF Core: the "provider-agnostic" SQL only ran on SQLite.** The table name and the `Key` column were
   spliced into raw SQL unquoted. `Key` is a reserved word in T-SQL and MySQL, where the statement is a
   syntax error, and PostgreSQL case-folded the bare table name to `orionlock_locks`, which does not
   exist. Identifiers now come from your EF model and are quoted by the active provider, so renamed
   tables, schemas and remapped columns work too. The provider is now exercised against real PostgreSQL
   and SQL Server in CI, not SQLite alone.
+
 - **EF Core: a lost race on a brand-new key threw instead of returning `false`.** The first-use
   `INSERT ... WHERE NOT EXISTS` is not atomic under READ COMMITTED, and its `catch` named
   `DbUpdateException`, which raw SQL never raises — so a genuine primary-key violation escaped
@@ -524,26 +718,31 @@ All notable changes to OrionLock are documented in this file. The format is base
   violation — which a customised lock-table mapping, an added constraint or a trigger can raise — still
   reaches you as an exception rather than being retried forever as contention against a schema that can
   never accept the row.
+
 - **etcd: a successful lease renewal could be reported as a lost lease.** The keep-alive resolved its
   result in a race with its own response callback, so the handle could trip its lost-token and revoke
   the lease while your code was still inside the critical section. Only etcd itself now decides: `false`
   means the server said the lease is gone. A keep-alive stream that ends without any answer is treated
   as a transient backend fault and throws, which the renewal loop already retries under its grace period
   instead of surrendering the lock.
-- **Consul: a key freed by session invalidation was available before its old holder knew.** See the
-  breaking note below.
+
 - **Consul: a lock key could retarget the request at a different Consul endpoint.** Keys are spliced into
   the `/v1/kv/{key}` HTTP path, where URI canonicalisation collapses `/../` and `?`/`#` splice or
-  truncate the request. Segments are now percent-encoded, and a key with an empty or relative (`.`,
-  `..`) segment is rejected with `ArgumentException`.
+  truncate the request. Every `/`-separated segment of the path is now percent-encoded. The rejection
+  half of this fix moved to the core: `LockKey.Validate` refuses `/`, `.` and `..` in a key before any
+  backend sees it (see **Changed**), and `ConsulLockOptions.KeyPrefix` is held to the same per-segment
+  rule at registration time, so `ConsulKvPath` is now purely an encoder and rejects nothing itself.
+
 - **ZooKeeper: the provider now declares itself session-scoped.** A ZooKeeper hold lasts as long as its
   session, not for a TTL, but the provider left `LeaseDurationIsTtl` at the default `true`. That produced
   false `expired_before_release` events for callers legitimately still holding the lock, and reported a
   lost lease after a connection blip that merely delayed a renewal.
+
 - **ZooKeeper: a lock key containing `/` grew the ensemble's tree with no way back.** Each `/`-separated
   segment became a persistent znode that release never deleted, and ZooKeeper keeps its whole tree in
   memory. A key is now encoded into exactly one znode name, and a key's parent znode is deleted once its
   last holder releases. Express hierarchy through `ZooKeeperLockOptions.RootPath`, not through the key.
+
 - **Redis: a sub-millisecond lease was destructive rather than short.** `RedisLockProvider` floored the
   lease to whole milliseconds, so a positive sub-millisecond lease became `PEXPIRE key 0` — which
   *deletes* the key, meaning the first renewal dropped the lock. Leases now round up to at least 1 ms,
@@ -551,62 +750,16 @@ All notable changes to OrionLock are documented in this file. The format is base
   producing a broken lock. The provider also now validates `key` and `ownerToken` and honours the
   `CancellationToken` on acquire and renew (release deliberately still runs, so a cancelled caller cannot
   strand the lock).
+
 - **Redis: FIFO waiters were not actually ordered within a millisecond.** A sorted-set score is a double,
   and the coordinator's packing overflowed its exact-integer range, so runs of about 16 same-millisecond
   waiters collapsed onto one score and fell back to arbitrary ordering. The packing now stays inside that
   range, so arrival order holds. **The score encoding changed:** during a rolling upgrade, waiters queued
   on the same key by old and new coordinators order against each other incorrectly for one window.
+
 - **Testing: `InMemorySharedExclusiveLockProvider` could hand out an already-expired hold.** It read the
   clock before taking the per-key lock, so a thread that waited stamped expiries against a stale instant.
   The clock is now read under the lock.
-
-- **A reader-writer hold now emits the signals the exclusive one always did.** The README promised the
-  reader-writer surface's lease, renewal, release and diagnostics semantics mirror the exclusive
-  `IDistributedLock`. They did not. A `Shared` or `Exclusive` hold taken through `ISharedExclusiveLock`
-  never emitted `orion.lock.lease.renewal_failures_consecutive`,
-  `orion.lock.lease.grace_period_exhausted`, `orion.lock.handle.renewals_per_hold` or
-  `orion.lock.acquire.attempt_count`, and — worst of the set — never invoked a registered
-  `ILockEventObserver` at all: `OnAcquired`, `OnAcquireTimedOut`, `OnLeaseLost` and `OnReleased` were
-  all silent for every reader-writer hold, so a consumer registering an observer for an audit trail got
-  a complete blank with nothing in the API to suggest it. Both handles now drive one internal
-  `LeaseWatchdog`, so the two paths emit the same instruments in the same order by construction rather
-  than by intention, and a new `SharedExclusiveLock(provider, eventObserver)` overload threads the
-  observer through. Nothing on the exclusive path changed, and no signal changed its ordering or
-  timing. If you alert on these instruments, expect reader-writer traffic to start appearing in them.
-  **Note:** the shipped backend packages still construct `SharedExclusiveLock` without an observer, so
-  `ISharedExclusiveLock` resolved from `UseRedis` / `UsePostgres` / `UseEntityFrameworkCore` /
-  `UseInMemory` now passes the DI-registered observer through as well, so a reader-writer hold reports
-  to it exactly as an exclusive one does.
-
-### Changed
-
-- **CI runs with least privilege and pinned actions.** The workflow declares
-  `permissions: contents: read` (the publish job keeps its own `packages: write`), every checkout
-  sets `persist-credentials: false` so the token is not written into `.git/config` before the job
-  builds and runs branch code, and `actions/checkout` / `actions/setup-dotnet` are pinned to commit
-  SHAs. The NuGet and GitHub Packages tokens move off the command line into `env:`, the release
-  build and pack run with `ContinuousIntegrationBuild=true`, and the GitHub Packages push no longer
-  hides failures behind `continue-on-error`: it tolerates an already-published version and fails on
-  anything else. The pre-pull step now names the SQL Server image the tests actually use
-  (`2022-latest`), which it stopped doing when the suites moved to Testcontainers 4.
-- **BREAKING (Consul, default value): `ConsulLockOptions.LockDelay` now defaults to 5 seconds instead of
-  `TimeSpan.Zero`.** The zero default removed the mechanism that makes a Consul session lock safe under
-  partition: Consul invalidating a session does not stop the process that held it, so with no delay a new
-  holder can enter the critical section while the old one is still inside it. The delay is *not* paid on
-  a normal release — `ReleaseAsync` releases the KV entry before destroying the session — only on the
-  crash and partition paths. If you raise `RenewalFailureGracePeriod` above the Consul session TTL you
-  must raise `LockDelay` by the same amount; the package README states the rule. Set it back to
-  `TimeSpan.Zero` only if you accept that a partitioned holder and its successor can overlap.
-
-- **The container-backed tests skip instead of failing when Docker is absent.** The Redis, PostgreSQL,
-  SQL Server and EF Core suites hard-failed on a machine with no Docker daemon - 135 red tests that said
-  nothing about the code and hid the ones that did. They now carry `[DockerFact]` / `[DockerTheory]`,
-  which probe the Docker endpoint once per run and skip with a reason. Test only; no shipped code changed.
-- **Testcontainers 3.10.0 -> 4.15.0 across the test suites.** 3.10.0 pulled `SSH.NET 2023.0.0`
-  transitively, which carries [GHSA-q939-rpr3-3284](https://github.com/advisories/GHSA-q939-rpr3-3284)
-  (High) and raised NU1903 on every restore. Nothing shipped ever referenced it. Testcontainers 4 also
-  requires an explicit image, so the Redis, PostgreSQL and SQL Server tags are now pinned in one place
-  instead of taken from the library defaults.
 
 ## [2.0.0] - 2026-07-29
 
