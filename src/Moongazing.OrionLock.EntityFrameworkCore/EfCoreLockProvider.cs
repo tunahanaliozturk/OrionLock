@@ -44,6 +44,21 @@ public sealed class EfCoreLockProvider : IDistributedLockProvider
 
     /// <inheritdoc />
     public async Task<bool> TryAcquireAsync(string key, string ownerToken, TimeSpan leaseDuration, CancellationToken cancellationToken)
+        => (await TryAcquireFencedAsync(key, ownerToken, leaseDuration, cancellationToken).ConfigureAwait(false)).Acquired;
+
+    /// <inheritdoc />
+    /// <remarks>
+    /// The fencing token is <see cref="OrionLockRow.FencingToken"/> incremented by the SAME UPDATE that
+    /// takes the row, so the counter advances if and only if the lock changed hands, and two racing
+    /// acquirers cannot read the same value: only one of them updates the row. The row is never deleted,
+    /// so the counter only moves forward for the life of the key.
+    /// <para>
+    /// Reports no token when <see cref="OrionLockRow.FencingToken"/> is not mapped in the consumer's
+    /// model - the escape hatch for a database that has not had the column added yet.
+    /// </para>
+    /// </remarks>
+    public async Task<LockAcquisition> TryAcquireFencedAsync(
+        string key, string ownerToken, TimeSpan leaseDuration, CancellationToken cancellationToken)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(key);
         ArgumentException.ThrowIfNullOrEmpty(ownerToken);
@@ -57,8 +72,9 @@ public sealed class EfCoreLockProvider : IDistributedLockProvider
 
         // Take a free or expired row. Both `now` and `expires` are derived from the database's own clock,
         // so this comparison is drift-free across application hosts.
+        var bumpFence = sql.FencingToken is null ? string.Empty : $", {sql.FencingToken} = {sql.FencingToken} + 1";
         var takeSql = $@"UPDATE {sql.Table}
-                  SET {sql.OwnerToken} = {{0}}, {sql.ExpiresOnUtc} = {{1}}
+                  SET {sql.OwnerToken} = {{0}}, {sql.ExpiresOnUtc} = {{1}}{bumpFence}
                 WHERE {sql.Key} = {{2}} AND ({sql.OwnerToken} IS NULL OR {sql.ExpiresOnUtc} <= {{3}})";
         var updated = await ctx.Database.ExecuteSqlRawAsync(
             takeSql, [ownerToken, expires, key, now], cancellationToken).ConfigureAwait(false);
@@ -73,8 +89,12 @@ public sealed class EfCoreLockProvider : IDistributedLockProvider
             // violation escape TryAcquireAsync as an untyped driver error. A unique / PK violation simply
             // means someone else inserted first: swallow it and let the owner-check below decide. Anything
             // else is a real fault and rethrows.
-            var insertSql = $@"INSERT INTO {sql.Table} ({sql.Key}, {sql.OwnerToken}, {sql.ExpiresOnUtc})
-                       SELECT {{0}}, {{1}}, {{2}}
+            // The row's first-ever acquisition is token 1, matching what the UPDATE above would have
+            // produced from the column's 0 default - the counter never starts from an ambiguous value.
+            var fenceColumn = sql.FencingToken is null ? string.Empty : $", {sql.FencingToken}";
+            var fenceValue = sql.FencingToken is null ? string.Empty : ", 1";
+            var insertSql = $@"INSERT INTO {sql.Table} ({sql.Key}, {sql.OwnerToken}, {sql.ExpiresOnUtc}{fenceColumn})
+                       SELECT {{0}}, {{1}}, {{2}}{fenceValue}
                        WHERE NOT EXISTS (SELECT 1 FROM {sql.Table} WHERE {sql.Key} = {{3}})";
             try
             {
@@ -87,13 +107,26 @@ public sealed class EfCoreLockProvider : IDistributedLockProvider
             }
         }
 
-        // Owner-check: did this caller win?
-        var owner = await ctx.Set<OrionLockRow>().AsNoTracking()
-            .Where(x => x.Key == key)
-            .Select(x => x.OwnerToken)
+        var rows = ctx.Set<OrionLockRow>().AsNoTracking().Where(x => x.Key == key);
+
+        if (sql.FencingToken is null)
+        {
+            // FencingToken is not mapped, so it cannot appear in a projection either - EF would fail to
+            // translate it. Same owner-check this provider has always done.
+            var owner = await rows.Select(x => x.OwnerToken)
+                .FirstOrDefaultAsync(cancellationToken).ConfigureAwait(false);
+            return owner == ownerToken ? LockAcquisition.Unfenced : LockAcquisition.NotAcquired;
+        }
+
+        // Owner-check: did this caller win? Reading the token in the SAME query as the owner is what
+        // keeps the two consistent - a second read could observe a token the next holder had already
+        // bumped, and hand us a number we never owned.
+        var row = await rows.Select(x => new { x.OwnerToken, x.FencingToken })
             .FirstOrDefaultAsync(cancellationToken).ConfigureAwait(false);
 
-        return owner == ownerToken;
+        return row is not null && row.OwnerToken == ownerToken
+            ? LockAcquisition.Fenced(row.FencingToken)
+            : LockAcquisition.NotAcquired;
     }
 
     /// <inheritdoc />
@@ -193,7 +226,7 @@ public sealed class EfCoreLockProvider : IDistributedLockProvider
     // The table and column identifiers, quoted for the context's own provider. Names come from the EF
     // model rather than string literals so a consumer that remapped OrionLockRow (a different table name,
     // a schema, renamed columns) still gets SQL that addresses the table EF actually mapped.
-    private readonly record struct Sql(string Table, string Key, string OwnerToken, string ExpiresOnUtc)
+    private readonly record struct Sql(string Table, string Key, string OwnerToken, string ExpiresOnUtc, string? FencingToken)
     {
         public static Sql For(DbContext ctx)
         {
@@ -208,11 +241,17 @@ public sealed class EfCoreLockProvider : IDistributedLockProvider
                     $"{nameof(OrionLockRow)} is not mapped to a table.");
             var storeObject = StoreObjectIdentifier.Table(tableName, entity.GetSchema());
 
+            // FencingToken is the one OPTIONAL column: a consumer whose database predates it can
+            // Ignore() the property, and the provider then emits exactly the SQL it emitted before
+            // fencing existed and reports no token. Every other column is load-bearing and still throws.
+            var fencing = entity.FindProperty(nameof(OrionLockRow.FencingToken))?.GetColumnName(storeObject);
+
             return new Sql(
                 helper.DelimitIdentifier(tableName, entity.GetSchema()),
                 helper.DelimitIdentifier(Column(entity, storeObject, nameof(OrionLockRow.Key))),
                 helper.DelimitIdentifier(Column(entity, storeObject, nameof(OrionLockRow.OwnerToken))),
-                helper.DelimitIdentifier(Column(entity, storeObject, nameof(OrionLockRow.ExpiresOnUtc))));
+                helper.DelimitIdentifier(Column(entity, storeObject, nameof(OrionLockRow.ExpiresOnUtc))),
+                fencing is null ? null : helper.DelimitIdentifier(fencing));
         }
 
         private static string Column(

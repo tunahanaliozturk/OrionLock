@@ -1,1 +1,4 @@
 #nullable enable
+Moongazing.OrionLock.Redis.RedisLockOptions.FencingTokens.get -> bool
+Moongazing.OrionLock.Redis.RedisLockOptions.FencingTokens.set -> void
+Moongazing.OrionLock.Redis.RedisLockProvider.TryAcquireFencedAsync(string! key, string! ownerToken, System.TimeSpan leaseDuration, System.Threading.CancellationToken cancellationToken) -> System.Threading.Tasks.Task<Moongazing.OrionLock.Providers.LockAcquisition>!
