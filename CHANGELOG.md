@@ -1,4 +1,4 @@
-<!-- markdownlint-disable MD024 -->
+﻿<!-- markdownlint-disable MD024 -->
 # Changelog
 
 All notable changes to OrionLock are documented in this file. The format is based on
@@ -276,6 +276,24 @@ All notable changes to OrionLock are documented in this file. The format is base
   asserts the RATE: at most one attempt per poll floor of time that actually elapsed, plus the two that
   arrive back to back by design. A slow machine stretches the elapsed time and the allowance with it, so
   the test can no longer fail for being slow - only for spinning.
+- **A SQL Server wait now lasts as long as the caller asked for, not as long as SQL Server's lock timer
+  feels like.** `sp_getapplock`'s `@LockTimeout` is enforced against SQL Server's own lock-wait
+  accounting, and that accounting is not wall clock. On a CPU-saturated host it runs far ahead of it, so
+  the timer expires while most of the caller's budget is still unspent. **Used to happen:**
+  `WaitForAcquireAsync(..., maxWait: 700ms, ...)` handed the whole 700 ms to `@LockTimeout` and reported
+  whatever came back, so a contended waiter could be told "not acquired" after 195 ms — under a third of
+  the budget it had sized deliberately — and a caller sizing a wait against an SLO got a number that
+  meant nothing under exactly the load that makes waits matter. CI measured it directly: with the runner
+  saturated, 42 of 180 waits on a 700 ms budget returned in under 500 ms, the shortest after 213 ms,
+  while `sys.dm_exec_session_wait_stats` credited those same waits with 3.5 seconds of `LCK` wait time.
+  The other backends were never affected — PostgreSQL's `statement_timeout` and the Redis, etcd, Consul
+  and ZooKeeper subscriptions are all timed on the client's clock. **Happens now:** the provider keeps
+  the budget on its own monotonic clock and re-issues `sp_getapplock` with what is left when a round
+  gives up early, so a 700 ms budget really does last 700 ms. When the server's timer is honest — the
+  normal case — this is still exactly one round trip, and `Timeout.InfiniteTimeSpan` is still the single
+  blocking call it always was rather than something that could lose its place in the queue. A round that
+  returns without consuming `LockWaitPolicy.RetryInterval` sleeps the difference first, so a server whose
+  timer refused instantly degrades into the poll the caller configured instead of a hot loop.
 
 - **A cancelled SQL Server waiter is told it was cancelled, not that the backend failed.** Cancelling
   a command blocked inside `sp_getapplock` tears the command down, and `Microsoft.Data.SqlClient`
