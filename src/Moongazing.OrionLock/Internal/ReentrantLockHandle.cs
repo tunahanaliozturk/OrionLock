@@ -28,6 +28,15 @@ internal sealed class ReentrantLockHandle : IDistributedLockHandle
     public CancellationToken LostToken => entry.RealHandle.LostToken;
 
     /// <inheritdoc />
+    /// <remarks>
+    /// A reentrant handle is the SAME hold seen from deeper in the call stack, not a second one, so it
+    /// reports the outer acquisition's token verbatim. Minting a fresh number here would make one
+    /// critical section present two tokens to the resource, and the resource would reject whichever
+    /// write happened to carry the lower one.
+    /// </remarks>
+    public long? FencingToken => entry.RealHandle.FencingToken;
+
+    /// <inheritdoc />
     public async ValueTask DisposeAsync()
     {
         if (Interlocked.Exchange(ref disposed, 1) != 0)

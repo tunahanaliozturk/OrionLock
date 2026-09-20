@@ -8,7 +8,8 @@ namespace Moongazing.OrionLock.Internal;
 /// </summary>
 internal static class LockEventObserverSafeInvoke
 {
-    internal static void SafeOnAcquired(this ILockEventObserver? observer, string key, double durationMs)
+    internal static void SafeOnAcquired(
+        this ILockEventObserver? observer, string key, double durationMs, long? fencingToken = null)
     {
         if (observer is null or NullLockEventObserver)
         {
@@ -16,7 +17,7 @@ internal static class LockEventObserverSafeInvoke
         }
         try
         {
-            observer.OnAcquired(key, durationMs);
+            observer.OnAcquired(key, durationMs, fencingToken);
         }
 #pragma warning disable CA1031
         catch

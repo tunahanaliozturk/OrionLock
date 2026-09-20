@@ -1,2 +1,34 @@
-#nullable enable
+﻿#nullable enable
 Moongazing.OrionLock.SharedExclusiveLock.SharedExclusiveLock(Moongazing.OrionLock.Providers.ISharedExclusiveLockProvider! provider, Moongazing.OrionLock.ILockEventObserver? eventObserver) -> void
+~override Moongazing.OrionLock.Providers.LockAcquisition.Equals(object obj) -> bool
+~override Moongazing.OrionLock.Providers.LockAcquisition.ToString() -> string
+Moongazing.OrionLock.Fencing.FencingExtensions
+Moongazing.OrionLock.Fencing.FencingGuard
+Moongazing.OrionLock.Fencing.FencingGuard.Accept(string! key, long token) -> void
+Moongazing.OrionLock.Fencing.FencingGuard.FencingGuard() -> void
+Moongazing.OrionLock.Fencing.FencingGuard.HighestAccepted(string! key) -> long?
+Moongazing.OrionLock.Fencing.FencingGuard.TryAccept(string! key, long token) -> bool
+Moongazing.OrionLock.Fencing.FencingTokenRegressedException
+Moongazing.OrionLock.Fencing.FencingTokenRegressedException.FencingTokenRegressedException(string! key, long presented, long highestSeen) -> void
+Moongazing.OrionLock.Fencing.FencingTokenRegressedException.HighestSeen.get -> long
+Moongazing.OrionLock.Fencing.FencingTokenRegressedException.Key.get -> string!
+Moongazing.OrionLock.Fencing.FencingTokenRegressedException.Presented.get -> long
+Moongazing.OrionLock.IDistributedLockHandle.FencingToken.get -> long?
+Moongazing.OrionLock.ILockEventObserver.OnAcquired(string! key, double durationMs, long? fencingToken) -> void
+Moongazing.OrionLock.Providers.IDistributedLockProvider.TryAcquireFencedAsync(string! key, string! ownerToken, System.TimeSpan leaseDuration, System.Threading.CancellationToken cancellationToken) -> System.Threading.Tasks.Task<Moongazing.OrionLock.Providers.LockAcquisition>!
+Moongazing.OrionLock.Providers.LockAcquisition
+Moongazing.OrionLock.Providers.LockAcquisition.Acquired.get -> bool
+Moongazing.OrionLock.Providers.LockAcquisition.Acquired.init -> void
+Moongazing.OrionLock.Providers.LockAcquisition.Deconstruct(out bool Acquired, out long? FencingToken) -> void
+Moongazing.OrionLock.Providers.LockAcquisition.Equals(Moongazing.OrionLock.Providers.LockAcquisition other) -> bool
+Moongazing.OrionLock.Providers.LockAcquisition.FencingToken.get -> long?
+Moongazing.OrionLock.Providers.LockAcquisition.FencingToken.init -> void
+Moongazing.OrionLock.Providers.LockAcquisition.LockAcquisition() -> void
+Moongazing.OrionLock.Providers.LockAcquisition.LockAcquisition(bool Acquired, long? FencingToken) -> void
+override Moongazing.OrionLock.Providers.LockAcquisition.GetHashCode() -> int
+static Moongazing.OrionLock.Fencing.FencingExtensions.RequireFencingToken(this Moongazing.OrionLock.IDistributedLockHandle! handle) -> long
+static Moongazing.OrionLock.Providers.LockAcquisition.Fenced(long fencingToken) -> Moongazing.OrionLock.Providers.LockAcquisition
+static Moongazing.OrionLock.Providers.LockAcquisition.NotAcquired.get -> Moongazing.OrionLock.Providers.LockAcquisition
+static Moongazing.OrionLock.Providers.LockAcquisition.operator !=(Moongazing.OrionLock.Providers.LockAcquisition left, Moongazing.OrionLock.Providers.LockAcquisition right) -> bool
+static Moongazing.OrionLock.Providers.LockAcquisition.operator ==(Moongazing.OrionLock.Providers.LockAcquisition left, Moongazing.OrionLock.Providers.LockAcquisition right) -> bool
+static Moongazing.OrionLock.Providers.LockAcquisition.Unfenced.get -> Moongazing.OrionLock.Providers.LockAcquisition

@@ -91,18 +91,23 @@ public sealed class DistributedLock : IDistributedLock
             return nested;
         }
 
+        // The fenced overload is the one the core calls. Its interface default simply forwards to
+        // TryAcquireAsync and reports no token, so a backend that cannot fence is unaffected; a backend
+        // that can mints the token inside the same atomic step that grants the lock, which is the only
+        // way the token and the acquisition cannot come apart.
         var acquired = await provider
-            .TryAcquireAsync(key, ownerToken, options.LeaseDuration, cancellationToken)
+            .TryAcquireFencedAsync(key, ownerToken, options.LeaseDuration, cancellationToken)
             .ConfigureAwait(false);
 
-        if (!acquired)
+        if (!acquired.Acquired)
         {
             return null;
         }
 
         // v0.3.25: thread the lifecycle observer into the handle so it can fire
         // OnLeaseLost / OnReleased.
-        var real = new DistributedLockHandle(provider, key, ownerToken, options, eventObserver);
+        var real = new DistributedLockHandle(
+            provider, key, ownerToken, options, eventObserver, acquired.FencingToken);
         // v0.3.13: increment the held-concurrent gauge ONLY when a real backend lease is
         // taken. Reentrant nested acquisitions (returned above) and contention path
         // returns (null) are excluded. The handle's DisposeAsync / watchdog-loss paths
@@ -169,6 +174,15 @@ public sealed class DistributedLock : IDistributedLock
                 if (handle is not null)
                 {
                     activity?.SetTag("orionlock.outcome", "acquired");
+                    // The token goes on the SPAN and nowhere near a metric tag: it is unique per
+                    // acquisition, so as a metric dimension it would mint a fresh time series for every
+                    // single acquire. Spans are sampled and stored per-trace, which is what makes the
+                    // same value affordable there. See docs/lock-key-cardinality.md - the reasoning is
+                    // identical to the one that keeps the raw key off the Meter.
+                    if (handle.FencingToken is { } fencingToken)
+                    {
+                        activity?.SetTag("orionlock.fencing_token", fencingToken);
+                    }
                     OrionLockDiagnostics.RecordAcquisition();
                     OrionLockDiagnostics.RecordAcquireDuration(deadline.Elapsed.TotalMilliseconds);
                     // v0.3.22: per-acquire attempt count for retry-interval sizing.
@@ -184,7 +198,8 @@ public sealed class DistributedLock : IDistributedLock
                     }
                     // v0.3.25: wire-up of the v0.3.24 contract. Safe-invoke swallows
                     // observer faults so audit-side outages cannot break acquires.
-                    eventObserver.SafeOnAcquired(key, deadline.Elapsed.TotalMilliseconds);
+                    eventObserver.SafeOnAcquired(
+                        key, deadline.Elapsed.TotalMilliseconds, handle.FencingToken);
                     return handle;
                 }
 

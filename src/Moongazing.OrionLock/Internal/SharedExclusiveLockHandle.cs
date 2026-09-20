@@ -1,4 +1,4 @@
-using Moongazing.OrionLock.Providers;
+﻿using Moongazing.OrionLock.Providers;
 
 namespace Moongazing.OrionLock.Internal;
 
@@ -71,6 +71,27 @@ internal sealed class SharedExclusiveLockHandle : IDistributedLockHandle
     public bool IsHeld => lease.IsHeld;
 
     /// <inheritdoc />
+    /// <inheritdoc />
+    /// <remarks>
+    /// <para>
+    /// Always <see langword="null"/> for a reader-writer hold, and deliberately so.
+    /// </para>
+    /// <para>
+    /// A <see cref="LockMode.Shared"/> hold must NEVER carry one. Readers are concurrent by definition,
+    /// so there is no order among them for a token to express: whatever number they were handed would
+    /// either collide (two readers, same token - the resource cannot tell them apart) or imply a
+    /// sequence the lock never enforced. A fencing token exists to let a resource reject a stale
+    /// <em>writer</em>, and a reader is not writing.
+    /// </para>
+    /// <para>
+    /// A <see cref="LockMode.Exclusive"/> hold legitimately could carry one, but none is minted yet:
+    /// <see cref="ISharedExclusiveLockProvider"/> has no fenced acquire, and adding the plumbing before
+    /// a backend fills it would only produce a property that is null for a second reason. When a
+    /// reader-writer backend can mint a token for its writer path, that is where it belongs.
+    /// </para>
+    /// </remarks>
+    public long? FencingToken => null;
+
     public CancellationToken LostToken => lease.LostToken;
 
     /// <inheritdoc />

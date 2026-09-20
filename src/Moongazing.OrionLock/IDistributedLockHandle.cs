@@ -15,4 +15,27 @@ public interface IDistributedLockHandle : IAsyncDisposable
 
     /// <summary>Cancelled if the lease is lost while the handle is alive.</summary>
     CancellationToken LostToken { get; }
+
+    /// <summary>
+    /// The fencing token this acquisition minted, or <see langword="null"/> when the backend cannot
+    /// produce one.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// <see cref="LostToken"/> covers the case where OrionLock <em>knows</em> the lease is gone. Fencing
+    /// covers the case it cannot know about: the process paused long enough for the lease to expire,
+    /// someone else acquired, and this one woke up still believing it holds the lock. The token is
+    /// strictly increasing per key across acquisitions and across processes; pass it to the resource you
+    /// are protecting and have the resource reject any write carrying a token lower than the highest it
+    /// has seen. See <c>docs/fencing-tokens.md</c> for the worked example, including the SQL.
+    /// </para>
+    /// <para>
+    /// <see langword="null"/> is honest, not a failure: it means this backend has nothing it can make
+    /// strictly monotonic, and OrionLock will not fabricate a counter that looks like a token but is not
+    /// one. A caller that requires a token should say so with
+    /// <see cref="Fencing.FencingExtensions.RequireFencingToken"/> rather than silently passing
+    /// <see langword="null"/> down to the resource.
+    /// </para>
+    /// </remarks>
+    long? FencingToken => null;
 }
