@@ -39,3 +39,5 @@ Moongazing.OrionLock.DependencyInjection.OrionLockBuilder.UseBackend(string! bac
 Moongazing.OrionLock.IDistributedLockHandle.EffectiveLeaseDuration.get -> System.TimeSpan
 Moongazing.OrionLock.Providers.IDistributedLockProvider.MinimumLeaseDuration.get -> System.TimeSpan
 Moongazing.OrionLock.Providers.IDistributedLockProvider.EffectiveLeaseDuration(System.TimeSpan requested) -> System.TimeSpan
+Moongazing.OrionLock.DistributedLockOptions.MaxHoldDuration.get -> System.TimeSpan?
+Moongazing.OrionLock.DistributedLockOptions.MaxHoldDuration.set -> void

@@ -41,6 +41,34 @@ public sealed class DistributedLockOptions
     public TimeSpan? RenewalFailureGracePeriod { get; set; }
 
     /// <summary>
+    /// How long the renewal watchdog keeps a hold alive before giving up on it. Defaults to
+    /// <see langword="null"/> = ten times <see cref="LeaseDuration"/>.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// The watchdog task roots the handle, so a handle that is never disposed - a forgotten
+    /// <c>await using</c>, the likeliest mistake with this API - used to renew its lease forever: the
+    /// lock was never released, no other process could ever take the key, and on SQL Server and
+    /// PostgreSQL a dedicated open connection stayed pinned for the life of the process. Nothing ever
+    /// noticed, because renewal kept succeeding.
+    /// </para>
+    /// <para>
+    /// Once this elapses since acquisition the watchdog stops renewing, surrenders the hold
+    /// (<see cref="IDistributedLockHandle.IsHeld"/> goes false, <see cref="IDistributedLockHandle.LostToken"/>
+    /// trips) and runs a best-effort release, so the key comes back even on the session-scoped backends
+    /// where simply not renewing would free nothing. Only the watchdog is bounded: with
+    /// <see cref="AutoRenew"/> off there is nothing renewing to stop, and the backend's own TTL already
+    /// decides the hold's lifetime.
+    /// </para>
+    /// <para>
+    /// The default is deliberately generous - it is a backstop for a leak, not a work deadline. Raise it
+    /// for a genuinely long critical section; a hold that legitimately outlives it should say so rather
+    /// than be surrendered mid-flight.
+    /// </para>
+    /// </remarks>
+    public TimeSpan? MaxHoldDuration { get; set; }
+
+    /// <summary>
     /// Validates the option values, on the caller's own thread at acquire time. Every acquire entry
     /// point calls this, so a misconfigured value is reported where it was set rather than as a driver
     /// error from inside the retry loop or the renewal watchdog - or, worse, not at all.
@@ -92,5 +120,24 @@ public sealed class DistributedLockOptions
                 "RenewalFailureGracePeriod must be positive when set; leave it null to default to "
                 + "LeaseDuration.");
         }
+
+        if (MaxHoldDuration is { } maxHold && maxHold < LeaseDuration)
+        {
+            // Shorter than one lease means the watchdog gives up before it has renewed even once, which
+            // is not a leak backstop but an immediate surrender.
+            throw new ArgumentOutOfRangeException(
+                nameof(MaxHoldDuration), maxHold,
+                "MaxHoldDuration must be at least LeaseDuration when set; leave it null to default to "
+                + "ten times LeaseDuration.");
+        }
     }
+
+    /// <summary>
+    /// The watchdog's give-up deadline: <see cref="MaxHoldDuration"/>, or ten leases when unset.
+    /// Saturates instead of overflowing on an absurdly long lease.
+    /// </summary>
+    internal TimeSpan ResolvedMaxHoldDuration =>
+        MaxHoldDuration ?? (LeaseDuration.Ticks > TimeSpan.MaxValue.Ticks / 10
+            ? TimeSpan.MaxValue
+            : TimeSpan.FromTicks(LeaseDuration.Ticks * 10));
 }

@@ -150,6 +150,19 @@ All notable changes to OrionLock are documented in this file. The format is base
 
 ### Fixed
 
+- **An undisposed handle now stops instead of holding the lock forever.** The renewal watchdog task
+  roots the handle, so a forgotten `await using` — the likeliest mistake with this API — was never
+  collected: it renewed the lease forever, the lock was never released, no other process could take the
+  key, and on SQL Server and PostgreSQL a dedicated open connection stayed pinned for the life of the
+  process. It was silent, because renewal kept succeeding. The new
+  `DistributedLockOptions.MaxHoldDuration` (default: ten times `LeaseDuration`) bounds the watchdog:
+  once it elapses the watchdog stops renewing, `IsHeld` goes false, `LostToken` trips, and the hold is
+  released best-effort — so the key comes back even on the session-scoped backends, where merely not
+  renewing would free nothing and the connection would stay pinned. `IDistributedLockHandle` now
+  documents the consequence of not disposing, which it previously did not mention at all. Raise
+  `MaxHoldDuration` for a genuinely long critical section; it is a leak backstop, not a work deadline,
+  and it applies only when `AutoRenew` is on.
+
 - **`DistributedLockOptions` is validated at every acquire entry point.** It never was, so a
   misconfigured value either failed differently on each backend or did not fail at all:
   `LeaseDuration = TimeSpan.Zero` produced `SET ... PX 0` on Redis — which is a DELETE, not a short

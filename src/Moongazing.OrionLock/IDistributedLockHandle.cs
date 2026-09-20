@@ -5,6 +5,21 @@
 /// lease (when <see cref="DistributedLockOptions.AutoRenew"/> is set); if renewal fails,
 /// <see cref="IsHeld"/> becomes false and <see cref="LostToken"/> is cancelled.
 /// </summary>
+/// <remarks>
+/// <para>
+/// <b>Not disposing does not merely leak - it holds the lock.</b> The renewal watchdog roots the handle,
+/// so a forgotten <c>await using</c> is not collected: it keeps renewing the lease, no other process can
+/// ever take the key, and on SQL Server and PostgreSQL it pins a dedicated open connection for as long
+/// as it runs. This is the likeliest mistake with this API, and it is silent, because renewal keeps
+/// succeeding.
+/// </para>
+/// <para>
+/// <see cref="DistributedLockOptions.MaxHoldDuration"/> (default: ten leases) is the backstop, not a
+/// substitute: once it elapses the watchdog stops renewing, surrenders the hold and releases
+/// best-effort, so the key comes back. Until then the lock really is held. Always
+/// <c>await using</c> the handle.
+/// </para>
+/// </remarks>
 public interface IDistributedLockHandle : IAsyncDisposable
 {
     /// <summary>The lock key this handle holds.</summary>
