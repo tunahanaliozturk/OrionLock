@@ -106,8 +106,10 @@ sections below.
     path.** It now counts the attempts the core issued, which for a backend that blocks or
     subscribes collapses towards 2 per acquire. The reader-writer path still polls, so its attempt
     count keeps its original meaning.
-    **Do:** re-baseline any alert on that instrument, and split the two paths by the
-    `orionlock.mode` span tag before charting them together.
+    **Do:** re-baseline any alert on that instrument, and stop charting the two paths together. Note
+    that the instrument itself carries no dimension separating them - only the acquire *span* does,
+    and only by omission: a reader-writer acquire tags its span `orionlock.mode`, an exclusive one
+    sets no such tag.
 
 14. **Telemetry: reader-writer holds now emit instruments and observer callbacks they never did.**
     `ILockEventObserver` registered in DI now fires for `ISharedExclusiveLock` holds, and the
@@ -376,8 +378,10 @@ sections below.
   issued**, which for a backend that blocks or subscribes collapses towards 2 per acquire - the wait
   is one backend interaction rather than N. The reduction is the win, stated in the metric rather
   than hidden by it. The reader-writer path emits the same instrument but still polls - it has no
-  `WaitForAcquireAsync` to hand the wait to - so its attempt count keeps its original meaning; if you
-  chart the two together, split them by the `orionlock.mode` span or they will not be comparable.
+  `WaitForAcquireAsync` to hand the wait to - so its attempt count keeps its original meaning and the
+  two are not comparable. They are recorded from one instrument with no dimension separating them;
+  only the acquire span distinguishes them, and only by omission (a reader-writer acquire tags its
+  span `orionlock.mode`, an exclusive one sets no such tag), so keep the two off one chart.
 
 - **`MeasuringLockProvider` forwards the new members.** It decorates every provider `AddOrionLock`
   registers, so without that every backend override above would be unreachable in production while
