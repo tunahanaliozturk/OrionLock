@@ -152,6 +152,12 @@ public sealed class DistributedLock : IDistributedLock
 
         try
         {
+            // Mint the owner token ONCE and reuse it across every poll attempt of this blocking
+            // acquire, matching the deadline overload above and SharedExclusiveLock.AcquireAsync.
+            // A fresh token per attempt would make each retry a DIFFERENT logical acquirer, breaking
+            // fencing identity and orphaning anything a partially-succeeded attempt left behind under
+            // a token no later retry can reclaim.
+            var ownerToken = Guid.NewGuid().ToString("N");
             var deadline = Stopwatch.StartNew();
             var contended = false;
             int attempts = 0;
@@ -159,7 +165,7 @@ public sealed class DistributedLock : IDistributedLock
             {
                 attempts++;
                 var handle = await TryAcquireAsync(
-                    key, Guid.NewGuid().ToString("N"), owner, options, cancellationToken).ConfigureAwait(false);
+                    key, ownerToken, owner, options, cancellationToken).ConfigureAwait(false);
                 if (handle is not null)
                 {
                     activity?.SetTag("orionlock.outcome", "acquired");
@@ -185,7 +191,8 @@ public sealed class DistributedLock : IDistributedLock
                 contended = true;
                 OrionLockDiagnostics.RecordContention();
 
-                if (deadline.Elapsed >= options.WaitTimeout)
+                var remaining = options.WaitTimeout - deadline.Elapsed;
+                if (remaining <= TimeSpan.Zero)
                 {
                     activity?.SetTag("orionlock.outcome", "timeout");
                     // v0.3.23: emit timeout with the hashed-bucket key tag so operators
@@ -197,7 +204,11 @@ public sealed class DistributedLock : IDistributedLock
                     throw new LockAcquisitionTimeoutException(key, deadline.Elapsed);
                 }
 
-                await Task.Delay(options.RetryInterval, cancellationToken).ConfigureAwait(false);
+                // Clamp the poll delay to the time left until WaitTimeout so a full RetryInterval near
+                // the deadline cannot overshoot the caller's wait budget by up to one interval, matching
+                // SharedExclusiveLock.AcquireAsync and the deadline overload.
+                var delay = options.RetryInterval < remaining ? options.RetryInterval : remaining;
+                await Task.Delay(delay, cancellationToken).ConfigureAwait(false);
             }
         }
         catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)

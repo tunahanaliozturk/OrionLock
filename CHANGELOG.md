@@ -47,6 +47,19 @@ All notable changes to OrionLock are documented in this file. The format is base
   backend stays unreachable. The reader-writer handle already behaved this way. If you had code watching
   for the watchdog to go quiet, watch `LostToken` instead — it now actually fires.
 
+- **The blocking `AcquireAsync` now polls under one owner token instead of a new one per retry.** Every
+  retry minted a fresh owner token, so a contended acquire looked to the backend like a stream of
+  different acquirers — which breaks fencing identity and can orphan state a partly-succeeded attempt
+  left behind under a token no later retry can reclaim. (The code's own comments already claimed it
+  reused one token, and `SharedExclusiveLock.AcquireAsync` genuinely did.) If you log or fence on the
+  owner token, a contended acquire now shows one token for the whole wait rather than one per attempt.
+
+- **A blocking `AcquireAsync` no longer waits past `WaitTimeout` when `RetryInterval` is longer than the
+  remaining budget.** The full `RetryInterval` was slept before the deadline was re-checked, so with,
+  say, `WaitTimeout = 200ms` and `RetryInterval = 10s`, `LockAcquisitionTimeoutException` arrived after
+  about 10 seconds. The poll delay is now clamped to the time left, matching the reader-writer lock and
+  the deadline overloads. If you had padded timeouts to absorb the overshoot, you can drop the padding.
+
 - **The internal measuring decorator no longer reports every backend as a TTL backend.**
   `AddOrionLock` wraps the registered `IDistributedLockProvider` in an internal measuring decorator, and
   that decorator did not forward `LeaseDurationIsTtl` — it fell back to the interface default of `true`.
