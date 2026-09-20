@@ -190,6 +190,23 @@ Not disposing does not merely leak — it **holds the lock**. The renewal watchd
 
 `DistributedLockOptions.MaxHoldDuration` (default: ten times `LeaseDuration`) is the backstop. Once it elapses the watchdog stops renewing, `handle.IsHeld` goes false, `handle.LostToken` trips, and the hold is released best-effort — so the key comes back even on the session-scoped backends, where merely not renewing would free nothing. Raise it for a genuinely long critical section; it is a leak backstop, not a work deadline.
 
+## Exceptions
+
+An acquire on `IDistributedLock` raises only these, whichever backend is registered:
+
+| Exception | When |
+| --- | --- |
+| `ArgumentException` | the key is not a legal lock key (see **Lock keys**). Thrown synchronously, on your own thread. |
+| `ArgumentOutOfRangeException` | a `DistributedLockOptions` value is out of range, or `LeaseDuration` is below what the backend can honour. Also synchronous. |
+| `LockAcquisitionTimeoutException` | `AcquireAsync` only, on `WaitTimeout`. The `TryAcquireAsync` overloads return `null` instead. |
+| `OrionLockBackendException` | the backend failed for a reason that is not contention. |
+| `OperationCanceledException` | your cancellation token was cancelled. |
+| `InvalidOperationException` | an OrionLock invariant, in practice only the ownerToken collision SQL Server and PostgreSQL detect. |
+
+**Driver exceptions do not escape.** A `SqlException`, `PostgresException`, `RpcException`, `KeeperException`, `RedisException`, `DbException` or HTTP failure is wrapped in `OrionLockBackendException` at the provider boundary, with the original as `InnerException` — so `catch (OrionLockBackendException)` works without referencing any backend's driver package, and stays correct when you switch backends.
+
+A lease lost *after* acquisition is not an exception from these methods. `handle.IsHeld` and `handle.LostToken` report it; `handle.ThrowIfLost()` turns it into `LeaseLostException` at a point in the critical section you choose — typically just before the write the lock was taken to protect.
+
 ## Reentrancy
 
 A single `DistributedLock` instance (a DI singleton) re-acquiring a key it already holds returns a counted nested handle without touching the backend. The outermost dispose releases. Reentrancy collapses same-process re-acquisition only; it does not cross process boundaries.

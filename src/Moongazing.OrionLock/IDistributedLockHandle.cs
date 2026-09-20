@@ -68,4 +68,23 @@ public interface IDistributedLockHandle : IAsyncDisposable
     /// the backend's documentation.
     /// </remarks>
     TimeSpan EffectiveLeaseDuration { get; }
+
+    /// <summary>
+    /// Throws <see cref="LeaseLostException"/> if the lease is no longer held.
+    /// </summary>
+    /// <remarks>
+    /// The checked counterpart of <see cref="IsHeld"/>, for the point in a critical section where
+    /// continuing without the lock would be wrong - typically just before the write that the lock was
+    /// taken to protect. <see cref="LostToken"/> covers the same ground for work that is already
+    /// cancellable; this is for straight-line code, which would otherwise have to remember to test
+    /// <see cref="IsHeld"/> and decide what to throw.
+    /// </remarks>
+    /// <exception cref="LeaseLostException">The lease was lost or released.</exception>
+    void ThrowIfLost()
+    {
+        if (!IsHeld)
+        {
+            throw new LeaseLostException(Key);
+        }
+    }
 }

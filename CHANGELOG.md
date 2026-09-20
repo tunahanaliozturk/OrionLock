@@ -150,6 +150,29 @@ All notable changes to OrionLock are documented in this file. The format is base
 
 ### Fixed
 
+- **Driver exceptions no longer escape, and the exception contract is documented in full.**
+  `IDistributedLock` documented only `LockAcquisitionTimeoutException` while a caller could also see
+  `OrionLockBackendException` (SQL Server only), `InvalidOperationException` on an ownerToken collision
+  (SQL Server, PostgreSQL), `ArgumentException` for an over-long key (SQL Server only),
+  `ArgumentOutOfRangeException` for a non-positive lease (Redis-RW, PostgreSQL-RW only), and raw driver
+  exceptions — `SqlException`, `PostgresException`, `RpcException`, `KeeperException`, `RedisException`,
+  `DbException`, HTTP failures — from every backend. Catching lock trouble therefore meant referencing
+  every backend's driver package and writing a different `catch` per registration, which is what a
+  backend-agnostic interface exists to avoid. Driver failures are now wrapped in
+  `OrionLockBackendException` at the provider boundary, with the original as `InnerException`, so
+  `catch (OrionLockBackendException)` works for every backend and stays correct when you switch. The
+  rule is provider-agnostic, so it is applied once in the core rather than copied into seven providers:
+  anything that is not already part of OrionLock's contract is a backend fault. `OperationCanceledException`
+  (cancellation is control flow), `OrionLockBackendException` (including SQL Server's own, which already
+  modelled this shape), `ArgumentException` and friends (the caller's mistake), `InvalidOperationException`
+  (an OrionLock invariant) and `ObjectDisposedException` pass through untouched, with their stacks
+  intact. The full set is now on `IDistributedLock` and in the README.
+
+- **`LeaseLostException` is thrown somewhere.** It was defined and raised nowhere at all.
+  `IDistributedLockHandle.ThrowIfLost()` is its home: the checked counterpart of `IsHeld`, for the point
+  in a critical section where continuing without the lock would be wrong. Added as a default interface
+  method, so no existing implementation breaks.
+
 - **An undisposed handle now stops instead of holding the lock forever.** The renewal watchdog task
   roots the handle, so a forgotten `await using` — the likeliest mistake with this API — was never
   collected: it renewed the lease forever, the lock was never released, no other process could take the
