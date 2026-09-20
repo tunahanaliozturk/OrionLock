@@ -15,6 +15,10 @@ internal sealed class DistributedLockHandle : IDistributedLockHandle
     private readonly TimeSpan leaseDuration;
     private readonly TimeSpan renewalGrace;
     private readonly CancellationTokenSource lostCts = new();
+    // Captured at construction: CancellationTokenSource.Token throws ObjectDisposedException once the
+    // source is disposed, so reading LostToken from a finally / logging path after `await using` used to
+    // throw. The token struct itself stays readable after its source is gone.
+    private readonly CancellationToken lostToken;
     private readonly CancellationTokenSource? watchdogCts;
     private readonly Task? watchdog;
     private readonly Func<DateTime> nowUtc;
@@ -111,6 +115,7 @@ internal sealed class DistributedLockHandle : IDistributedLockHandle
         renewalGrace = options.RenewalFailureGracePeriod ?? options.LeaseDuration;
         this.nowUtc = nowUtc ?? (() => DateTime.UtcNow);
         this.eventObserver = eventObserver is NullLockEventObserver ? null : eventObserver;
+        lostToken = lostCts.Token;
         lastSuccessfulRenewalUtc = this.nowUtc();
 
         if (options.AutoRenew)
@@ -118,16 +123,25 @@ internal sealed class DistributedLockHandle : IDistributedLockHandle
             watchdogCts = new CancellationTokenSource();
             watchdog = RenewLoopAsync(watchdogCts.Token);
         }
+        else if (provider.LeaseDurationIsTtl)
+        {
+            // Without a watchdog nothing ever observes the lease running out, so IsHeld used to stay
+            // true forever and LostToken never tripped - even though a TTL backend had long since
+            // expired the key and handed it to someone else. Trip the loss at the lease deadline so
+            // the handle tells the truth. Session-scoped backends are excluded: there the hold really
+            // does outlive LeaseDuration.
+            lostCts.CancelAfter(leaseDuration);
+        }
     }
 
     /// <inheritdoc />
     public string Key { get; }
 
     /// <inheritdoc />
-    public bool IsHeld => isHeld;
+    public bool IsHeld => isHeld && !lostToken.IsCancellationRequested;
 
     /// <inheritdoc />
-    public CancellationToken LostToken => lostCts.Token;
+    public CancellationToken LostToken => lostToken;
 
     private async Task RenewLoopAsync(CancellationToken ct)
     {
@@ -161,10 +175,13 @@ internal sealed class DistributedLockHandle : IDistributedLockHandle
                     // up here. v0.3.10 fairness watchdog: if exceptions keep firing past the
                     // RenewalFailureGracePeriod since the last successful renewal, treat as
                     // confirmed lost so a stuck backend cannot perpetually deny new waiters
-                    // by leaving the lease unreleasable. The backend's TTL has almost
-                    // certainly expired by now anyway.
+                    // by leaving the lease unreleasable. That reasoning rests on the backend's TTL
+                    // having expired by now, which is only true for a TTL backend: on a session-scoped
+                    // one (Postgres advisory locks, SQL Server sp_getapplock) the hold is still
+                    // provably ours no matter how long renew has been failing, so surrendering there
+                    // would hand the key to a second holder. Keep retrying instead.
                     consecutiveRenewalFailures++;
-                    if (nowUtc() - lastSuccessfulRenewalUtc > renewalGrace)
+                    if (provider.LeaseDurationIsTtl && nowUtc() - lastSuccessfulRenewalUtc > renewalGrace)
                     {
                         // v0.3.11: distinguish a fairness-watchdog auto-release from a
                         // backend-confirmed loss by incrementing the

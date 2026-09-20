@@ -47,6 +47,28 @@ All notable changes to OrionLock are documented in this file. The format is base
   backend stays unreachable. The reader-writer handle already behaved this way. If you had code watching
   for the watchdog to go quiet, watch `LostToken` instead — it now actually fires.
 
+- **`IsHeld` and `LostToken` now tell the truth when `AutoRenew = false`.** With auto-renew off no
+  watchdog runs, and nothing ever observed the lease running out: `IsHeld` stayed `true` and `LostToken`
+  never tripped, however long after a TTL backend had expired the key and possibly handed it to someone
+  else. A handle taken with `AutoRenew = false` against a TTL backend now trips `LostToken` and reports
+  `IsHeld = false` once `LeaseDuration` has elapsed. Session-scoped backends (PostgreSQL advisory locks,
+  SQL Server `sp_getapplock`), where the hold legitimately outlives `LeaseDuration`, are unaffected. If
+  you used `AutoRenew = false` with a short lease for long work and read `IsHeld`, it will now go false
+  at the lease deadline — that was always the real state; raise `LeaseDuration` or turn auto-renew on.
+
+- **`LostToken` no longer throws `ObjectDisposedException` after the handle is disposed.** It was read
+  straight off the `CancellationTokenSource`, which throws once disposed, so a `finally` or logging path
+  that touched the handle after `await using` blew up. The token is captured at construction and stays
+  readable for the handle's whole life. Applies to both the exclusive and the reader-writer handle.
+
+- **The renewal watchdog no longer surrenders a session-scoped hold when renewals keep failing.** After
+  `RenewalFailureGracePeriod` of failing renewals the watchdog gives the lease up, on the reasoning that
+  the backend's TTL has expired by now anyway. That is false for a backend whose hold is scoped to an
+  open session rather than to a wall-clock TTL: there the lock is provably still ours, and surrendering
+  let a second holder into the critical section. The surrender is now gated on the backend declaring
+  `LeaseDurationIsTtl`; on session-scoped backends the watchdog keeps retrying instead. Both the
+  exclusive and the reader-writer handle.
+
 - **The blocking `AcquireAsync` now polls under one owner token instead of a new one per retry.** Every
   retry minted a fresh owner token, so a contended acquire looked to the backend like a stream of
   different acquirers — which breaks fencing identity and can orphan state a partly-succeeded attempt

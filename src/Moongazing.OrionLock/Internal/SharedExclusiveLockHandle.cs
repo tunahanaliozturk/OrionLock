@@ -18,6 +18,10 @@ internal sealed class SharedExclusiveLockHandle : IDistributedLockHandle
     private readonly TimeSpan leaseDuration;
     private readonly TimeSpan renewalGrace;
     private readonly CancellationTokenSource lostCts = new();
+    // Captured at construction: CancellationTokenSource.Token throws ObjectDisposedException once the
+    // source is disposed, so reading LostToken from a finally / logging path after `await using` used to
+    // throw. The token struct itself stays readable after its source is gone.
+    private readonly CancellationToken lostToken;
     private readonly CancellationTokenSource? watchdogCts;
     private readonly Task? watchdog;
     private readonly Func<DateTime> nowUtc;
@@ -55,12 +59,21 @@ internal sealed class SharedExclusiveLockHandle : IDistributedLockHandle
         leaseDuration = options.LeaseDuration;
         renewalGrace = options.RenewalFailureGracePeriod ?? options.LeaseDuration;
         this.nowUtc = nowUtc ?? (() => DateTime.UtcNow);
+        lostToken = lostCts.Token;
         lastSuccessfulRenewalUtc = this.nowUtc();
 
         if (options.AutoRenew)
         {
             watchdogCts = new CancellationTokenSource();
             watchdog = RenewLoopAsync(watchdogCts.Token);
+        }
+        else if (provider.LeaseDurationIsTtl)
+        {
+            // Without a watchdog nothing observes the lease running out, so IsHeld would stay true
+            // forever on a TTL backend that has long since expired the hold. Same honesty fix as the
+            // exclusive handle; session-scoped backends are excluded because the hold really does
+            // outlive LeaseDuration there.
+            lostCts.CancelAfter(leaseDuration);
         }
     }
 
@@ -71,10 +84,10 @@ internal sealed class SharedExclusiveLockHandle : IDistributedLockHandle
     public LockMode Mode => mode;
 
     /// <inheritdoc />
-    public bool IsHeld => isHeld;
+    public bool IsHeld => isHeld && !lostToken.IsCancellationRequested;
 
     /// <inheritdoc />
-    public CancellationToken LostToken => lostCts.Token;
+    public CancellationToken LostToken => lostToken;
 
     private async Task RenewLoopAsync(CancellationToken ct)
     {
@@ -104,8 +117,10 @@ internal sealed class SharedExclusiveLockHandle : IDistributedLockHandle
                 {
                     // Transient renewal failure. Same fairness-watchdog grace semantics as the
                     // exclusive handle: surrender once the grace period since the last successful
-                    // renewal elapses so a stuck backend cannot perpetually deny new waiters.
-                    if (nowUtc() - lastSuccessfulRenewalUtc > renewalGrace)
+                    // renewal elapses so a stuck backend cannot perpetually deny new waiters. Gated on
+                    // a TTL backend - on a session-scoped one the hold is still provably ours however
+                    // long renew has been failing, so surrendering would create a second holder.
+                    if (provider.LeaseDurationIsTtl && nowUtc() - lastSuccessfulRenewalUtc > renewalGrace)
                     {
                         Surrender();
                         return;
