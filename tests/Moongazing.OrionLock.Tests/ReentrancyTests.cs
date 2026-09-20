@@ -140,6 +140,63 @@ public class ReentrancyTests
     }
 
     [Fact]
+    public async Task AfterAWarmUpAcquireAndRelease_ForkedTasks_ShouldNotShareOneLease()
+    {
+        // The owner identity must belong to the ACQUISITION, not to the flow. A flow-lifetime identity
+        // outlives the hold: warm up once, and every task forked afterwards inherits the same identity,
+        // so the second one matches the first one's registry entry and is handed a nested handle with
+        // the backend never consulted - the mutual-exclusion hole again, one release later.
+        var provider = new InMemoryLockProvider();
+        var l = new DistributedLock(provider);
+        var options = new DistributedLockOptions { AutoRenew = false, LeaseDuration = TimeSpan.FromSeconds(30) };
+
+        // Warm-up: this flow acquires and fully releases "k", so it carries whatever ambient state an
+        // acquire leaves behind.
+        await (await l.AcquireAsync("k", options)).DisposeAsync();
+
+        var firstIsInside = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var secondHasTried = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+
+        async Task<bool> FirstAsync()
+        {
+            var handle = await l.TryAcquireAsync("k", options);
+            firstIsInside.SetResult();
+            if (handle is null)
+            {
+                return false;
+            }
+
+            await secondHasTried.Task;
+            await handle.DisposeAsync();
+            return true;
+        }
+
+        async Task<bool> SecondAsync()
+        {
+            await firstIsInside.Task;
+            var handle = await l.TryAcquireAsync("k", options);
+            secondHasTried.SetResult();
+            if (handle is null)
+            {
+                return false;
+            }
+
+            await handle.DisposeAsync();
+            return true;
+        }
+
+        // Deliberately NOT suppressing flow: these two tasks are forked from a flow that has already
+        // acquired and released the key, which is exactly the case that regressed.
+        var first = Task.Run(FirstAsync);
+        var second = Task.Run(SecondAsync);
+
+        var results = await Task.WhenAll(first, second).WaitAsync(TimeSpan.FromSeconds(30));
+
+        Assert.True(results[0], "the first forked task should have taken the lease");
+        Assert.False(results[1], "the second forked task must not inherit the first one's lease");
+    }
+
+    [Fact]
     public async Task NestedAcquire_ShouldBeRefused_OnceTheRealLeaseIsLost()
     {
         // The watchdog can surrender the lease mid-flow. A nested handle minted over that dead lease

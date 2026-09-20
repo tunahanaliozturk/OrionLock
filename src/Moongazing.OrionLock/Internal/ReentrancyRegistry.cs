@@ -1,3 +1,4 @@
+using System.Collections.Immutable;
 using Moongazing.OrionLock.Diagnostics;
 
 namespace Moongazing.OrionLock.Internal;
@@ -34,27 +35,63 @@ internal sealed class ReentrancyRegistry
         public int MaxCount = 1;
     }
 
-    // Flow-local owner identity. AsyncLocal flows DOWN into everything the establishing frame
-    // subsequently awaits (so a re-entry deeper in the same critical section still matches) and never
-    // sideways into an unrelated flow such as another in-flight HTTP request.
-    private static readonly AsyncLocal<object?> currentOwner = new();
+    // Per-key claim the calling flow is acquiring (or has acquired) under. One AsyncLocal per registry,
+    // so two DistributedLock instances using the same key name never interfere. AsyncLocal flows DOWN
+    // into everything the establishing frame subsequently awaits (so a re-entry deeper in the same
+    // critical section still matches) and never sideways into an unrelated flow.
+    private readonly AsyncLocal<ImmutableDictionary<string, object>?> claims = new();
 
     // All access is serialised by the gate, so a plain Dictionary is enough.
     private readonly Dictionary<(string Key, object Owner), Entry> held = [];
     private readonly object gate = new();
 
     /// <summary>
-    /// Returns the calling flow's owner identity, creating one if this flow does not have one yet.
+    /// Returns the claim this flow should acquire <paramref name="key"/> under: the existing claim when
+    /// this flow is already inside a LIVE hold of that key (so the acquire collapses into a nested
+    /// handle), otherwise a freshly minted one recorded in the flow's ambient claim map.
     /// </summary>
     /// <remarks>
+    /// <para>
     /// MUST be called from a SYNCHRONOUS frame of the caller (i.e. from a non-<c>async</c> method
     /// entry point). An <c>async</c> method's state machine saves and restores the ambient
     /// <see cref="ExecutionContext"/> around its body, so an <see cref="AsyncLocal{T}"/> assigned inside
     /// one is discarded the moment it returns and the caller's later re-entry would never see it.
     /// Assigned from a plain method it behaves like <c>Activity.Current</c>: the caller's flow keeps the
-    /// value across its own awaits for the rest of its lifetime.
+    /// value across its own awaits.
+    /// </para>
+    /// <para>
+    /// A claim is minted PER ACQUISITION, never per flow. A flow-lifetime identity would outlive the
+    /// hold: once a flow had acquired and released a key it would keep that identity forever, every
+    /// task it forked afterwards would inherit it, and two such unrelated tasks would match each other's
+    /// registry entry - the mutual-exclusion hole again. Because each acquisition mints its own claim,
+    /// the claim a flow leaves behind after releasing is inert: it can only ever match the one registry
+    /// entry it was minted for, and that entry is gone. Nothing therefore has to be cleared on release -
+    /// which matters, because a release cannot write to the caller's ambient state any more reliably
+    /// than an acquire can.
+    /// </para>
     /// </remarks>
-    public static object EnsureOwnerScope() => currentOwner.Value ??= new object();
+    public object EnsureOwnerScope(string key)
+    {
+        var map = claims.Value ?? ImmutableDictionary<string, object>.Empty;
+
+        if (map.TryGetValue(key, out var existing) && IsLiveHold(key, existing))
+        {
+            // Genuine re-entry: reuse the claim so TryEnter matches, and leave the ambient map alone.
+            return existing;
+        }
+
+        var fresh = new object();
+        claims.Value = map.SetItem(key, fresh);
+        return fresh;
+    }
+
+    private bool IsLiveHold(string key, object owner)
+    {
+        lock (gate)
+        {
+            return held.TryGetValue((key, owner), out var entry) && entry.RealHandle.IsHeld;
+        }
+    }
 
     /// <summary>
     /// If <paramref name="key"/> is already held <em>by <paramref name="owner"/></em> on a lease that is

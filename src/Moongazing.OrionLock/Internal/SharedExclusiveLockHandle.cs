@@ -1,4 +1,4 @@
-using Moongazing.OrionLock.Diagnostics;
+﻿using Moongazing.OrionLock.Diagnostics;
 using Moongazing.OrionLock.Providers;
 
 namespace Moongazing.OrionLock.Internal;
@@ -24,6 +24,8 @@ internal sealed class SharedExclusiveLockHandle : IDistributedLockHandle
     private readonly CancellationToken lostToken;
     private readonly CancellationTokenSource? watchdogCts;
     private readonly Task? watchdog;
+    // Armed only when there is no watchdog and the backend treats LeaseDuration as a wall-clock TTL.
+    private readonly Timer? expiryTimer;
     private readonly Func<DateTime> nowUtc;
     private DateTime lastSuccessfulRenewalUtc;
     private int disposed;
@@ -70,10 +72,13 @@ internal sealed class SharedExclusiveLockHandle : IDistributedLockHandle
         else if (provider.LeaseDurationIsTtl)
         {
             // Without a watchdog nothing observes the lease running out, so IsHeld would stay true
-            // forever on a TTL backend that has long since expired the hold. Same honesty fix as the
-            // exclusive handle; session-scoped backends are excluded because the hold really does
-            // outlive LeaseDuration there.
-            lostCts.CancelAfter(leaseDuration);
+            // forever on a TTL backend that has long since expired the hold. Run the SAME surrender
+            // the watchdog runs on a confirmed loss (gauge, counter, LostToken), not a bare token
+            // cancel; session-scoped backends are excluded because the hold really does outlive
+            // LeaseDuration there.
+            expiryTimer = new Timer(
+                static state => ((SharedExclusiveLockHandle)state!).SurrenderOnExpiry(),
+                this, leaseDuration, Timeout.InfiniteTimeSpan);
         }
     }
 
@@ -150,6 +155,22 @@ internal sealed class SharedExclusiveLockHandle : IDistributedLockHandle
         SafeCancelLost();
     }
 
+    /// <summary>
+    /// The no-watchdog TTL deadline fired: the hold is gone the same way a backend-confirmed
+    /// non-renewal means it is gone, plus the expired-before-release signal that the dispose path can
+    /// no longer emit for this handle (Surrender clears isHeld, which that check requires).
+    /// </summary>
+    private void SurrenderOnExpiry()
+    {
+        if (!isHeld)
+        {
+            return;
+        }
+
+        OrionLockDiagnostics.RecordLeaseExpiredBeforeRelease();
+        Surrender();
+    }
+
     private void SafeCancelLost()
     {
         try { lostCts.Cancel(); }
@@ -173,6 +194,8 @@ internal sealed class SharedExclusiveLockHandle : IDistributedLockHandle
 
         isHeld = false;
         DecrementOnceIfHeld();
+        // Stop the TTL deadline before it can fire against a handle we are already tearing down.
+        expiryTimer?.Dispose();
 
         if (watchdogCts is not null)
         {

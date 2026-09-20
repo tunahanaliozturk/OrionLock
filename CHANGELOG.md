@@ -25,8 +25,9 @@ All notable changes to OrionLock are documented in this file. The format is base
   `TryAcquireAsync` return `null`) where it previously returned immediately. That is the correct
   behaviour and almost certainly what you wanted, but it can surface as new contention or new timeouts
   under load. Deliberate reentrancy is unaffected as long as the nested acquire runs inside the flow
-  that took the outer one. Work forked off that flow (`Task.Run` inside the critical section) inherits
-  the scope and still re-enters; work started from an independent context does not.
+  that took the outer one. The scope belongs to the hold, not to the flow: work forked off *during* the
+  critical section inherits it and still re-enters, while work forked after the handle was released does
+  not, and neither does work started from an independent context.
 
 - **A nested handle is no longer handed out over a lease that has already been lost.** If the renewal
   watchdog surrendered the lease (renewal failure past `RenewalFailureGracePeriod`, or a backend-
@@ -51,7 +52,11 @@ All notable changes to OrionLock are documented in this file. The format is base
   watchdog runs, and nothing ever observed the lease running out: `IsHeld` stayed `true` and `LostToken`
   never tripped, however long after a TTL backend had expired the key and possibly handed it to someone
   else. A handle taken with `AutoRenew = false` against a TTL backend now trips `LostToken` and reports
-  `IsHeld = false` once `LeaseDuration` has elapsed. Session-scoped backends (PostgreSQL advisory locks,
+  `IsHeld = false` once `LeaseDuration` has elapsed. The expiry runs the same surrender the renewal
+  watchdog runs on a confirmed loss, so `orion.lock.lease.lost` and
+  `orion.lock.lease.expired_before_release` are counted, `orion.lock.leases.held_concurrent` comes back
+  down, and a registered `ILockEventObserver` sees `OnLeaseLost` (and no longer a misleading
+  `OnReleased` when the handle is disposed afterwards). Session-scoped backends (PostgreSQL advisory locks,
   SQL Server `sp_getapplock`), where the hold legitimately outlives `LeaseDuration`, are unaffected. If
   you used `AutoRenew = false` with a short lease for long work and read `IsHeld`, it will now go false
   at the lease deadline — that was always the real state; raise `LeaseDuration` or turn auto-renew on.

@@ -1,4 +1,4 @@
-using System.Diagnostics;
+﻿using System.Diagnostics;
 using Moongazing.OrionLock.Diagnostics;
 using Moongazing.OrionLock.Internal;
 using Moongazing.OrionLock.Providers;
@@ -61,7 +61,7 @@ public sealed class DistributedLock : IDistributedLock
         options ??= new DistributedLockOptions();
         // Establish the reentrancy owner scope HERE, in the caller's synchronous frame, so it survives
         // into the caller's critical section. See ReentrancyRegistry.EnsureOwnerScope.
-        var owner = ReentrancyRegistry.EnsureOwnerScope();
+        var owner = reentrancy.EnsureOwnerScope(key);
         return TryAcquireAsync(key, Guid.NewGuid().ToString("N"), owner, options, cancellationToken);
     }
 
@@ -71,7 +71,7 @@ public sealed class DistributedLock : IDistributedLock
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(key);
         options ??= new DistributedLockOptions();
-        var owner = ReentrancyRegistry.EnsureOwnerScope();
+        var owner = reentrancy.EnsureOwnerScope(key);
 
         // Mint the owner token ONCE and reuse it across every deadline-retry attempt, exactly as the
         // blocking AcquireAsync loop does. A fresh token per attempt would make each retry a DIFFERENT
@@ -120,7 +120,7 @@ public sealed class DistributedLock : IDistributedLock
         // Deliberately NOT an async method: EnsureOwnerScope must run in the caller's own execution
         // context (an async body's context changes are discarded when it returns), so the blocking
         // acquire is a thin synchronous shim over the async core.
-        var owner = ReentrancyRegistry.EnsureOwnerScope();
+        var owner = reentrancy.EnsureOwnerScope(key);
         return AcquireCoreAsync(key, owner, options, cancellationToken);
     }
 

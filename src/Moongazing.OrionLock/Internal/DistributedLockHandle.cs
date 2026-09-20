@@ -21,6 +21,8 @@ internal sealed class DistributedLockHandle : IDistributedLockHandle
     private readonly CancellationToken lostToken;
     private readonly CancellationTokenSource? watchdogCts;
     private readonly Task? watchdog;
+    // Armed only when there is no watchdog and the backend treats LeaseDuration as a wall-clock TTL.
+    private readonly Timer? expiryTimer;
     private readonly Func<DateTime> nowUtc;
     private DateTime lastSuccessfulRenewalUtc;
     // v0.3.19 streak of consecutive renewal failures since the last successful renewal.
@@ -127,10 +129,13 @@ internal sealed class DistributedLockHandle : IDistributedLockHandle
         {
             // Without a watchdog nothing ever observes the lease running out, so IsHeld used to stay
             // true forever and LostToken never tripped - even though a TTL backend had long since
-            // expired the key and handed it to someone else. Trip the loss at the lease deadline so
-            // the handle tells the truth. Session-scoped backends are excluded: there the hold really
-            // does outlive LeaseDuration.
-            lostCts.CancelAfter(leaseDuration);
+            // expired the key and handed it to someone else. Run the SAME surrender the watchdog runs
+            // on a confirmed loss (gauge, counter, observer, single-fire guards), not a bare token
+            // cancel. Session-scoped backends are excluded: there the hold really does outlive
+            // LeaseDuration.
+            expiryTimer = new Timer(
+                static state => ((DistributedLockHandle)state!).SurrenderOnExpiry(),
+                this, leaseDuration, Timeout.InfiniteTimeSpan);
         }
     }
 
@@ -207,16 +212,7 @@ internal sealed class DistributedLockHandle : IDistributedLockHandle
                 {
                     // v0.3.19: surrender path - record the streak length.
                     OrionLockDiagnostics.RecordConsecutiveRenewalFailures(consecutiveRenewalFailures + 1);
-                    isHeld = false;
-                    OrionLockDiagnostics.RecordLeaseLost();
-                    // v0.3.25: lifecycle observer - backend-confirmed loss. Single-fire
-                    // guard prevents a released+lost double-fire under a dispose race.
-                    TryFireTerminalLost();
-                    DecrementOnceIfHeld();
-                    // v0.3.27: surrendering here - successfulRenewals is final (no further
-                    // increments after this return), so emit the renewal count now.
-                    EmitRenewalsPerHoldOnce();
-                    SafeCancelLost();
+                    Surrender();
                     return;
                 }
                 // v0.3.19: success path - record the recovered streak (if any) and reset.
@@ -235,6 +231,40 @@ internal sealed class DistributedLockHandle : IDistributedLockHandle
         {
             // watchdog stopped by Dispose
         }
+    }
+
+    /// <summary>
+    /// The one way a lease stops being held short of an explicit release: flip the flag, count the
+    /// loss, decrement the held-concurrent gauge, tell the observer and trip LostToken. Every step is
+    /// single-fire guarded, so it is safe to race a concurrent DisposeAsync.
+    /// </summary>
+    private void Surrender()
+    {
+        isHeld = false;
+        OrionLockDiagnostics.RecordLeaseLost();
+        // v0.3.25: lifecycle observer - the single-fire guard prevents a released+lost double-fire
+        // under a dispose race.
+        TryFireTerminalLost();
+        DecrementOnceIfHeld();
+        // v0.3.27: nothing increments successfulRenewals after this point, so the count is final.
+        EmitRenewalsPerHoldOnce();
+        SafeCancelLost();
+    }
+
+    /// <summary>
+    /// The no-watchdog TTL deadline fired: the lease is gone the same way a backend-confirmed
+    /// non-renewal means it is gone, plus the expired-before-release signal that the dispose path can
+    /// no longer emit for this handle (Surrender clears isHeld, which that check requires).
+    /// </summary>
+    private void SurrenderOnExpiry()
+    {
+        if (!isHeld)
+        {
+            return;
+        }
+
+        OrionLockDiagnostics.RecordLeaseExpiredBeforeRelease();
+        Surrender();
     }
 
     private void SafeCancelLost()
@@ -276,6 +306,8 @@ internal sealed class DistributedLockHandle : IDistributedLockHandle
         }
         isHeld = false;
         DecrementOnceIfHeld();
+        // Stop the TTL deadline before it can fire against a handle we are already tearing down.
+        expiryTimer?.Dispose();
 
         if (watchdogCts is not null)
         {
