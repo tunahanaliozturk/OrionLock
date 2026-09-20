@@ -9,6 +9,16 @@ All notable changes to OrionLock are documented in this file. The format is base
 
 ### Changed
 
+- **CI runs with least privilege and pinned actions.** The workflow declares
+  `permissions: contents: read` (the publish job keeps its own `packages: write`), every checkout
+  sets `persist-credentials: false` so the token is not written into `.git/config` before the job
+  builds and runs branch code, and `actions/checkout` / `actions/setup-dotnet` are pinned to commit
+  SHAs. The NuGet and GitHub Packages tokens move off the command line into `env:`, the release
+  build and pack run with `ContinuousIntegrationBuild=true`, and the GitHub Packages push no longer
+  hides failures behind `continue-on-error`: it tolerates an already-published version and fails on
+  anything else. The pre-pull step now names the SQL Server image the tests actually use
+  (`2022-latest`), which it stopped doing when the suites moved to Testcontainers 4.
+
 - **The container-backed tests skip instead of failing when Docker is absent.** The Redis, PostgreSQL,
   SQL Server and EF Core suites hard-failed on a machine with no Docker daemon - 135 red tests that said
   nothing about the code and hid the ones that did. They now carry `[DockerFact]` / `[DockerTheory]`,
