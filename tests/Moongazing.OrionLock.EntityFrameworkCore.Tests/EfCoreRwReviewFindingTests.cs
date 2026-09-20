@@ -1,8 +1,9 @@
-using Microsoft.Data.Sqlite;
+﻿using Microsoft.Data.Sqlite;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.DependencyInjection;
 using Moongazing.OrionLock;
 using Npgsql;
+using Moongazing.OrionLock.Tests.Containers;
 
 namespace Moongazing.OrionLock.EntityFrameworkCore.Tests;
 
@@ -19,7 +20,7 @@ public sealed class EfCoreRwReviewFindingTests
 
     // ---- Finding 3: the configured context type is used, not the ambient DbContext registration --------
 
-    [Fact]
+    [DockerFact]
     public async Task ConfiguredContextType_IsUsed_EvenWhenAnotherDbContextIsRegistered()
     {
         // Two SQLite in-memory databases, one per context type. Only ConfiguredRwContext has the schema.
@@ -54,7 +55,7 @@ public sealed class EfCoreRwReviewFindingTests
         Assert.False(await provider.TryAcquireAsync(key, "writer-2", LockMode.Exclusive, Lease, default));
     }
 
-    [Fact]
+    [DockerFact]
     public void Constructor_Rejects_NonDbContextType()
     {
         using var services = new ServiceCollection().BuildServiceProvider();
@@ -66,7 +67,7 @@ public sealed class EfCoreRwReviewFindingTests
 
     // ---- Finding 2: concurrent first-use anchor insertion does not throw (SQLite smoke) ----------------
 
-    [Fact]
+    [DockerFact]
     public async Task ConcurrentFirstUse_OnFreshKey_DoesNotThrow_AllReadersAcquire()
     {
         // A burst of readers on a brand-new key: every one is a FIRST-use acquirer that must insert the
@@ -146,7 +147,7 @@ public sealed class PostgresLiveClockTests(PostgresRwContainerFixture fixture)
 {
     private readonly PostgresRwContainerFixture fixture = fixture;
 
-    [Fact]
+    [DockerFact]
     public async Task ProviderClockExpression_AdvancesWithinTransaction_UnlikeCurrentTimestamp()
     {
         await using var scope = fixture.ScopeFactory.CreateAsyncScope();
@@ -188,7 +189,7 @@ public sealed class PostgresLiveClockTests(PostgresRwContainerFixture fixture)
             $"live clock did not advance past CURRENT_TIMESTAMP: live={live:O} txStart={transactionStart:O}");
     }
 
-    [Fact]
+    [DockerFact]
     public async Task HoldExpiringDuringAnchorWait_IsReclaimed_AndStaleRenewFails()
     {
         var provider = new EfCoreSharedExclusiveLockProvider(
@@ -246,7 +247,7 @@ public sealed class SqlServerLiveClockTests(SqlServerRwContainerFixture fixture)
 {
     private readonly SqlServerRwContainerFixture fixture = fixture;
 
-    [Fact]
+    [DockerFact]
     public async Task ProviderClockExpression_IsLiveUtc()
     {
         await using var scope = fixture.ScopeFactory.CreateAsyncScope();

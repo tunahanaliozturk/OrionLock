@@ -1,6 +1,7 @@
-using System.Diagnostics;
+﻿using System.Diagnostics;
 using Microsoft.Data.SqlClient;
 using Testcontainers.MsSql;
+using Moongazing.OrionLock.Tests.Containers;
 
 namespace Moongazing.OrionLock.SqlServer.Tests;
 
@@ -19,7 +20,7 @@ namespace Moongazing.OrionLock.SqlServer.Tests;
 /// </remarks>
 public sealed class SqlServerContainerFixture : IAsyncLifetime
 {
-    private readonly MsSqlContainer container = new MsSqlBuilder().Build();
+    private readonly MsSqlContainer container = new MsSqlBuilder(ContainerImages.SqlServer).Build();
 
     public string ConnectionString { get; private set; } = default!;
 

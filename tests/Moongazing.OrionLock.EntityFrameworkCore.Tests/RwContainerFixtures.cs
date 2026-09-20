@@ -1,8 +1,9 @@
-using System.Diagnostics;
+﻿using System.Diagnostics;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.DependencyInjection;
 using Testcontainers.MsSql;
 using Testcontainers.PostgreSql;
+using Moongazing.OrionLock.Tests.Containers;
 
 namespace Moongazing.OrionLock.EntityFrameworkCore.Tests;
 
@@ -59,7 +60,7 @@ public abstract class RwContainerFixtureBase : IAsyncLifetime
 /// <summary>One real PostgreSQL container shared by the EF Core reader-writer conformance tests.</summary>
 public sealed class PostgresRwContainerFixture : RwContainerFixtureBase
 {
-    private readonly PostgreSqlContainer container = new PostgreSqlBuilder().Build();
+    private readonly PostgreSqlContainer container = new PostgreSqlBuilder(ContainerImages.PostgreSql).Build();
 
     protected override async Task<string> StartAndGetConnectionStringAsync()
     {
@@ -88,7 +89,7 @@ public sealed class PostgresRwContainerFixture : RwContainerFixtureBase
 /// <summary>One real SQL Server container shared by the EF Core reader-writer conformance tests.</summary>
 public sealed class SqlServerRwContainerFixture : RwContainerFixtureBase
 {
-    private readonly MsSqlContainer container = new MsSqlBuilder().Build();
+    private readonly MsSqlContainer container = new MsSqlBuilder(ContainerImages.SqlServer).Build();
 
     protected override async Task<string> StartAndGetConnectionStringAsync()
     {

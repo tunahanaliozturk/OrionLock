@@ -1,6 +1,7 @@
-using System.Diagnostics;
+﻿using System.Diagnostics;
 using Npgsql;
 using Testcontainers.PostgreSql;
+using Moongazing.OrionLock.Tests.Containers;
 
 namespace Moongazing.OrionLock.Postgres.Tests;
 
@@ -20,7 +21,7 @@ namespace Moongazing.OrionLock.Postgres.Tests;
 /// </remarks>
 public sealed class PostgresContainerFixture : IAsyncLifetime
 {
-    private readonly PostgreSqlContainer container = new PostgreSqlBuilder().Build();
+    private readonly PostgreSqlContainer container = new PostgreSqlBuilder(ContainerImages.PostgreSql).Build();
 
     public string ConnectionString { get; private set; } = default!;
 

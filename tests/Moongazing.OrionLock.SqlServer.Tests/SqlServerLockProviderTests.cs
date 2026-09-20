@@ -1,4 +1,5 @@
-using Moongazing.OrionLock.SqlServer;
+﻿using Moongazing.OrionLock.SqlServer;
+using Moongazing.OrionLock.Tests.Containers;
 
 namespace Moongazing.OrionLock.SqlServer.Tests;
 
@@ -17,7 +18,7 @@ public partial class SqlServerLockProviderTests : IClassFixture<SqlServerContain
 
     // --- existing validation tests, unchanged ---
 
-    [Fact]
+    [DockerFact]
     public async Task TryAcquire_ShouldThrow_WhenKeyIsEmpty()
     {
         var p = NewProviderWithoutServer();
@@ -25,7 +26,7 @@ public partial class SqlServerLockProviderTests : IClassFixture<SqlServerContain
             p.TryAcquireAsync("", "owner-1", TimeSpan.FromSeconds(30), default));
     }
 
-    [Fact]
+    [DockerFact]
     public async Task TryAcquire_ShouldThrow_WhenKeyIsWhitespace()
     {
         var p = NewProviderWithoutServer();
@@ -33,7 +34,7 @@ public partial class SqlServerLockProviderTests : IClassFixture<SqlServerContain
             p.TryAcquireAsync("   ", "owner-1", TimeSpan.FromSeconds(30), default));
     }
 
-    [Fact]
+    [DockerFact]
     public async Task TryAcquire_ShouldThrow_WhenCombinedKeyExceeds240Chars()
     {
         var p = NewProviderWithoutServer(prefix: "app:");
@@ -42,7 +43,7 @@ public partial class SqlServerLockProviderTests : IClassFixture<SqlServerContain
             p.TryAcquireAsync(longKey, "owner-1", TimeSpan.FromSeconds(30), default));
     }
 
-    [Fact]
+    [DockerFact]
     public async Task TryAcquire_ShouldNotThrowArgumentException_AtBoundary()
     {
         var p = NewProviderWithoutServer(prefix: "app:");
@@ -64,7 +65,7 @@ public partial class SqlServerLockProviderTests : IClassFixture<SqlServerContain
 
     // --- new integration tests ---
 
-    [Fact]
+    [DockerFact]
     public async Task TryAcquire_ShouldSucceedThenBlockSecondOwner()
     {
         using var p = NewProvider();
@@ -74,7 +75,7 @@ public partial class SqlServerLockProviderTests : IClassFixture<SqlServerContain
         Assert.False(await p.TryAcquireAsync(key, "owner-2", TimeSpan.FromSeconds(30), default));
     }
 
-    [Fact]
+    [DockerFact]
     public async Task TryAcquire_ShouldHandOutExactlyOne_AcrossParallelCallers()
     {
         using var p = NewProvider();
@@ -88,7 +89,7 @@ public partial class SqlServerLockProviderTests : IClassFixture<SqlServerContain
         Assert.Equal(1, results.Count(r => r));
     }
 
-    [Fact]
+    [DockerFact]
     public async Task TryRenew_ShouldReturnTrue_ForKnownOwner()
     {
         using var p = NewProvider();
@@ -98,7 +99,7 @@ public partial class SqlServerLockProviderTests : IClassFixture<SqlServerContain
         Assert.True(await p.TryRenewAsync(key, "owner-1", TimeSpan.FromSeconds(30), default));
     }
 
-    [Fact]
+    [DockerFact]
     public async Task TryRenew_ShouldReturnFalse_ForUnknownOwner()
     {
         using var p = NewProvider();
@@ -108,7 +109,7 @@ public partial class SqlServerLockProviderTests : IClassFixture<SqlServerContain
         Assert.False(await p.TryRenewAsync(key, "owner-2", TimeSpan.FromSeconds(30), default));
     }
 
-    [Fact]
+    [DockerFact]
     public async Task TryRenew_ShouldReturnFalse_AfterConnectionKilled()
     {
         using var p = NewProvider();
@@ -139,7 +140,7 @@ public partial class SqlServerLockProviderTests : IClassFixture<SqlServerContain
         Assert.False(await p.TryRenewAsync(key, "owner-1", TimeSpan.FromSeconds(30), default));
     }
 
-    [Fact]
+    [DockerFact]
     public async Task Release_ShouldAllowNextAcquire_ForOwner()
     {
         using var p = NewProvider();
@@ -151,7 +152,7 @@ public partial class SqlServerLockProviderTests : IClassFixture<SqlServerContain
         Assert.True(await p.TryAcquireAsync(key, "owner-2", TimeSpan.FromSeconds(30), default));
     }
 
-    [Fact]
+    [DockerFact]
     public async Task Release_ShouldBeNoOp_ForUnknownOwnerToken()
     {
         using var p = NewProvider();
@@ -165,7 +166,7 @@ public partial class SqlServerLockProviderTests : IClassFixture<SqlServerContain
         Assert.False(await p.TryAcquireAsync(key, "owner-3", TimeSpan.FromSeconds(30), default));
     }
 
-    [Fact]
+    [DockerFact]
     public async Task TryRenew_ShouldReturnFalse_WhenTokenIsValidButKeyDoesNotMatch()
     {
         using var p = NewProvider();
@@ -181,7 +182,7 @@ public partial class SqlServerLockProviderTests : IClassFixture<SqlServerContain
         Assert.True(await p.TryRenewAsync(key, "owner-1", TimeSpan.FromSeconds(30), default));
     }
 
-    [Fact]
+    [DockerFact]
     public async Task Release_ShouldBeNoOp_WhenTokenIsValidButKeyDoesNotMatch()
     {
         using var p = NewProvider();
@@ -197,7 +198,7 @@ public partial class SqlServerLockProviderTests : IClassFixture<SqlServerContain
         Assert.False(await p.TryAcquireAsync(key, "owner-2", TimeSpan.FromSeconds(30), default));
     }
 
-    [Fact]
+    [DockerFact]
     public async Task Dispose_ShouldReleaseAllOpenSessions()
     {
         var p1 = NewProvider();

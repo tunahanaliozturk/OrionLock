@@ -1,4 +1,5 @@
-using Moongazing.OrionLock.Postgres;
+﻿using Moongazing.OrionLock.Postgres;
+using Moongazing.OrionLock.Tests.Containers;
 
 namespace Moongazing.OrionLock.Postgres.Tests;
 
@@ -17,7 +18,7 @@ public partial class PostgresLockProviderTests : IClassFixture<PostgresContainer
 
     // --- unit tests ---
 
-    [Fact]
+    [DockerFact]
     public void HashKey_IsDeterministic()
     {
         var a = PostgresLockProvider.HashKey("app:invoice:42");
@@ -25,7 +26,7 @@ public partial class PostgresLockProviderTests : IClassFixture<PostgresContainer
         Assert.Equal(a, b);
     }
 
-    [Fact]
+    [DockerFact]
     public void HashKey_DifferentInputsProduceDifferentHashes()
     {
         var a = PostgresLockProvider.HashKey("app:invoice:42");
@@ -33,7 +34,7 @@ public partial class PostgresLockProviderTests : IClassFixture<PostgresContainer
         Assert.NotEqual(a, b);
     }
 
-    [Fact]
+    [DockerFact]
     public async Task TryAcquire_ShouldThrow_WhenKeyIsEmpty()
     {
         var p = NewProviderWithoutServer();
@@ -41,7 +42,7 @@ public partial class PostgresLockProviderTests : IClassFixture<PostgresContainer
             p.TryAcquireAsync("", "owner-1", TimeSpan.FromSeconds(30), default));
     }
 
-    [Fact]
+    [DockerFact]
     public async Task TryAcquire_ShouldThrow_WhenKeyIsWhitespace()
     {
         var p = NewProviderWithoutServer();
@@ -49,21 +50,21 @@ public partial class PostgresLockProviderTests : IClassFixture<PostgresContainer
             p.TryAcquireAsync("   ", "owner-1", TimeSpan.FromSeconds(30), default));
     }
 
-    [Fact]
+    [DockerFact]
     public void Ctor_ShouldThrow_WhenConnectionStringIsEmpty()
     {
         Assert.Throws<ArgumentException>(() =>
             new PostgresLockProvider("", new PostgresLockOptions()));
     }
 
-    [Fact]
+    [DockerFact]
     public void Ctor_ShouldThrow_WhenOptionsIsNull()
     {
         Assert.Throws<ArgumentNullException>(() =>
             new PostgresLockProvider("Host=h;Username=u;Password=p;Database=d", null!));
     }
 
-    [Fact]
+    [DockerFact]
     public void Ctor_ShouldThrow_WhenKeyPrefixIsNull()
     {
         var opts = new PostgresLockOptions();
@@ -75,7 +76,7 @@ public partial class PostgresLockProviderTests : IClassFixture<PostgresContainer
 
     // --- integration tests ---
 
-    [Fact]
+    [DockerFact]
     public async Task TryAcquire_ShouldReturnTrue_OnFirstAcquire()
     {
         using var p = NewProvider();
@@ -84,7 +85,7 @@ public partial class PostgresLockProviderTests : IClassFixture<PostgresContainer
         Assert.True(await p.TryAcquireAsync(key, "owner-1", TimeSpan.FromSeconds(30), default));
     }
 
-    [Fact]
+    [DockerFact]
     public async Task TryAcquire_SecondCaller_ShouldReturnFalse_WhileHeld()
     {
         using var p = NewProvider();
@@ -94,7 +95,7 @@ public partial class PostgresLockProviderTests : IClassFixture<PostgresContainer
         Assert.False(await p.TryAcquireAsync(key, "owner-2", TimeSpan.FromSeconds(30), default));
     }
 
-    [Fact]
+    [DockerFact]
     public async Task Release_ShouldAllowSubsequentAcquire()
     {
         using var p = NewProvider();
@@ -106,7 +107,7 @@ public partial class PostgresLockProviderTests : IClassFixture<PostgresContainer
         Assert.True(await p.TryAcquireAsync(key, "owner-2", TimeSpan.FromSeconds(30), default));
     }
 
-    [Fact]
+    [DockerFact]
     public async Task TryAcquire_ShouldHandOutExactlyOne_AcrossParallelCallers()
     {
         using var p = NewProvider();
@@ -120,7 +121,7 @@ public partial class PostgresLockProviderTests : IClassFixture<PostgresContainer
         Assert.Equal(1, results.Count(r => r));
     }
 
-    [Fact]
+    [DockerFact]
     public async Task TryRenew_ShouldReturnTrue_ForKnownOwner()
     {
         using var p = NewProvider();
@@ -130,7 +131,7 @@ public partial class PostgresLockProviderTests : IClassFixture<PostgresContainer
         Assert.True(await p.TryRenewAsync(key, "owner-1", TimeSpan.FromSeconds(30), default));
     }
 
-    [Fact]
+    [DockerFact]
     public async Task TryRenew_ShouldReturnFalse_ForUnknownOwner()
     {
         using var p = NewProvider();
@@ -140,7 +141,7 @@ public partial class PostgresLockProviderTests : IClassFixture<PostgresContainer
         Assert.False(await p.TryRenewAsync(key, "owner-2", TimeSpan.FromSeconds(30), default));
     }
 
-    [Fact]
+    [DockerFact]
     public async Task TryRenew_ShouldReturnFalse_WhenTokenIsValidButKeyDoesNotMatch()
     {
         using var p = NewProvider();
@@ -154,7 +155,7 @@ public partial class PostgresLockProviderTests : IClassFixture<PostgresContainer
         Assert.True(await p.TryRenewAsync(key, "owner-1", TimeSpan.FromSeconds(30), default));
     }
 
-    [Fact]
+    [DockerFact]
     public async Task Release_ShouldBeNoOp_ForUnknownOwnerToken()
     {
         using var p = NewProvider();
@@ -166,7 +167,7 @@ public partial class PostgresLockProviderTests : IClassFixture<PostgresContainer
         Assert.False(await p.TryAcquireAsync(key, "owner-3", TimeSpan.FromSeconds(30), default));
     }
 
-    [Fact]
+    [DockerFact]
     public async Task Release_ShouldBeNoOp_WhenTokenIsValidButKeyDoesNotMatch()
     {
         using var p = NewProvider();
@@ -181,7 +182,7 @@ public partial class PostgresLockProviderTests : IClassFixture<PostgresContainer
         Assert.False(await p.TryAcquireAsync(key, "owner-2", TimeSpan.FromSeconds(30), default));
     }
 
-    [Fact]
+    [DockerFact]
     public async Task Dispose_ShouldReleaseAllOpenSessions()
     {
         var p1 = NewProvider();

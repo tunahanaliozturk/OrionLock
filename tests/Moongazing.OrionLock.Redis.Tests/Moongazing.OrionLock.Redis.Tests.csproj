@@ -1,4 +1,4 @@
-<Project Sdk="Microsoft.NET.Sdk">
+﻿<Project Sdk="Microsoft.NET.Sdk">
   <PropertyGroup>
     <IsPackable>false</IsPackable>
     <TargetFramework>net10.0</TargetFramework>
@@ -15,8 +15,12 @@
     <Using Include="Xunit" />
   </ItemGroup>
   <ItemGroup>
-    <PackageReference Include="Testcontainers.Redis" Version="3.10.0" />
+    <PackageReference Include="Testcontainers.Redis" Version="4.15.0" />
     <ProjectReference Include="..\..\src\Moongazing.OrionLock\Moongazing.OrionLock.csproj" />
     <ProjectReference Include="..\..\src\Moongazing.OrionLock.Redis\Moongazing.OrionLock.Redis.csproj" />
+  </ItemGroup>
+  <ItemGroup>
+    <!-- One copy of the Docker probe, linked rather than duplicated into each container-backed suite. -->
+    <Compile Include="..\Shared\DockerFactAttribute.cs" Link="Shared\DockerFactAttribute.cs" />
   </ItemGroup>
 </Project>
