@@ -8,25 +8,24 @@ namespace Moongazing.OrionLock.Internal;
 internal sealed class ReentrantLockHandle : IDistributedLockHandle
 {
     private readonly ReentrancyRegistry registry;
-    private readonly IDistributedLockHandle realHandle;
+    private readonly ReentrancyRegistry.Entry entry;
     private int disposed;
 
-    /// <summary>Creates a nested handle.</summary>
-    public ReentrantLockHandle(ReentrancyRegistry registry, string key, IDistributedLockHandle realHandle)
+    /// <summary>Creates a nested handle over a registry entry.</summary>
+    public ReentrantLockHandle(ReentrancyRegistry registry, ReentrancyRegistry.Entry entry)
     {
         this.registry = registry;
-        Key = key;
-        this.realHandle = realHandle;
+        this.entry = entry;
     }
 
     /// <inheritdoc />
-    public string Key { get; }
+    public string Key => entry.Key;
 
     /// <inheritdoc />
-    public bool IsHeld => realHandle.IsHeld;
+    public bool IsHeld => entry.RealHandle.IsHeld;
 
     /// <inheritdoc />
-    public CancellationToken LostToken => realHandle.LostToken;
+    public CancellationToken LostToken => entry.RealHandle.LostToken;
 
     /// <inheritdoc />
     public async ValueTask DisposeAsync()
@@ -36,9 +35,9 @@ internal sealed class ReentrantLockHandle : IDistributedLockHandle
             return;
         }
 
-        if (registry.Exit(Key))
+        if (registry.Exit(entry))
         {
-            await realHandle.DisposeAsync().ConfigureAwait(false);
+            await entry.RealHandle.DisposeAsync().ConfigureAwait(false);
         }
     }
 }

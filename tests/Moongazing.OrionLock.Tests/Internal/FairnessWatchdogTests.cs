@@ -1,4 +1,4 @@
-namespace Moongazing.OrionLock.Tests.Internal;
+﻿namespace Moongazing.OrionLock.Tests.Internal;
 
 using Moongazing.OrionLock.Internal;
 using Moongazing.OrionLock.Providers;
@@ -22,6 +22,9 @@ public sealed class FairnessWatchdogTests
         provider.Setup(p => p.TryRenewAsync(It.IsAny<string>(), It.IsAny<string>(),
                 It.IsAny<TimeSpan>(), It.IsAny<CancellationToken>()))
             .ThrowsAsync(new InvalidOperationException("backend unreachable"));
+        // The grace-period surrender is gated on a TTL backend, so state the assumption explicitly:
+        // a loose mock returns false for the LeaseDurationIsTtl default interface member.
+        provider.Setup(p => p.LeaseDurationIsTtl).Returns(true);
 
         var now = new DateTime(2026, 6, 11, 12, 0, 0, DateTimeKind.Utc);
         DateTime Clock() => now;
@@ -52,6 +55,42 @@ public sealed class FairnessWatchdogTests
     }
 
     [Fact]
+    public async Task Grace_period_does_not_surrender_a_session_scoped_hold()
+    {
+        // The surrender rests on "the backend's TTL has almost certainly expired by now anyway". That is
+        // false for a session-scoped backend (Postgres advisory locks, SQL Server sp_getapplock): the
+        // hold is still provably ours however long renew has been failing, so giving it up would let a
+        // second holder into the critical section.
+        var provider = new Mock<IDistributedLockProvider>();
+        provider.Setup(p => p.TryRenewAsync(It.IsAny<string>(), It.IsAny<string>(),
+                It.IsAny<TimeSpan>(), It.IsAny<CancellationToken>()))
+            .ThrowsAsync(new InvalidOperationException("backend unreachable"));
+        provider.Setup(p => p.LeaseDurationIsTtl).Returns(false);
+
+        var now = new DateTime(2026, 6, 11, 12, 0, 0, DateTimeKind.Utc);
+        DateTime Clock() => now;
+
+        await using var handle = new DistributedLockHandle(
+            provider.Object,
+            key: "k",
+            ownerToken: "owner",
+            new DistributedLockOptions
+            {
+                LeaseDuration = TimeSpan.FromMilliseconds(60),
+                AutoRenew = true,
+                RenewalFailureGracePeriod = TimeSpan.FromMilliseconds(40),
+            },
+            nowUtc: () => Clock());
+
+        // Same shape as the TTL test above, which surrenders under exactly these conditions.
+        now = now.AddMilliseconds(200);
+        await Task.Delay(1000);
+
+        Assert.True(handle.IsHeld);
+        Assert.False(handle.LostToken.IsCancellationRequested);
+    }
+
+    [Fact]
     public async Task GraceExhausted_counter_increments_in_addition_to_LeasesLost_on_fairness_release()
     {
         // Listen on the orionlock Meter so the v0.3.11 grace_period_exhausted counter
@@ -76,6 +115,9 @@ public sealed class FairnessWatchdogTests
         provider.Setup(p => p.TryRenewAsync(It.IsAny<string>(), It.IsAny<string>(),
                 It.IsAny<TimeSpan>(), It.IsAny<CancellationToken>()))
             .ThrowsAsync(new InvalidOperationException("backend unreachable"));
+        // The grace-period surrender is gated on a TTL backend, so state the assumption explicitly:
+        // a loose mock returns false for the LeaseDurationIsTtl default interface member.
+        provider.Setup(p => p.LeaseDurationIsTtl).Returns(true);
 
         var now = new DateTime(2026, 6, 11, 12, 0, 0, DateTimeKind.Utc);
         DateTime Clock() => now;
@@ -125,6 +167,7 @@ public sealed class FairnessWatchdogTests
                     ? Task.FromException<bool>(new InvalidOperationException("blip"))
                     : Task.FromResult(true);
             });
+        provider.Setup(p => p.LeaseDurationIsTtl).Returns(true);
 
         var baseTime = new DateTime(2026, 6, 11, 12, 0, 0, DateTimeKind.Utc);
         DateTime Clock() => baseTime.AddMilliseconds(renewCalls * 10);

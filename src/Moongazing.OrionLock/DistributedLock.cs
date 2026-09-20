@@ -1,4 +1,4 @@
-using System.Diagnostics;
+﻿using System.Diagnostics;
 using Moongazing.OrionLock.Diagnostics;
 using Moongazing.OrionLock.Internal;
 using Moongazing.OrionLock.Providers;
@@ -59,7 +59,10 @@ public sealed class DistributedLock : IDistributedLock
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(key);
         options ??= new DistributedLockOptions();
-        return TryAcquireAsync(key, Guid.NewGuid().ToString("N"), options, cancellationToken);
+        // Establish the reentrancy owner scope HERE, in the caller's synchronous frame, so it survives
+        // into the caller's critical section. See ReentrancyRegistry.EnsureOwnerScope.
+        var owner = reentrancy.EnsureOwnerScope(key);
+        return TryAcquireAsync(key, Guid.NewGuid().ToString("N"), owner, options, cancellationToken);
     }
 
     /// <inheritdoc />
@@ -68,6 +71,7 @@ public sealed class DistributedLock : IDistributedLock
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(key);
         options ??= new DistributedLockOptions();
+        var owner = reentrancy.EnsureOwnerScope(key);
 
         // Mint the owner token ONCE and reuse it across every deadline-retry attempt, exactly as the
         // blocking AcquireAsync loop does. A fresh token per attempt would make each retry a DIFFERENT
@@ -75,13 +79,13 @@ public sealed class DistributedLock : IDistributedLock
         // identity stable, matching the reader-writer deadline overloads.
         var ownerToken = Guid.NewGuid().ToString("N");
         return DeadlineAcquire.TryAcquireUntilDeadlineAsync(
-            (k, o, ct) => TryAcquireAsync(k, ownerToken, o!, ct), key, deadline, options, cancellationToken);
+            (k, o, ct) => TryAcquireAsync(k, ownerToken, owner, o!, ct), key, deadline, options, cancellationToken);
     }
 
     private async Task<IDistributedLockHandle?> TryAcquireAsync(
-        string key, string ownerToken, DistributedLockOptions options, CancellationToken cancellationToken)
+        string key, string ownerToken, object owner, DistributedLockOptions options, CancellationToken cancellationToken)
     {
-        var nested = reentrancy.TryEnter(key);
+        var nested = reentrancy.TryEnter(key, owner);
         if (nested is not null)
         {
             return nested;
@@ -104,16 +108,25 @@ public sealed class DistributedLock : IDistributedLock
         // returns (null) are excluded. The handle's DisposeAsync / watchdog-loss paths
         // decrement exactly once via DecrementOnceIfHeld.
         OrionLockDiagnostics.IncrementLeasesHeld();
-        return reentrancy.Register(key, real);
+        return reentrancy.Register(key, owner, real);
     }
 
     /// <inheritdoc />
-    public async Task<IDistributedLockHandle> AcquireAsync(
+    public Task<IDistributedLockHandle> AcquireAsync(
         string key, DistributedLockOptions? options = null, CancellationToken cancellationToken = default)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(key);
         options ??= new DistributedLockOptions();
+        // Deliberately NOT an async method: EnsureOwnerScope must run in the caller's own execution
+        // context (an async body's context changes are discarded when it returns), so the blocking
+        // acquire is a thin synchronous shim over the async core.
+        var owner = reentrancy.EnsureOwnerScope(key);
+        return AcquireCoreAsync(key, owner, options, cancellationToken);
+    }
 
+    private async Task<IDistributedLockHandle> AcquireCoreAsync(
+        string key, object owner, DistributedLockOptions options, CancellationToken cancellationToken)
+    {
         // Hot path: only build the interpolated activity name when a listener is actually
         // subscribed. With no listener StartActivity returns null and the name is never
         // observed, so the per-acquire string allocation is pure waste. HasListeners() gates
@@ -139,13 +152,20 @@ public sealed class DistributedLock : IDistributedLock
 
         try
         {
+            // Mint the owner token ONCE and reuse it across every poll attempt of this blocking
+            // acquire, matching the deadline overload above and SharedExclusiveLock.AcquireAsync.
+            // A fresh token per attempt would make each retry a DIFFERENT logical acquirer, breaking
+            // fencing identity and orphaning anything a partially-succeeded attempt left behind under
+            // a token no later retry can reclaim.
+            var ownerToken = Guid.NewGuid().ToString("N");
             var deadline = Stopwatch.StartNew();
             var contended = false;
             int attempts = 0;
             while (true)
             {
                 attempts++;
-                var handle = await TryAcquireAsync(key, options, cancellationToken).ConfigureAwait(false);
+                var handle = await TryAcquireAsync(
+                    key, ownerToken, owner, options, cancellationToken).ConfigureAwait(false);
                 if (handle is not null)
                 {
                     activity?.SetTag("orionlock.outcome", "acquired");
@@ -171,7 +191,8 @@ public sealed class DistributedLock : IDistributedLock
                 contended = true;
                 OrionLockDiagnostics.RecordContention();
 
-                if (deadline.Elapsed >= options.WaitTimeout)
+                var remaining = options.WaitTimeout - deadline.Elapsed;
+                if (remaining <= TimeSpan.Zero)
                 {
                     activity?.SetTag("orionlock.outcome", "timeout");
                     // v0.3.23: emit timeout with the hashed-bucket key tag so operators
@@ -183,7 +204,11 @@ public sealed class DistributedLock : IDistributedLock
                     throw new LockAcquisitionTimeoutException(key, deadline.Elapsed);
                 }
 
-                await Task.Delay(options.RetryInterval, cancellationToken).ConfigureAwait(false);
+                // Clamp the poll delay to the time left until WaitTimeout so a full RetryInterval near
+                // the deadline cannot overshoot the caller's wait budget by up to one interval, matching
+                // SharedExclusiveLock.AcquireAsync and the deadline overload.
+                var delay = options.RetryInterval < remaining ? options.RetryInterval : remaining;
+                await Task.Delay(delay, cancellationToken).ConfigureAwait(false);
             }
         }
         catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)

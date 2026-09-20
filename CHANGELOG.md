@@ -7,6 +7,104 @@ All notable changes to OrionLock are documented in this file. The format is base
 
 ## [Unreleased]
 
+### Fixed
+
+- **BREAKING (behaviour): reentrancy is now scoped to the flow that holds the lock, not to the key.**
+  Same-process reentrancy was keyed on the lock key alone, and `AddOrionLock` registers
+  `IDistributedLock` as a singleton — so two *unrelated* callers on the same instance (two concurrent
+  HTTP requests, say) asking for the same key both got a handle: the second was handed a nested handle
+  over the first one's lease, the backend was never consulted, and both ran inside the critical section
+  at once. This defeated mutual exclusion for every in-process caller of a shared `IDistributedLock`.
+  An acquire now establishes an owner identity in the calling flow (an `AsyncLocal` scope, like
+  `Activity.Current`); only a re-acquire from that same flow — including one made deeper in the call
+  stack, after any number of `await`s — collapses into a nested handle. Any other caller goes to the
+  backend and contends normally.
+
+  **What to check:** if you have in-process callers that were *silently* sharing a lease, they will now
+  block against each other and `AcquireAsync` can throw `LockAcquisitionTimeoutException` (or
+  `TryAcquireAsync` return `null`) where it previously returned immediately. That is the correct
+  behaviour and almost certainly what you wanted, but it can surface as new contention or new timeouts
+  under load. Deliberate reentrancy is unaffected as long as the nested acquire runs inside the flow
+  that took the outer one. The scope belongs to the hold, not to the flow: work forked off *during* the
+  critical section inherits it and still re-enters, while work forked after the handle was released does
+  not, and neither does work started from an independent context.
+
+- **A nested handle is no longer handed out over a lease that has already been lost.** If the renewal
+  watchdog surrendered the lease (renewal failure past `RenewalFailureGracePeriod`, or a backend-
+  confirmed loss), a re-acquire from the same flow still got a nested handle over that dead lease —
+  non-null, with nothing holding the key at the backend. The registry now checks the real handle is
+  still held, and falls through to a genuine backend acquire when it is not. If you were relying on a
+  nested acquire always succeeding, check `IsHeld` / `LostToken` on the outer handle: it was already
+  telling you the lease was gone.
+
+- **A lock handle no longer stops renewing its lease in silence when the backend raises an unrelated
+  cancellation.** The exclusive handle's renewal watchdog caught *every* `OperationCanceledException`
+  from `TryRenewAsync` and returned. If a provider surfaced a cancellation that was not the handle's own
+  dispose (a client-library timeout token, an ambient request token threaded into the backend call), the
+  watchdog stopped renewing while `IsHeld` stayed `true` and `LostToken` never tripped — so the lease
+  quietly expired at the backend while your code went on believing it held the lock. Only the handle's
+  own dispose is terminal now; any other cancellation is treated as a transient renewal failure and the
+  watchdog keeps retrying, surrendering through the normal `RenewalFailureGracePeriod` path if the
+  backend stays unreachable. The reader-writer handle already behaved this way. If you had code watching
+  for the watchdog to go quiet, watch `LostToken` instead — it now actually fires.
+
+- **`IsHeld` and `LostToken` now tell the truth when `AutoRenew = false`.** With auto-renew off no
+  watchdog runs, and nothing ever observed the lease running out: `IsHeld` stayed `true` and `LostToken`
+  never tripped, however long after a TTL backend had expired the key and possibly handed it to someone
+  else. A handle taken with `AutoRenew = false` against a TTL backend now trips `LostToken` and reports
+  `IsHeld = false` once `LeaseDuration` has elapsed. The expiry runs the same surrender the renewal
+  watchdog runs on a confirmed loss, so `orion.lock.lease.lost` and
+  `orion.lock.lease.expired_before_release` are counted, `orion.lock.leases.held_concurrent` comes back
+  down, and a registered `ILockEventObserver` sees `OnLeaseLost` (and no longer a misleading
+  `OnReleased` when the handle is disposed afterwards). Session-scoped backends (PostgreSQL advisory locks,
+  SQL Server `sp_getapplock`), where the hold legitimately outlives `LeaseDuration`, are unaffected. If
+  you used `AutoRenew = false` with a short lease for long work and read `IsHeld`, it will now go false
+  at the lease deadline — that was always the real state; raise `LeaseDuration` or turn auto-renew on.
+
+- **`LostToken` no longer throws `ObjectDisposedException` after the handle is disposed.** It was read
+  straight off the `CancellationTokenSource`, which throws once disposed, so a `finally` or logging path
+  that touched the handle after `await using` blew up. The token is captured at construction and stays
+  readable for the handle's whole life. Applies to both the exclusive and the reader-writer handle.
+
+- **The renewal watchdog no longer surrenders a session-scoped hold when renewals keep failing.** After
+  `RenewalFailureGracePeriod` of failing renewals the watchdog gives the lease up, on the reasoning that
+  the backend's TTL has expired by now anyway. That is false for a backend whose hold is scoped to an
+  open session rather than to a wall-clock TTL: there the lock is provably still ours, and surrendering
+  let a second holder into the critical section. The surrender is now gated on the backend declaring
+  `LeaseDurationIsTtl`; on session-scoped backends the watchdog keeps retrying instead. Both the
+  exclusive and the reader-writer handle.
+
+- **The blocking `AcquireAsync` now polls under one owner token instead of a new one per retry.** Every
+  retry minted a fresh owner token, so a contended acquire looked to the backend like a stream of
+  different acquirers — which breaks fencing identity and can orphan state a partly-succeeded attempt
+  left behind under a token no later retry can reclaim. (The code's own comments already claimed it
+  reused one token, and `SharedExclusiveLock.AcquireAsync` genuinely did.) If you log or fence on the
+  owner token, a contended acquire now shows one token for the whole wait rather than one per attempt.
+
+- **A blocking `AcquireAsync` no longer waits past `WaitTimeout` when `RetryInterval` is longer than the
+  remaining budget.** The full `RetryInterval` was slept before the deadline was re-checked, so with,
+  say, `WaitTimeout = 200ms` and `RetryInterval = 10s`, `LockAcquisitionTimeoutException` arrived after
+  about 10 seconds. The poll delay is now clamped to the time left, matching the reader-writer lock and
+  the deadline overloads. If you had padded timeouts to absorb the overshoot, you can drop the padding.
+
+- **`InProcessFifoWaiterCoordinator` reports the caller's cancellation token and stops leaking
+  registrations.** A cancelled FIFO waiter raised an `OperationCanceledException` carrying
+  `CancellationToken.None` instead of the token the caller passed, so callers could not tell their own
+  cancellation apart from anyone else's. The same waiter also never disposed its
+  `CancellationTokenRegistration` — it is only disposed in `LeaveAsync`, which a caller that never
+  received its ticket can never reach — so each cancelled wait stayed rooted in the caller's
+  `CancellationTokenSource` until that source was disposed. Both are fixed; a cancellation-heavy
+  workload sharing one long-lived token no longer accumulates dead registrations.
+
+- **The internal measuring decorator no longer reports every backend as a TTL backend.**
+  `AddOrionLock` wraps the registered `IDistributedLockProvider` in an internal measuring decorator, and
+  that decorator did not forward `LeaseDurationIsTtl` — it fell back to the interface default of `true`.
+  A session-scoped backend that overrides the flag to `false` (PostgreSQL advisory locks, SQL Server
+  `sp_getapplock`) therefore had its override discarded the moment it went through DI, so anything gated
+  on the flag behaved as if the lease were a wall-clock TTL. The decorator now forwards the inner
+  provider's value. If you relied on the `orion.lock.lease.expired_before_release` counter firing for a
+  session-scoped backend, it will now correctly stay silent there.
+
 ### Changed
 
 - **CI runs with least privilege and pinned actions.** The workflow declares
