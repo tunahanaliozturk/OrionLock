@@ -1,4 +1,4 @@
-using System.Diagnostics;
+﻿using System.Diagnostics;
 using Moongazing.OrionLock.Diagnostics;
 using Moongazing.OrionLock.Internal;
 using Moongazing.OrionLock.Providers;
@@ -90,6 +90,7 @@ public sealed class SharedExclusiveLock : ISharedExclusiveLock
     {
         LockKey.Validate(key);
         options ??= new DistributedLockOptions();
+        options.ValidateAndNormalise();
 
         // Mint the owner token ONCE and reuse it across every deadline-retry attempt, exactly as the
         // blocking AcquireAsync loop does. A fresh token per attempt would make each retry a DIFFERENT
@@ -107,6 +108,7 @@ public sealed class SharedExclusiveLock : ISharedExclusiveLock
     {
         LockKey.Validate(key);
         options ??= new DistributedLockOptions();
+        options.ValidateAndNormalise();
         return TryAcquireAsync(key, Guid.NewGuid().ToString("N"), mode, options, cancellationToken);
     }
 
@@ -137,7 +139,9 @@ public sealed class SharedExclusiveLock : ISharedExclusiveLock
         string key, LockMode mode, DistributedLockOptions? options, CancellationToken cancellationToken)
     {
         LockKey.Validate(key);
-        return AcquireCoreAsync(key, mode, options ?? new DistributedLockOptions(), cancellationToken);
+        options ??= new DistributedLockOptions();
+        options.ValidateAndNormalise();
+        return AcquireCoreAsync(key, mode, options, cancellationToken);
     }
 
     private async Task<IDistributedLockHandle> AcquireCoreAsync(

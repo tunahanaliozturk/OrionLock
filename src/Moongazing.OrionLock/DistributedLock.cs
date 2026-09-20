@@ -59,6 +59,7 @@ public sealed class DistributedLock : IDistributedLock
     {
         LockKey.Validate(key);
         options ??= new DistributedLockOptions();
+        options.ValidateAndNormalise();
         // Establish the reentrancy owner scope HERE, in the caller's synchronous frame, so it survives
         // into the caller's critical section. See ReentrancyRegistry.EnsureOwnerScope.
         var owner = reentrancy.EnsureOwnerScope(key);
@@ -71,6 +72,7 @@ public sealed class DistributedLock : IDistributedLock
     {
         LockKey.Validate(key);
         options ??= new DistributedLockOptions();
+        options.ValidateAndNormalise();
         var owner = reentrancy.EnsureOwnerScope(key);
 
         // Mint the owner token ONCE and reuse it across every deadline-retry attempt, exactly as the
@@ -122,6 +124,7 @@ public sealed class DistributedLock : IDistributedLock
     {
         LockKey.Validate(key);
         options ??= new DistributedLockOptions();
+        options.ValidateAndNormalise();
         // Deliberately NOT an async method: EnsureOwnerScope must run in the caller's own execution
         // context (an async body's context changes are discarded when it returns), so the blocking
         // acquire is a thin synchronous shim over the async core.

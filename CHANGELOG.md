@@ -129,6 +129,23 @@ All notable changes to OrionLock are documented in this file. The format is base
 
 ### Fixed
 
+- **`DistributedLockOptions` is validated at every acquire entry point.** It never was, so a
+  misconfigured value either failed differently on each backend or did not fail at all:
+  `LeaseDuration = TimeSpan.Zero` produced `SET ... PX 0` on Redis — which is a DELETE, not a short
+  lease — while throwing from deep inside the Redis and PostgreSQL reader-writer providers; a negative
+  lease collapsed the renewal interval to its 10 ms floor and hammered the backend for the life of the
+  handle; a negative `RetryInterval` threw from inside `Task.Delay` in the acquire loop, with a stack
+  naming OrionLock rather than the caller; and `RenewalFailureGracePeriod = TimeSpan.Zero` surrendered a
+  perfectly good lease on the first transient blip. A non-positive `LeaseDuration`, a negative
+  `WaitTimeout` (including `Timeout.InfiniteTimeSpan`, which the subtraction-based budget reads as an
+  immediate timeout), a non-positive `RetryInterval` and a non-positive `RenewalFailureGracePeriod` now
+  each throw `ArgumentOutOfRangeException` on the caller's own thread, where the value was set. The
+  exclusive and reader-writer surfaces share one validator, mirroring
+  `WaitForAcquireOptions.ValidateAndNormalise`. Two shapes are deliberately NOT rejected because both
+  already work: a `RetryInterval` longer than `WaitTimeout` is clamped to the remaining budget by the
+  acquire loop, and a `LeaseDuration` shorter than `RetryInterval` acquires normally — an uncontended
+  acquire never waits at all, and under contention a shorter lease frees the key sooner.
+
 - **BREAKING (behaviour): reentrancy is now scoped to the flow that holds the lock, not to the key.**
   Same-process reentrancy was keyed on the lock key alone, and `AddOrionLock` registers
   `IDistributedLock` as a singleton — so two *unrelated* callers on the same instance (two concurrent

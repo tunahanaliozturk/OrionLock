@@ -108,6 +108,10 @@ if (bounded is null)
 // critical section
 ```
 
+## Option validation
+
+`DistributedLockOptions` is validated at every acquire entry point, on your own thread, where the value was set — a non-positive `LeaseDuration`, a negative `WaitTimeout`, a non-positive `RetryInterval` or a non-positive `RenewalFailureGracePeriod` throws `ArgumentOutOfRangeException` instead of surfacing later as a driver error or not at all. A `RetryInterval` longer than `WaitTimeout` is fine: the acquire loop clamps each poll to the remaining budget.
+
 ## Lease and renewal
 
 Each acquired lock carries a lease (default 30s). A background watchdog renews the lease at `LeaseDuration / 3` while the handle is alive. If renewal fails, `handle.IsHeld` flips to false and `handle.LostToken` is cancelled — so the critical section can observe and abort safely instead of running without the lock. See [docs/lease-and-renewal.md](docs/lease-and-renewal.md).
