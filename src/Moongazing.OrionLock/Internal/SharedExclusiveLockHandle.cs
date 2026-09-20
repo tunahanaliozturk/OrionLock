@@ -51,9 +51,7 @@ internal sealed class SharedExclusiveLockHandle : IDistributedLockHandle
         ArgumentNullException.ThrowIfNull(options);
         Key = key;
         this.mode = mode;
-        EffectiveLeaseDuration = provider.LeaseDurationIsTtl
-            ? options.LeaseDuration
-            : Timeout.InfiniteTimeSpan;
+        EffectiveLeaseDuration = provider.EffectiveLeaseDuration(options.LeaseDuration);
         lease = new LeaseWatchdog(
             key,
             (leaseDuration, ct) => provider.TryRenewAsync(key, ownerToken, mode, leaseDuration, ct),

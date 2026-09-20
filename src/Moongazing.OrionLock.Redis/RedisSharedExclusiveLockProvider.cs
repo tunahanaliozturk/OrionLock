@@ -181,6 +181,19 @@ public sealed class RedisSharedExclusiveLockProvider : ISharedExclusiveLockProvi
         this.options = options;
     }
 
+    /// <inheritdoc />
+    /// <remarks>
+    /// Every lease this provider writes goes through <see cref="RedisLease"/>, which rounds UP to the
+    /// whole millisecond Redis takes, so the hold really is that long and not the sub-millisecond value
+    /// that was asked for. Reported here for the same reason the exclusive Redis provider reports it.
+    /// </remarks>
+    public TimeSpan EffectiveLeaseDuration(TimeSpan requested)
+        // A non-positive lease is refused by the core before any hold exists; return it unchanged rather
+        // than throwing, because this is a query about a lease and not an attempt to take one.
+        => requested <= TimeSpan.Zero
+            ? requested
+            : TimeSpan.FromMilliseconds(ToLeaseMilliseconds(requested));
+
     private IDatabase Db => multiplexer.GetDatabase(options.Database);
 
     // The single lease-to-milliseconds normalization for the whole package; see RedisLease for why a

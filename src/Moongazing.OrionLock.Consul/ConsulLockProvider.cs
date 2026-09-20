@@ -35,6 +35,9 @@ public sealed class ConsulLockProvider : IDistributedLockProvider
         ArgumentNullException.ThrowIfNull(consul);
         this.consul = consul;
         this.options = options ?? new ConsulLockOptions();
+        // The prefix is spliced into the same /v1/kv/{path} HTTP path the key is, so it is validated
+        // here too - not only in UseConsul - to cover a provider built by hand.
+        this.options.ValidateAndNormalise();
     }
 
     /// <inheritdoc />

@@ -32,18 +32,17 @@ public static class ServiceCollectionExtensions
         {
             var raw = sp.GetRequiredService<IDistributedLockProvider>();
             var measured = raw is MeasuringLockProvider ? raw : new MeasuringLockProvider(raw);
-            // The fault guard goes OUTSIDE the measuring decorator, not inside it. Inside, the backend
-            // tag would be resolved from the guard rather than from the concrete provider, and every
-            // metric would lose which backend it came from. Out here the measuring decorator still sees
-            // - and counts - the raw driver failure before this wraps it for the caller.
-            var guarded = new BackendFaultGuard(measured);
+            // The backend-fault guard is NOT applied here: DistributedLock installs it at its own
+            // provider boundary, so the exception contract holds however the lock was constructed. It
+            // lands outside this measuring decorator either way, which is what keeps the backend metric
+            // tag resolving from the concrete provider rather than from the guard.
             var fifo = sp.GetRequiredService<IFifoWaiterCoordinator>();
             // v0.3.25: explicit GetService for the optional observer so consumer
             // registration is honoured (the ActivatorUtilities longest-ctor trap from
             // v0.2.20 OrionPatch / v6.5.23 OrionGuard does not apply here because we
             // construct explicitly, but GetService must still be threaded by hand).
             var observer = sp.GetService<ILockEventObserver>();
-            return new DistributedLock(guarded, fifo, observer);
+            return new DistributedLock(measured, fifo, observer);
         });
 
         return new OrionLockBuilder(services);

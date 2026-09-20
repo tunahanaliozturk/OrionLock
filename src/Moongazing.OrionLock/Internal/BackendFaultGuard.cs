@@ -47,6 +47,17 @@ internal sealed class BackendFaultGuard : IDistributedLockProvider
     public Task<bool> TryAcquireAsync(string key, string ownerToken, TimeSpan leaseDuration, CancellationToken cancellationToken)
         => GuardAsync(key, "acquire", () => inner.TryAcquireAsync(key, ownerToken, leaseDuration, cancellationToken));
 
+    /// <summary>
+    /// Forwards the inner provider's fenced acquire, for the same reason
+    /// <see cref="MeasuringLockProvider"/> does. Without this the decorator falls back to the interface
+    /// default, which delegates to the unfenced <see cref="TryAcquireAsync"/> and reports no token - so
+    /// wrapping a fencing-capable backend would silently drop every fencing token it mints, and the
+    /// caller would get <c>null</c> where the backend had a perfectly good number.
+    /// </summary>
+    public Task<LockAcquisition> TryAcquireFencedAsync(
+        string key, string ownerToken, TimeSpan leaseDuration, CancellationToken cancellationToken)
+        => GuardAsync(key, "acquire", () => inner.TryAcquireFencedAsync(key, ownerToken, leaseDuration, cancellationToken));
+
     public Task<bool> TryRenewAsync(string key, string ownerToken, TimeSpan leaseDuration, CancellationToken cancellationToken)
         => GuardAsync(key, "renew", () => inner.TryRenewAsync(key, ownerToken, leaseDuration, cancellationToken));
 

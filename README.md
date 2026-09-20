@@ -203,7 +203,7 @@ An acquire on `IDistributedLock` raises only these, whichever backend is registe
 | `OperationCanceledException` | your cancellation token was cancelled. |
 | `InvalidOperationException` | an OrionLock invariant, in practice only the ownerToken collision SQL Server and PostgreSQL detect. |
 
-**Driver exceptions do not escape.** A `SqlException`, `PostgresException`, `RpcException`, `KeeperException`, `RedisException`, `DbException` or HTTP failure is wrapped in `OrionLockBackendException` at the provider boundary, with the original as `InnerException` — so `catch (OrionLockBackendException)` works without referencing any backend's driver package, and stays correct when you switch backends.
+**Driver exceptions do not escape.** A `SqlException`, `PostgresException`, `RpcException`, `KeeperException`, `RedisException`, `DbException` or HTTP failure is wrapped in `OrionLockBackendException` at the lock's provider boundary, with the original as `InnerException` — so `catch (OrionLockBackendException)` works without referencing any backend's driver package, and stays correct when you switch backends. The wrapping is installed by `DistributedLock` itself, so it holds whether the lock came from `AddOrionLock` or from `new DistributedLock(provider)`.
 
 A lease lost *after* acquisition is not an exception from these methods. `handle.IsHeld` and `handle.LostToken` report it; `handle.ThrowIfLost()` turns it into `LeaseLostException` at a point in the critical section you choose — typically just before the write the lock was taken to protect.
 
@@ -286,7 +286,8 @@ All backends implement the same `IDistributedLock`, so application code compiles
 
 | Backend | Shortest lease it can honour | `handle.EffectiveLeaseDuration` |
 | --- | --- | --- |
-| Redis, EF Core, in-memory | 1 ms (Redis rounds up to whole milliseconds) | the lease you asked for |
+| Redis | 1 ms | rounded **up** to a whole millisecond, which is all `PX` / `PEXPIRE` take |
+| EF Core, in-memory | 1 tick | the lease you asked for (on EF Core, subject to the mapped column's precision) |
 | Consul | `ConsulLockOptions.MinSessionTtl`, default **10 s** (Consul's own floor) | the lease you asked for |
 | etcd | `EtcdLockOptions.MinLeaseTtlSeconds`, default **5 s** | rounded **up** to a whole second |
 | PostgreSQL, SQL Server, ZooKeeper | any — the hold is session-scoped, not leased | `Timeout.InfiniteTimeSpan`: no wall clock bounds the hold; it lives until release or session loss |

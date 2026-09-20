@@ -23,6 +23,10 @@ public static class OrionLockConsulBuilderExtensions
 
         var options = new ConsulLockOptions();
         configure?.Invoke(options);
+        // Validate at DI registration time rather than waiting for the provider's ctor to surface the
+        // error on the first acquire. A KeyPrefix that escapes the KV namespace is a startup-time
+        // mistake; failing here keeps the stack trace pointing at the consumer's UseConsul(...) call.
+        options.ValidateAndNormalise();
 
         // AddSingleton (NOT TryAddSingleton) so the address-overload's wiring wins over any
         // previously-registered IConsulClient. The TryAdd shape would have silently
@@ -49,6 +53,7 @@ public static class OrionLockConsulBuilderExtensions
 
         var options = new ConsulLockOptions();
         configure?.Invoke(options);
+        options.ValidateAndNormalise();
 
         builder.Services.TryAddSingleton<IConsulClientAdapter>(
             sp => new DefaultConsulClientAdapter(sp.GetRequiredService<IConsulClient>()));

@@ -1,4 +1,4 @@
-using System.Data.Common;
+﻿using System.Data.Common;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore.Infrastructure;
 using Microsoft.EntityFrameworkCore.Metadata;
@@ -28,6 +28,14 @@ namespace Moongazing.OrionLock.EntityFrameworkCore;
 /// two hosts with more NTP drift than the lease would both consider the key free and both hold it. Reading
 /// the instant from the database gives every participant one authoritative clock, the same guarantee the
 /// reader-writer providers in this package and in OrionLock.Postgres already make.
+/// </para>
+/// <para>
+/// <b>The lease's precision belongs to the mapped column.</b> <c>EffectiveLeaseDuration</c> reports the
+/// requested lease, because this provider cannot know better: the expiry is written as a
+/// <see cref="DateTime"/> and what survives is decided by the consumer's schema. SQL Server's
+/// <c>datetime2(7)</c> and PostgreSQL's <c>timestamp</c> keep sub-millisecond precision, but MySQL's
+/// <c>DATETIME</c> defaults to whole seconds and truncates the expiry. Set an explicit precision on
+/// <c>ExpiresOnUtc</c> if your store rounds and the difference matters.
 /// </para>
 /// </remarks>
 [BackendName("efcore")]

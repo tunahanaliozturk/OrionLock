@@ -42,3 +42,4 @@ Moongazing.OrionLock.Providers.IDistributedLockProvider.EffectiveLeaseDuration(S
 Moongazing.OrionLock.DistributedLockOptions.MaxHoldDuration.get -> System.TimeSpan?
 Moongazing.OrionLock.DistributedLockOptions.MaxHoldDuration.set -> void
 Moongazing.OrionLock.IDistributedLockHandle.ThrowIfLost() -> void
+Moongazing.OrionLock.Providers.ISharedExclusiveLockProvider.EffectiveLeaseDuration(System.TimeSpan requested) -> System.TimeSpan

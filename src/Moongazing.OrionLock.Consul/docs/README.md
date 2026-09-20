@@ -77,4 +77,10 @@ request somewhere other than the KV store, and percent-encoding cannot save it b
 splice the request. Use `ConsulLockOptions.KeyPrefix` for namespacing; its slashes are hierarchy and are
 preserved.
 
+The prefix is path data too, and is validated the same way at startup: every `/`-separated segment of
+`KeyPrefix` must be a legal key, so a prefix such as `"../session/destroy/"` — which would canonicalise
+out of the KV namespace and retarget an acquire at Consul's session endpoint, whatever the key was — is
+refused by `UseConsul(...)` rather than at the first acquire. One trailing `/` is the conventional shape
+and is fine; a leading, doubled or otherwise empty segment is not.
+
 See <https://github.com/tunahanaliozturk/OrionLock>.

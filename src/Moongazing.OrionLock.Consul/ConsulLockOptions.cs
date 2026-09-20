@@ -96,4 +96,43 @@ public sealed class ConsulLockOptions
     /// </para>
     /// </remarks>
     public bool FencingTokens { get; set; }
+
+    /// <summary>
+    /// Validate + normalise the options. Called by the provider constructor and by <c>UseConsul</c>, so a
+    /// misconfigured prefix fails at startup rather than at the first acquire.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// <see cref="KeyPrefix"/> is concatenated in front of the lock key and the result is spliced into
+    /// Consul's <c>/v1/kv/{path}</c> HTTP path, so the prefix is path data exactly as the key is. The
+    /// core's <see cref="Moongazing.OrionLock.LockKey"/> covers the caller-supplied half; this covers
+    /// the configured half. Without it a prefix of <c>"../session/destroy/"</c> in front of an ordinary
+    /// key canonicalises out of the KV namespace entirely and retargets a lock acquire at Consul's
+    /// session endpoint - and percent-encoding cannot save it, because .NET unescapes <c>%2E</c> back
+    /// to <c>.</c> during canonicalisation.
+    /// </para>
+    /// <para>
+    /// Each <c>/</c>-separated segment is held to the same rule a lock key is, so a prefix segment and a
+    /// key are the same kind of thing. One trailing <c>/</c> is the conventional shape
+    /// (<c>"orionlock/"</c>) and is allowed; a leading, doubled or otherwise empty segment is not,
+    /// because it collapses during canonicalisation and silently addresses a different key.
+    /// </para>
+    /// </remarks>
+    /// <exception cref="ArgumentException">A prefix segment is not a legal path segment.</exception>
+    internal void ValidateAndNormalise()
+    {
+        KeyPrefix ??= string.Empty;
+        if (KeyPrefix.Length == 0)
+        {
+            return;
+        }
+
+        // Strip exactly ONE trailing slash - the conventional "orionlock/" shape. A second one leaves an
+        // empty segment, which is caught below.
+        var body = KeyPrefix.EndsWith('/') ? KeyPrefix[..^1] : KeyPrefix;
+        foreach (var segment in body.Split('/'))
+        {
+            LockKey.Validate(segment, nameof(KeyPrefix));
+        }
+    }
 }

@@ -65,6 +65,7 @@ All notable changes to OrionLock are documented in this file. The format is base
   in your model: the provider reads column names from the EF model, finds nothing mapped, and emits exactly
   the SQL it emitted before fencing existed while reporting no token. Locking behaviour is unchanged either
   way.
+
 ### Changed
 
 - **BREAKING: a lock key is now one opaque name, validated in the core — `/` is no longer legal in a key.**
@@ -146,7 +147,21 @@ All notable changes to OrionLock are documented in this file. The format is base
   `LeaseDuration` to the backend's floor or pick a backend with a finer lease — the old code was giving
   you the floor anyway, just without telling you. Custom `IDistributedLockProvider` implementations need
   no change (both new members have defaults); custom `IDistributedLockHandle` implementations must add
-  `EffectiveLeaseDuration`, which has no sensible default to infer.
+  `EffectiveLeaseDuration`, which has no sensible default to infer. The Redis providers report the lease
+  rounded UP to the whole millisecond `PX` / `PEXPIRE` actually take, rather than the sub-millisecond
+  value that was asked for. `ISharedExclusiveLockProvider` gained the same member (with a default), so a
+  reader-writer hold reports the same truth an exclusive one does.
+
+- **The configured namespace prefix is validated too, not just the key.** `LockKey` covers the
+  caller-supplied key, but `ConsulLockOptions.KeyPrefix` is concatenated in front of it and spliced into
+  the same `/v1/kv/{path}` HTTP path, and `ZooKeeperLockOptions.RootPath` is concatenated into the same
+  znode path. A prefix of `"../session/destroy/"` with an ordinary key therefore canonicalised out of
+  the KV namespace and retargeted a lock acquire at Consul's session endpoint — the traversal the key
+  rule exists to stop, arriving through the half of the path the key rule cannot see. Both are now held
+  to the same per-segment rule a lock key is, at registration time, so a bad prefix fails at startup
+  with a message naming `KeyPrefix` / `RootPath` instead of at the first acquire. Backends whose prefix
+  is parameterised rather than concatenated into a path (Redis, etcd, SQL Server, PostgreSQL, EF Core —
+  all of which pass it as a protocol field or a SQL parameter) are unaffected and unchanged.
 
 ### Fixed
 

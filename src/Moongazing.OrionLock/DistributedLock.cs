@@ -48,7 +48,13 @@ public sealed class DistributedLock : IDistributedLock
         ILockEventObserver? eventObserver)
     {
         ArgumentNullException.ThrowIfNull(provider);
-        this.provider = provider;
+        // The fault guard belongs HERE, at this lock's own provider boundary, not in the AddOrionLock
+        // factory. Installed there, the exception contract depended on how the lock was built: a caller
+        // using this public constructor still got raw RedisException / SqlException / RpcException while
+        // the interface documented that driver failures arrive as OrionLockBackendException. Two objects
+        // of the same type with two different contracts is worse than no contract. Idempotent, so the
+        // DI path does not double-wrap.
+        this.provider = provider is BackendFaultGuard ? provider : new BackendFaultGuard(provider);
         this.fifoCoordinator = fifoCoordinator ?? new Fairness.NullFifoWaiterCoordinator();
         this.eventObserver = eventObserver is NullLockEventObserver ? null : eventObserver;
     }

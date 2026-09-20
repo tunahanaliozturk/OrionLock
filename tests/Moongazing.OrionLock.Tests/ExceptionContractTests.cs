@@ -94,6 +94,49 @@ public sealed class ExceptionContractTests
     }
 
     [Fact]
+    public async Task TheContractHoldsForAHandBuiltLock_NotOnlyForTheDiOne()
+    {
+        // The guard used to be installed by AddOrionLock alone, so this public constructor - which is
+        // part of the shipped API - still handed the caller raw driver exceptions while the interface
+        // documented that they arrive wrapped. Two objects of the same type with two different
+        // contracts is worse than no contract.
+        var sut = new DistributedLock(new ThrowingProvider(() => new DriverException("connection reset")));
+
+        var ex = await Assert.ThrowsAsync<OrionLockBackendException>(() => sut.AcquireAsync("k"));
+
+        Assert.IsType<DriverException>(ex.InnerException);
+    }
+
+    [Fact]
+    public async Task TheGuardDoesNotSwallowTheFencingToken()
+    {
+        // The guard decorates IDistributedLockProvider. Without forwarding the FENCED acquire it would
+        // fall back to the interface default, which delegates to the unfenced overload and reports no
+        // token - so wrapping a fencing-capable backend would silently drop every token it mints.
+        var sut = new DistributedLock(new FencedProvider(fencingToken: 42));
+
+        await using var handle = await sut.AcquireAsync("k", new DistributedLockOptions { AutoRenew = false });
+
+        Assert.Equal(42, handle.FencingToken);
+    }
+
+    /// <summary>A backend that mints a fencing token, like Redis and EF Core do.</summary>
+    private sealed class FencedProvider(long fencingToken) : IDistributedLockProvider
+    {
+        public Task<LockAcquisition> TryAcquireFencedAsync(string key, string ownerToken, TimeSpan leaseDuration, CancellationToken cancellationToken)
+            => Task.FromResult(LockAcquisition.Fenced(fencingToken));
+
+        public Task<bool> TryAcquireAsync(string key, string ownerToken, TimeSpan leaseDuration, CancellationToken cancellationToken)
+            => Task.FromResult(true);
+
+        public Task<bool> TryRenewAsync(string key, string ownerToken, TimeSpan leaseDuration, CancellationToken cancellationToken)
+            => Task.FromResult(true);
+
+        public Task ReleaseAsync(string key, string ownerToken, CancellationToken cancellationToken)
+            => Task.CompletedTask;
+    }
+
+    [Fact]
     public async Task ThrowIfLost_TurnsALostLeaseIntoLeaseLostException()
     {
         // LeaseLostException was defined and thrown nowhere. This is its home: the point in a critical
