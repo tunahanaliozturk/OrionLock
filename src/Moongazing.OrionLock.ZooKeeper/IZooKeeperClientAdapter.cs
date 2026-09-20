@@ -44,4 +44,20 @@ public interface IZooKeeperClientAdapter
     /// confirm the holder znode is still alive when answering <c>TryRenewAsync</c>.
     /// </summary>
     Task<bool> ExistsAsync(string path, CancellationToken cancellationToken);
+
+    /// <summary>
+    /// The watching half of the lock recipe: registers an <c>exists</c> watch on
+    /// <paramref name="path"/> - the waiter's immediate predecessor - and returns
+    /// <see langword="true"/> as soon as it is gone, which is the moment this waiter moves up the
+    /// queue. Returns <see langword="true"/> immediately when the node is already absent, and
+    /// <see langword="false"/> when <paramref name="maxWait"/> elapses with it still there.
+    /// </summary>
+    /// <remarks>
+    /// A default interface method so an existing third-party adapter keeps compiling and simply
+    /// keeps polling: the default answers <see langword="false"/> at once, which
+    /// <see cref="ZooKeeperLockProvider"/> reads as "no watches available" and hands the wait back
+    /// to the core's poll loop. An implementation MUST leave no watch registered once it returns.
+    /// </remarks>
+    Task<bool> WaitForNodeDeletedAsync(string path, TimeSpan maxWait, CancellationToken cancellationToken)
+        => Task.FromResult(false);
 }

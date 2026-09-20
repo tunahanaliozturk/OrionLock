@@ -132,6 +132,121 @@ public sealed class ZooKeeperLockProvider : IDistributedLockProvider
         }
     }
 
+    /// <summary>
+    /// The actual ZooKeeper lock recipe, which the polling loop above only approximates: create the
+    /// ephemeral sequential child ONCE, and when it is not the lowest, watch the immediate
+    /// predecessor and wait rather than deleting the child and starting over.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// Two things follow from creating the child once. The wait costs two round trips per position
+    /// gained - one children listing, one watched <c>exists</c> - instead of four per poll tick
+    /// (ensure path, create, list, delete). And the queue is FIFO again: a waiter's sequence number
+    /// is its place in line, which the create-list-delete loop threw away on every tick, so under
+    /// contention arrival order meant nothing.
+    /// </para>
+    /// <para>
+    /// The child is deleted on every path that does not win - budget spent, cancellation, fault.
+    /// Leaving it would block every waiter behind us until our session expired.
+    /// </para>
+    /// <para>
+    /// An adapter with no watch support answers <see langword="false"/> at once; the child is then
+    /// removed and the wait handed back, so the core falls back to the poll loop.
+    /// </para>
+    /// </remarks>
+    public async Task<bool> WaitForAcquireAsync(
+        string key, string ownerToken, TimeSpan leaseDuration, TimeSpan maxWait,
+        LockWaitPolicy waitPolicy, CancellationToken cancellationToken)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(key);
+        ArgumentException.ThrowIfNullOrWhiteSpace(ownerToken);
+
+        var elapsed = System.Diagnostics.Stopwatch.StartNew();
+        var infinite = maxWait == Timeout.InfiniteTimeSpan;
+        var parent = ParentPath(key);
+
+        await zk.EnsurePathAsync(parent, cancellationToken).ConfigureAwait(false);
+
+        string created;
+        try
+        {
+            created = await CreateChildAsync(parent, ownerToken, cancellationToken).ConfigureAwait(false);
+        }
+        catch
+        {
+            // A concurrent release can prune an empty parent between our EnsurePath and our create.
+            // Re-ensure and try once more; a second failure is a real one and propagates.
+            await zk.EnsurePathAsync(parent, cancellationToken).ConfigureAwait(false);
+            created = await CreateChildAsync(parent, ownerToken, cancellationToken).ConfigureAwait(false);
+        }
+
+        var ourName = created[(parent.Length + 1)..];
+        try
+        {
+            while (true)
+            {
+                cancellationToken.ThrowIfCancellationRequested();
+
+                var children = await zk.GetChildrenAsync(parent, cancellationToken).ConfigureAwait(false);
+                var predecessor = PredecessorOf(children, ourName);
+                if (predecessor is null)
+                {
+                    // Nothing ahead of us: we hold the lowest sequence number, so we hold the lock.
+                    ownerKeyToNode[(ownerToken, key)] = created;
+                    return true;
+                }
+
+                var remaining = maxWait - elapsed.Elapsed;
+                if (!infinite && remaining <= TimeSpan.Zero)
+                {
+                    await TryDeleteAsync(created).ConfigureAwait(false);
+                    return false;
+                }
+
+                if (!await zk.WaitForNodeDeletedAsync(
+                        $"{parent}/{predecessor}",
+                        infinite ? Timeout.InfiniteTimeSpan : remaining,
+                        cancellationToken).ConfigureAwait(false))
+                {
+                    // Budget spent, no watch support, or a session that can no longer tell us.
+                    await TryDeleteAsync(created).ConfigureAwait(false);
+                    return false;
+                }
+
+                // The predecessor is gone. Re-list rather than assume we are now first: the
+                // predecessor may have died rather than released, and a waiter that arrived before
+                // it can still be ahead of us.
+            }
+        }
+        catch
+        {
+            // Cancellation or a backend fault: our child MUST go, or every waiter behind us waits
+            // on a znode nobody is going to delete until our session expires.
+            await TryDeleteAsync(created).ConfigureAwait(false);
+            throw;
+        }
+    }
+
+    /// <summary>
+    /// The child immediately ahead of <paramref name="ourName"/> in the sorted sibling list, or
+    /// <see langword="null"/> when nothing is - which means we are the holder. Watching the
+    /// IMMEDIATE predecessor rather than the lowest child is what keeps a release from waking every
+    /// waiter at once (the herd effect the recipe exists to avoid).
+    /// </summary>
+    internal static string? PredecessorOf(IReadOnlyList<string> sortedChildren, string ourName)
+    {
+        string? predecessor = null;
+        foreach (var child in sortedChildren)
+        {
+            if (string.CompareOrdinal(child, ourName) >= 0)
+            {
+                break;
+            }
+            predecessor = child;
+        }
+        return predecessor;
+    }
+
     private Task<string> CreateChildAsync(string parent, string ownerToken, CancellationToken cancellationToken)
         => zk.CreateEphemeralSequentialAsync(
             parent,
