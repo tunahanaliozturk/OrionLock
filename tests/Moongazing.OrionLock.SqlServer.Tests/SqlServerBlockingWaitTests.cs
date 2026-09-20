@@ -191,19 +191,26 @@ public sealed class SqlServerWaitBudgetTests
         // A retry interval longer than the budget is what exposes it: the delay gets clipped to the
         // remainder, and the loop then came back round for one more attempt with nothing left.
         var budget = TimeSpan.FromMilliseconds(200);
-        var lateAttempts = 0;
+        var dispatchedWithNothingLeft = 0;
         var clock = Stopwatch.StartNew();
 
         var result = await SqlServerLockProvider.WaitWithinBudgetAsync(
             budget,
             new LockWaitPolicy(TimeSpan.FromMilliseconds(500)).ToPollOptions(),
-            _ =>
+            remaining =>
             {
-                if (clock.Elapsed >= budget)
+                // Judged on the LOOP's own figure - the budget it had when it dispatched this round
+                // - and not on a clock this fake reads for itself. Between the deadline check and
+                // the call the thread can be descheduled, so a round the loop legitimately started
+                // can still EXECUTE after the deadline; a fake that timestamps its own invocation
+                // reports that as a violation and goes red for preemption rather than for the bug.
+                // What the loop can actually promise is that it never STARTS a round having seen
+                // the budget gone, and this parameter is exactly what it saw.
+                if (remaining <= TimeSpan.Zero)
                 {
                     // A real sp_getapplock round can win here. Say so, so the assertion below is
                     // about the lock and not only about the bookkeeping.
-                    Interlocked.Increment(ref lateAttempts);
+                    Interlocked.Increment(ref dispatchedWithNothingLeft);
                     return Task.FromResult(LockAcquisition.Unfenced);
                 }
                 return Task.FromResult(LockAcquisition.NotAcquired);
@@ -213,9 +220,79 @@ public sealed class SqlServerWaitBudgetTests
 
         Assert.False(result.Acquired);
         Assert.True(
-            Volatile.Read(ref lateAttempts) == 0,
-            $"{lateAttempts} round(s) were issued after the {budget.TotalMilliseconds}ms budget had gone, and one of them took the lock");
-        Assert.InRange(clock.ElapsedMilliseconds, 190, 400);
+            Volatile.Read(ref dispatchedWithNothingLeft) == 0,
+            $"{dispatchedWithNothingLeft} round(s) were dispatched with none of the {budget.TotalMilliseconds}ms budget left, and one of them took the lock");
+        // The floor is the real assertion: the wait lasted its budget. The ceiling is only a
+        // runaway guard - a correct loop still overshoots by one round plus whatever the scheduler
+        // adds, and neither of those is boundable on a shared runner, so a tight ceiling here would
+        // go red for slowness rather than for overshoot.
+        Assert.InRange(clock.ElapsedMilliseconds, 190, 5_000);
+    }
+
+    [Fact]
+    public async Task The_last_sliver_of_a_budget_is_not_spun_on()
+    {
+        // Task.Delay truncates its delay to whole milliseconds, so a sub-millisecond remainder
+        // sleeps for NOTHING and the loop comes straight back round with the budget still
+        // technically positive. Measured on this loop before the guard: 828 rounds inside half a
+        // millisecond, every one of them a fresh connection and an sp_getapplock against the
+        // server. It is the same defect the Redis waiter had, and the same shape of answer: a
+        // sliver too small to sleep on is the budget ending.
+        //
+        // The sliver is CONSTRUCTED rather than waited for: the first round consumes the budget
+        // down to half a millisecond, which is an ordinary thing for a real sp_getapplock round to
+        // do. Left purely to chance the sliver turns up in roughly one run in ten, and a regression
+        // test that mostly does not run is not one. The construction still misses when the spin to
+        // the mark overshoots the deadline, so the scenario is repeated - a miss costs an iteration,
+        // not the test.
+        //
+        // Asserted as a RATE, not as a count. A count would be a proxy the machine can violate: a
+        // Task.Delay that comes back a millisecond or two early leaves real budget behind, and the
+        // round the loop then dispatches is correct, not a spin. What is never correct is issuing
+        // rounds faster than the interval the caller configured. Elapsed time is the denominator,
+        // so a slow machine stretches the allowance instead of failing - the same shape as the
+        // Redis spin assertion, and for the same reason.
+        var budget = TimeSpan.FromMilliseconds(200);
+        var interval = TimeSpan.FromMilliseconds(500);
+        var sliverStartsAt = budget - TimeSpan.FromTicks(TimeSpan.TicksPerMillisecond / 2);
+
+        for (var attempt = 0; attempt < 6; attempt++)
+        {
+            var rounds = 0;
+            var clock = Stopwatch.StartNew();
+
+            var result = await SqlServerLockProvider.WaitWithinBudgetAsync(
+                budget,
+                new LockWaitPolicy(interval).ToPollOptions(),
+                async _ =>
+                {
+                    if (Interlocked.Increment(ref rounds) == 1)
+                    {
+                        await Task.Delay(sliverStartsAt - TimeSpan.FromMilliseconds(40));
+                        // The last stretch is spun rather than slept, because Task.Delay cannot land
+                        // on a sub-millisecond mark and landing on it is the whole point. The margin covers the
+                        // ~15ms granularity of the delay itself, which would otherwise sail past the mark.
+                        while (clock.Elapsed < sliverStartsAt)
+                        {
+                            Thread.SpinWait(10);
+                        }
+                    }
+                    return LockAcquisition.NotAcquired;
+                },
+                default);
+            clock.Stop();
+
+            // The first round is owed nothing, every later one owes a full interval.
+            var allowed = 1 + (int)Math.Ceiling(clock.Elapsed / interval);
+            var observed = Volatile.Read(ref rounds);
+
+            Assert.False(result.Acquired);
+            Assert.True(
+                observed <= allowed,
+                $"{observed} rounds in {clock.ElapsedMilliseconds}ms at a {interval.TotalMilliseconds}ms retry interval: "
+                + $"at most {allowed} can be spaced by that interval, so the rest were a spin on the server - "
+                + "the remainder after the last sleep was too small to sleep on again.");
+        }
     }
 
     [Fact]

@@ -28,6 +28,13 @@ public sealed class SqlServerLockProvider : IDistributedLockProvider, IDisposabl
 
     private const int MaxResourceLength = 240;
 
+    /// <summary>
+    /// The shortest wait the retry loop can actually take. <see cref="Task.Delay(TimeSpan, CancellationToken)"/>
+    /// truncates to whole milliseconds, so a budget with less than this left cannot be slept on and
+    /// is spent. The Redis waiter carries the same constant for the same reason.
+    /// </summary>
+    internal static readonly TimeSpan ShortestSleep = TimeSpan.FromMilliseconds(1);
+
     private readonly string connectionString;
     private readonly SqlServerLockOptions options;
     private readonly ConcurrentDictionary<string, SessionEntry> sessions = new();
@@ -128,6 +135,14 @@ public sealed class SqlServerLockProvider : IDistributedLockProvider, IDisposabl
     /// is not a wasted wait, it is a lock nobody is holding on purpose.
     /// </para>
     /// <para>
+    /// The gate is <see cref="ShortestSleep"/>, not zero, for the same reason the Redis waiter's is:
+    /// <see cref="Task.Delay(TimeSpan, CancellationToken)"/> truncates its delay to whole
+    /// milliseconds, so a sub-millisecond sliver of budget sleeps for nothing and the loop comes
+    /// straight back round - measured here at 828 rounds inside half a millisecond, each one a
+    /// connection and an <c>sp_getapplock</c> in the real provider. A sliver too small to sleep on
+    /// IS the budget ending.
+    /// </para>
+    /// <para>
     /// An attempt that comes back empty without consuming the caller's backoff sleeps the
     /// difference first. The figure comes from <paramref name="backoff"/> in full - the
     /// exponential ceiling and the jitter, not only <see cref="LockWaitPolicy.RetryInterval"/> -
@@ -155,7 +170,7 @@ public sealed class SqlServerLockProvider : IDistributedLockProvider, IDisposabl
         while (true)
         {
             var remaining = maxWait - elapsed.Elapsed;
-            if (attempted && remaining <= TimeSpan.Zero)
+            if (attempted && remaining < ShortestSleep)
             {
                 return LockAcquisition.NotAcquired;
             }

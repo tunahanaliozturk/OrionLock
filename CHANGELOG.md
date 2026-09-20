@@ -300,6 +300,11 @@ All notable changes to OrionLock are documented in this file. The format is base
   only `RetryInterval` would have been the worse half-state, because the loop runs precisely when a server
   is refusing early and repeatedly, which is precisely when every waiter retrying on the same flat tick is
   a thundering herd.
+  The retry gate is one millisecond of remaining budget rather than zero, for the reason the Redis waiter
+  carries the same constant: `Task.Delay` truncates to whole milliseconds, so a sub-millisecond sliver
+  sleeps for nothing and the loop comes straight back round — measured here at 828 rounds inside half a
+  millisecond, each one a connection and an `sp_getapplock` in the real provider. A sliver too small to
+  sleep on is the budget ending.
   The deadline is checked before every retry, not only after one: a round issued once the budget was gone
   could still WIN, and a lock handed to a caller who has already stopped waiting — and who may by then
   have taken the other branch — is worse than giving up early. Early is a wasted wait; late is a lock
