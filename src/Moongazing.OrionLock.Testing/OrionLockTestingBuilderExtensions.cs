@@ -18,7 +18,7 @@ public static class OrionLockTestingBuilderExtensions
     public static OrionLockBuilder UseInMemory(this OrionLockBuilder builder)
     {
         ArgumentNullException.ThrowIfNull(builder);
-        builder.Services.TryAddSingleton<IDistributedLockProvider, InMemoryLockProvider>();
+        builder.UseBackend("inmemory", _ => new InMemoryLockProvider());
         builder.Services.TryAddSingleton<ISharedExclusiveLockProvider, InMemorySharedExclusiveLockProvider>();
         builder.Services.TryAddSingleton<ISharedExclusiveLock>(sp =>
             new SharedExclusiveLock(

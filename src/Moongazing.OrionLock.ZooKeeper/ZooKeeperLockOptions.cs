@@ -34,10 +34,21 @@ public sealed class ZooKeeperLockOptions
     public bool UsesOpenAcl { get; } = true;
 
     /// <summary>
-    /// Validate + normalise the options. Called by the provider constructor; rejects an
-    /// empty <see cref="RootPath"/> and prepends a leading slash if the caller forgot it
-    /// (ZooKeeper paths MUST start with <c>/</c>).
+    /// Validate + normalise the options. Called by the provider constructor and by <c>UseZooKeeper</c>;
+    /// rejects an empty <see cref="RootPath"/>, prepends a leading slash if the caller forgot it
+    /// (ZooKeeper paths MUST start with <c>/</c>), and holds every path segment to the same rule a lock
+    /// key is held to.
     /// </summary>
+    /// <remarks>
+    /// The root is concatenated in front of the encoded key to form the parent znode path, so it is path
+    /// data exactly as the key is. The core's <see cref="Moongazing.OrionLock.LockKey"/> covers the
+    /// caller-supplied half; this covers the configured half, so a root of <c>"/orionlock/../.."</c> or
+    /// one carrying a control character is refused at startup with a message naming
+    /// <see cref="RootPath"/>, instead of surfacing as a <c>KeeperException</c> from the first acquire.
+    /// </remarks>
+    /// <exception cref="ArgumentException">
+    /// <see cref="RootPath"/> is empty, or one of its segments is not a legal znode name.
+    /// </exception>
     internal void ValidateAndNormalise()
     {
         if (string.IsNullOrWhiteSpace(RootPath))
@@ -54,6 +65,13 @@ public sealed class ZooKeeperLockOptions
         if (RootPath.Length > 1 && RootPath[^1] == '/')
         {
             RootPath = RootPath[..^1];
+        }
+
+        // Skip(1): the normalised root always starts with '/', so the first split part is the empty
+        // string before it, not a segment.
+        foreach (var segment in RootPath.Split('/').Skip(1))
+        {
+            LockKey.Validate(segment, nameof(RootPath));
         }
     }
 }

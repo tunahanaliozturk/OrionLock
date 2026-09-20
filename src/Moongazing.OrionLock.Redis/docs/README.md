@@ -6,6 +6,17 @@ Redis backend for [OrionLock](https://www.nuget.org/packages/OrionLock). `SET NX
 services.AddOrionLock().UseRedis("localhost:6379");
 ```
 
+## Which connection the locks use
+
+`UseRedis(connectionString)` connects with **that** connection string, and keeps the resulting
+multiplexer under a private DI key. Your application's own `IConnectionMultiplexer` — the one the cache
+uses — is neither read nor replaced. (It used to be registered with `TryAddSingleton`, so an app that had
+already registered one silently got its connection string discarded and locked against the cache's Redis
+instead.)
+
+`UseRedis()` with no connection string is the opt-in to sharing: it resolves the application's registered
+`IConnectionMultiplexer`.
+
 This package also ships the distributed reader-writer (shared/exclusive) lock. `UseRedisSharedExclusive()` registers `ISharedExclusiveLock` over Redis, additive to `UseRedis()`:
 
 ```csharp

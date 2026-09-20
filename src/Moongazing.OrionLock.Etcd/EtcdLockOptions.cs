@@ -1,4 +1,4 @@
-namespace Moongazing.OrionLock.Etcd;
+﻿namespace Moongazing.OrionLock.Etcd;
 
 /// <summary>
 /// Configuration for the etcd-backed <see cref="EtcdLockProvider"/>.
@@ -13,10 +13,17 @@ public sealed class EtcdLockOptions
     public string KeyPrefix { get; set; } = "orionlock/";
 
     /// <summary>
-    /// Minimum lease TTL (seconds). etcd enforces an integer-second TTL with a documented
-    /// floor; the provider takes <c>max(LeaseDuration.TotalSeconds, MinLeaseTtlSeconds)</c>
-    /// when creating the lease. Default 5 seconds.
+    /// The shortest lease this backend can honour, in seconds. etcd enforces an integer-second TTL with
+    /// a documented floor, so the provider advertises this as its
+    /// <c>IDistributedLockProvider.MinimumLeaseDuration</c> and the core refuses a shorter
+    /// <c>LeaseDuration</c> with <see cref="ArgumentOutOfRangeException"/> at acquire time. A lease at or
+    /// above it is rounded UP to a whole second, which <c>handle.EffectiveLeaseDuration</c> reports.
+    /// Default 5 seconds.
     /// </summary>
+    /// <remarks>
+    /// The provider used to take <c>max(ceil(LeaseDuration), MinLeaseTtlSeconds)</c> silently, so a
+    /// caller who asked for 2 seconds got 5 with no warning.
+    /// </remarks>
     public int MinLeaseTtlSeconds { get; set; } = 5;
 
     /// <summary>

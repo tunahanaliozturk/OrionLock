@@ -1,4 +1,4 @@
-using System.Diagnostics;
+﻿using System.Diagnostics;
 using Moongazing.OrionLock.Diagnostics;
 using Moongazing.OrionLock.Internal;
 using Moongazing.OrionLock.Providers;
@@ -88,8 +88,9 @@ public sealed class SharedExclusiveLock : ISharedExclusiveLock
     private Task<IDistributedLockHandle?> TryAcquireUntilDeadlineAsync(
         string key, LockMode mode, TimeSpan deadline, DistributedLockOptions? options, CancellationToken cancellationToken)
     {
-        ArgumentException.ThrowIfNullOrWhiteSpace(key);
+        LockKey.Validate(key);
         options ??= new DistributedLockOptions();
+        options.ValidateAndNormalise();
 
         // Mint the owner token ONCE and reuse it across every deadline-retry attempt, exactly as the
         // blocking AcquireAsync loop does. A fresh token per attempt would make each retry a DIFFERENT
@@ -105,8 +106,9 @@ public sealed class SharedExclusiveLock : ISharedExclusiveLock
     private Task<IDistributedLockHandle?> TryAcquireAsync(
         string key, LockMode mode, DistributedLockOptions? options, CancellationToken cancellationToken)
     {
-        ArgumentException.ThrowIfNullOrWhiteSpace(key);
+        LockKey.Validate(key);
         options ??= new DistributedLockOptions();
+        options.ValidateAndNormalise();
         return TryAcquireAsync(key, Guid.NewGuid().ToString("N"), mode, options, cancellationToken);
     }
 
@@ -130,12 +132,21 @@ public sealed class SharedExclusiveLock : ISharedExclusiveLock
         return handle;
     }
 
-    private async Task<IDistributedLockHandle> AcquireAsync(
+    // Deliberately NOT an async method: an async body would capture the argument failures into the
+    // returned Task, so a caller passing an illegal key would see them surface from an await deep inside
+    // their critical section instead of from their own acquire call.
+    private Task<IDistributedLockHandle> AcquireAsync(
         string key, LockMode mode, DistributedLockOptions? options, CancellationToken cancellationToken)
     {
-        ArgumentException.ThrowIfNullOrWhiteSpace(key);
+        LockKey.Validate(key);
         options ??= new DistributedLockOptions();
+        options.ValidateAndNormalise();
+        return AcquireCoreAsync(key, mode, options, cancellationToken);
+    }
 
+    private async Task<IDistributedLockHandle> AcquireCoreAsync(
+        string key, LockMode mode, DistributedLockOptions options, CancellationToken cancellationToken)
+    {
         var modeTag = mode == LockMode.Shared ? "shared" : "exclusive";
         // Hot path: only build the interpolated activity name when a listener is actually
         // subscribed. With no listener StartActivity returns null and the name is never

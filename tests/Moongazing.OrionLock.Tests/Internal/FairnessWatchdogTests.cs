@@ -79,6 +79,9 @@ public sealed class FairnessWatchdogTests
                 LeaseDuration = TimeSpan.FromMilliseconds(60),
                 AutoRenew = true,
                 RenewalFailureGracePeriod = TimeSpan.FromMilliseconds(40),
+                // The hold is observed for ~1 s on a 60 ms lease, past the default MaxHoldDuration of
+                // ten leases; pin it so the leak backstop does not surrender the hold under test.
+                MaxHoldDuration = TimeSpan.FromSeconds(30),
             },
             nowUtc: () => Clock());
 

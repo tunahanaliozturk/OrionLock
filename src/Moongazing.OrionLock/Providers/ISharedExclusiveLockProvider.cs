@@ -1,4 +1,4 @@
-namespace Moongazing.OrionLock.Providers;
+﻿namespace Moongazing.OrionLock.Providers;
 
 /// <summary>
 /// v0.4.0: the raw, single-attempt reader-writer lock primitive a backend implements. Multiple
@@ -48,4 +48,15 @@ public interface ISharedExclusiveLockProvider
     /// handle suppresses lease-expiry diagnostics on session-scoped backends.
     /// </summary>
     bool LeaseDurationIsTtl => true;
+
+    /// <summary>
+    /// The lease this backend will ACTUALLY honour for <paramref name="requested"/>, as reported by
+    /// <see cref="IDistributedLockHandle.EffectiveLeaseDuration"/>. Mirrors
+    /// <see cref="IDistributedLockProvider.EffectiveLeaseDuration"/> so a reader-writer hold reports the
+    /// same truth an exclusive one does - the Redis providers quantise a lease to whole milliseconds on
+    /// both surfaces, so without this the reader-writer handle reported a lease the backend does not
+    /// honour.
+    /// </summary>
+    TimeSpan EffectiveLeaseDuration(TimeSpan requested)
+        => LeaseDurationIsTtl ? requested : Timeout.InfiniteTimeSpan;
 }

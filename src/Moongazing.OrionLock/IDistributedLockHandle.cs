@@ -1,10 +1,25 @@
-namespace Moongazing.OrionLock;
+﻿namespace Moongazing.OrionLock;
 
 /// <summary>
 /// A held distributed lock. Dispose to release. While alive, a background watchdog renews the
 /// lease (when <see cref="DistributedLockOptions.AutoRenew"/> is set); if renewal fails,
 /// <see cref="IsHeld"/> becomes false and <see cref="LostToken"/> is cancelled.
 /// </summary>
+/// <remarks>
+/// <para>
+/// <b>Not disposing does not merely leak - it holds the lock.</b> The renewal watchdog roots the handle,
+/// so a forgotten <c>await using</c> is not collected: it keeps renewing the lease, no other process can
+/// ever take the key, and on SQL Server and PostgreSQL it pins a dedicated open connection for as long
+/// as it runs. This is the likeliest mistake with this API, and it is silent, because renewal keeps
+/// succeeding.
+/// </para>
+/// <para>
+/// <see cref="DistributedLockOptions.MaxHoldDuration"/> (default: ten leases) is the backstop, not a
+/// substitute: once it elapses the watchdog stops renewing, surrenders the hold and releases
+/// best-effort, so the key comes back. Until then the lock really is held. Always
+/// <c>await using</c> the handle.
+/// </para>
+/// </remarks>
 public interface IDistributedLockHandle : IAsyncDisposable
 {
     /// <summary>The lock key this handle holds.</summary>
@@ -38,4 +53,38 @@ public interface IDistributedLockHandle : IAsyncDisposable
     /// </para>
     /// </remarks>
     long? FencingToken => null;
+
+    /// <summary>
+    /// The lease the backend is actually honouring for this hold, which is not always the
+    /// <see cref="DistributedLockOptions.LeaseDuration"/> that was asked for.
+    /// </summary>
+    /// <remarks>
+    /// <see cref="Timeout.InfiniteTimeSpan"/> means the hold is not bounded by a wall clock at all: it
+    /// lives for the backend session (PostgreSQL advisory locks, SQL Server <c>sp_getapplock</c>,
+    /// ZooKeeper ephemeral znodes), so it survives until release or session loss however long that is.
+    /// Otherwise it is the wall-clock TTL after which the backend reclaims the key if renewal stops -
+    /// on etcd, rounded up to a whole second. This is the value that decides how long another process
+    /// waits to take over after this one crashes, so it is exposed rather than left to be inferred from
+    /// the backend's documentation.
+    /// </remarks>
+    TimeSpan EffectiveLeaseDuration { get; }
+
+    /// <summary>
+    /// Throws <see cref="LeaseLostException"/> if the lease is no longer held.
+    /// </summary>
+    /// <remarks>
+    /// The checked counterpart of <see cref="IsHeld"/>, for the point in a critical section where
+    /// continuing without the lock would be wrong - typically just before the write that the lock was
+    /// taken to protect. <see cref="LostToken"/> covers the same ground for work that is already
+    /// cancellable; this is for straight-line code, which would otherwise have to remember to test
+    /// <see cref="IsHeld"/> and decide what to throw.
+    /// </remarks>
+    /// <exception cref="LeaseLostException">The lease was lost or released.</exception>
+    void ThrowIfLost()
+    {
+        if (!IsHeld)
+        {
+            throw new LeaseLostException(Key);
+        }
+    }
 }

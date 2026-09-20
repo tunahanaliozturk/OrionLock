@@ -48,17 +48,44 @@ public sealed class DistributedLock : IDistributedLock
         ILockEventObserver? eventObserver)
     {
         ArgumentNullException.ThrowIfNull(provider);
-        this.provider = provider;
+        // The fault guard belongs HERE, at this lock's own provider boundary, not in the AddOrionLock
+        // factory. Installed there, the exception contract depended on how the lock was built: a caller
+        // using this public constructor still got raw RedisException / SqlException / RpcException while
+        // the interface documented that driver failures arrive as OrionLockBackendException. Two objects
+        // of the same type with two different contracts is worse than no contract. Idempotent, so the
+        // DI path does not double-wrap.
+        this.provider = provider is BackendFaultGuard ? provider : new BackendFaultGuard(provider);
         this.fifoCoordinator = fifoCoordinator ?? new Fairness.NullFifoWaiterCoordinator();
         this.eventObserver = eventObserver is NullLockEventObserver ? null : eventObserver;
+    }
+
+    /// <summary>
+    /// Refuses a lease the backend cannot honour, rather than letting the backend quietly raise it.
+    /// Consul used to round a lease up to 10 seconds and etcd to 5, so a caller who set 2 s and swapped
+    /// Redis for Consul got a five-times-longer takeover window after a crash with no warning - while
+    /// the README promised application code never changes when you switch backends.
+    /// </summary>
+    private void ValidateLeaseAgainstBackend(DistributedLockOptions options)
+    {
+        var floor = provider.MinimumLeaseDuration;
+        if (options.LeaseDuration < floor)
+        {
+            throw new ArgumentOutOfRangeException(
+                nameof(options), options.LeaseDuration,
+                $"The registered backend cannot honour a lease shorter than {floor}; it would silently "
+                + "hold the lock for longer than you asked, lengthening the takeover window after a "
+                + "crash. Raise LeaseDuration to at least that, or pick a backend with a finer lease.");
+        }
     }
 
     /// <inheritdoc />
     public Task<IDistributedLockHandle?> TryAcquireAsync(
         string key, DistributedLockOptions? options = null, CancellationToken cancellationToken = default)
     {
-        ArgumentException.ThrowIfNullOrWhiteSpace(key);
+        LockKey.Validate(key);
         options ??= new DistributedLockOptions();
+        options.ValidateAndNormalise();
+        ValidateLeaseAgainstBackend(options);
         // Establish the reentrancy owner scope HERE, in the caller's synchronous frame, so it survives
         // into the caller's critical section. See ReentrancyRegistry.EnsureOwnerScope.
         var owner = reentrancy.EnsureOwnerScope(key);
@@ -69,8 +96,10 @@ public sealed class DistributedLock : IDistributedLock
     public Task<IDistributedLockHandle?> TryAcquireAsync(
         string key, TimeSpan deadline, DistributedLockOptions? options = null, CancellationToken cancellationToken = default)
     {
-        ArgumentException.ThrowIfNullOrWhiteSpace(key);
+        LockKey.Validate(key);
         options ??= new DistributedLockOptions();
+        options.ValidateAndNormalise();
+        ValidateLeaseAgainstBackend(options);
         var owner = reentrancy.EnsureOwnerScope(key);
 
         // Mint the owner token ONCE and reuse it across every deadline-retry attempt, exactly as the
@@ -120,8 +149,10 @@ public sealed class DistributedLock : IDistributedLock
     public Task<IDistributedLockHandle> AcquireAsync(
         string key, DistributedLockOptions? options = null, CancellationToken cancellationToken = default)
     {
-        ArgumentException.ThrowIfNullOrWhiteSpace(key);
+        LockKey.Validate(key);
         options ??= new DistributedLockOptions();
+        options.ValidateAndNormalise();
+        ValidateLeaseAgainstBackend(options);
         // Deliberately NOT an async method: EnsureOwnerScope must run in the caller's own execution
         // context (an async body's context changes are discarded when it returns), so the blocking
         // acquire is a thin synchronous shim over the async core.

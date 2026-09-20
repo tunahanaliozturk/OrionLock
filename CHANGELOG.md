@@ -66,7 +66,157 @@ All notable changes to OrionLock are documented in this file. The format is base
   the SQL it emitted before fencing existed while reporting no token. Locking behaviour is unchanged either
   way.
 
+### Changed
+
+- **BREAKING: a lock key is now one opaque name, validated in the core — `/` is no longer legal in a key.**
+  The key is caller data, and two backends spliced it into a namespace they do not own: the Consul
+  provider built an HTTP path out of it and ZooKeeper built a znode path. Both were hardened in place,
+  which left seven backends with three different ideas of what a key is — `/` meant "namespace hierarchy"
+  on Consul and ZooKeeper and nothing on the other five, so the same key addressed different things
+  depending only on which backend you registered. **Used to happen:** a key like `tenant-1/orders` was a
+  two-level KV path on Consul, one flattened `tenant-1~002Forders` znode on ZooKeeper, and a literal
+  string with a slash in it on Redis, SQL Server, PostgreSQL, EF Core and the in-memory backend; a key
+  like `../session/destroy/abc` was refused by Consul and ZooKeeper only, and a key with a control
+  character or 5 000 characters in it was refused by SQL Server only, at different points in the call.
+  **Happens now:** `LockKey.Validate` runs in the core before any backend sees the key and throws
+  `ArgumentException` on the caller's own thread at acquire time — naming the offending key — for a key
+  containing `/`, for the relative names `.` and `..`, for control characters (`U+0000`–`U+001F`,
+  `U+007F`–`U+009F`) and the ranges ZooKeeper refuses in a znode name (`U+D800`–`U+F8FF`,
+  `U+FFF0`–`U+FFFF`), and for a key longer than `LockKey.MaxLength` (200 — the bound the EF Core row
+  already mapped `Key` at, and one that fits SQL Server's ~240-character `@Resource` budget with a
+  prefix). The core validates and rejects only; it does not percent-encode, because a URI path, a znode
+  name and a Redis key are different alphabets — each backend still encodes what survives.
+  **What to do:** move hierarchy out of the key and into the backend's own namespace knob, which every
+  backend already has: `RedisLockOptions.KeyPrefix`, `ConsulLockOptions.KeyPrefix`,
+  `SqlServerLockOptions.KeyPrefix`, `PostgresLockOptions.KeyPrefix`, `ZooKeeperLockOptions.RootPath`,
+  `EtcdLockOptions.KeyPrefix`. `lock.AcquireAsync("tenant-1/orders")` becomes
+  `UseConsul(..., o => o.KeyPrefix = "orionlock/tenant-1/")` plus `AcquireAsync("orders")`, or simply
+  `AcquireAsync("tenant-1:orders")` if the separator carried no meaning. Keys already held on a backend
+  keep their existing on-the-wire names: this changes what you may ask for, not how a valid key is
+  encoded. `ConsulKvPath` is now only a percent-encoder and no longer rejects anything itself.
+
+- **BREAKING: every backend registers the same way, and registering two backends now throws.**
+  The library carried two opposite DI conventions behind one identical composition-root shape. Redis,
+  SQL Server, PostgreSQL, EF Core and Testing registered with `TryAddSingleton` (first registration
+  won); Consul, etcd and ZooKeeper used `RemoveAll` + `AddSingleton` (last registration won).
+  **Used to happen:** `AddOrionLock().UseInMemory().UseRedis("...")` ran the **in-memory fake in
+  production**, silently, because Redis could not overwrite the fake's earlier registration — while the
+  same code with `UseConsul(...)` in place of `UseRedis(...)` ran Consul. Which of the two you got was
+  decided entirely by which backend you picked. **Happens now:** all nine `Use*` registrations go
+  through the new `OrionLockBuilder.UseBackend(backendName, factory)`, and asking for a second, different
+  backend on the same builder throws `InvalidOperationException` naming both. Exactly one backend backs
+  one `IDistributedLock`, so two of them is a composition-root mistake rather than a preference to
+  resolve silently. **What to do:** keep the one `Use*` call you meant and delete the other. Registering
+  the *same* backend twice still works and replaces the earlier registration, so a later `UseRedis(...)`
+  with different options wins as you would expect; a test host that deliberately overrides the
+  production registration starts a fresh builder with another `AddOrionLock()` call, which replaces the
+  provider without the guard. Custom backends should call `UseBackend` rather than registering
+  `IDistributedLockProvider` by hand.
+
+- **BREAKING: `UseRedis(connectionString)` now actually uses that connection string.**
+  It registered the multiplexer with `TryAddSingleton`, so an application that had already registered an
+  `IConnectionMultiplexer` — the common case, since the same app usually caches with Redis too — won the
+  registration. **Used to happen:** the connection string you passed was silently discarded and your
+  locks went to the cache's Redis, not the one you named; nothing reported it. The Consul and etcd
+  builders already used `AddSingleton` *precisely because* the `TryAdd` shape swallows the caller's
+  address argument, and carried comments saying so — the same bug was fixed in two backends and left in
+  the flagship one. **Happens now:** the connection-string overload connects with that string and keeps
+  its multiplexer under a private DI key, so the application's own `IConnectionMultiplexer` is neither
+  read nor replaced, and the container still owns disposal. **What to do:** nothing, if you meant the
+  connection string — you now get it. If you were relying on the old behaviour to make OrionLock share
+  the application's connection, switch to the no-argument `UseRedis()` overload, which is the explicit
+  opt-in to sharing. Note that an app pointing OrionLock at a *different* Redis than its cache now opens
+  a second multiplexer, as it asked to.
+
+- **BREAKING: a lease the backend cannot honour is refused instead of silently raised, and the lease it
+  WILL honour is on the handle.** `LeaseDuration` meant three different things and said nothing about
+  which: Redis and EF Core treated it as a wall-clock TTL, PostgreSQL and SQL Server ignored it (the hold
+  is session-scoped), Consul silently raised it to 10 s, etcd silently raised it to 5 s and rounded up to
+  whole seconds, and ZooKeeper ignored it entirely. **Used to happen:** a caller who set 2 s and swapped
+  Redis for Consul got a five-times-longer takeover window after a crash, with nothing said — while the
+  README promised that "application code never changes when you switch; only the registration does".
+  **Happens now:** a backend advertises `IDistributedLockProvider.MinimumLeaseDuration`, and a
+  `LeaseDuration` below it throws `ArgumentOutOfRangeException` on the caller's own thread at acquire
+  time. Consul's floor is `ConsulLockOptions.MinSessionTtl` (10 s), etcd's is
+  `EtcdLockOptions.MinLeaseTtlSeconds` (5 s); every other backend has none. The new
+  `IDistributedLockHandle.EffectiveLeaseDuration` reports what the backend actually honours, so a caller
+  can assert on it: the requested lease on a TTL backend, that lease rounded up to a whole second on
+  etcd, and `Timeout.InfiniteTimeSpan` on the session-scoped backends (PostgreSQL, SQL Server,
+  ZooKeeper), where no wall clock bounds the hold at all. The README now says this instead of claiming
+  lease portability it never had. **What to do:** if an acquire starts throwing, either raise
+  `LeaseDuration` to the backend's floor or pick a backend with a finer lease — the old code was giving
+  you the floor anyway, just without telling you. Custom `IDistributedLockProvider` implementations need
+  no change (both new members have defaults); custom `IDistributedLockHandle` implementations must add
+  `EffectiveLeaseDuration`, which has no sensible default to infer. The Redis providers report the lease
+  rounded UP to the whole millisecond `PX` / `PEXPIRE` actually take, rather than the sub-millisecond
+  value that was asked for. `ISharedExclusiveLockProvider` gained the same member (with a default), so a
+  reader-writer hold reports the same truth an exclusive one does.
+
+- **The configured namespace prefix is validated too, not just the key.** `LockKey` covers the
+  caller-supplied key, but `ConsulLockOptions.KeyPrefix` is concatenated in front of it and spliced into
+  the same `/v1/kv/{path}` HTTP path, and `ZooKeeperLockOptions.RootPath` is concatenated into the same
+  znode path. A prefix of `"../session/destroy/"` with an ordinary key therefore canonicalised out of
+  the KV namespace and retargeted a lock acquire at Consul's session endpoint — the traversal the key
+  rule exists to stop, arriving through the half of the path the key rule cannot see. Both are now held
+  to the same per-segment rule a lock key is, at registration time, so a bad prefix fails at startup
+  with a message naming `KeyPrefix` / `RootPath` instead of at the first acquire. Backends whose prefix
+  is parameterised rather than concatenated into a path (Redis, etcd, SQL Server, PostgreSQL, EF Core —
+  all of which pass it as a protocol field or a SQL parameter) are unaffected and unchanged.
+
 ### Fixed
+
+- **Driver exceptions no longer escape, and the exception contract is documented in full.**
+  `IDistributedLock` documented only `LockAcquisitionTimeoutException` while a caller could also see
+  `OrionLockBackendException` (SQL Server only), `InvalidOperationException` on an ownerToken collision
+  (SQL Server, PostgreSQL), `ArgumentException` for an over-long key (SQL Server only),
+  `ArgumentOutOfRangeException` for a non-positive lease (Redis-RW, PostgreSQL-RW only), and raw driver
+  exceptions — `SqlException`, `PostgresException`, `RpcException`, `KeeperException`, `RedisException`,
+  `DbException`, HTTP failures — from every backend. Catching lock trouble therefore meant referencing
+  every backend's driver package and writing a different `catch` per registration, which is what a
+  backend-agnostic interface exists to avoid. Driver failures are now wrapped in
+  `OrionLockBackendException` at the provider boundary, with the original as `InnerException`, so
+  `catch (OrionLockBackendException)` works for every backend and stays correct when you switch. The
+  rule is provider-agnostic, so it is applied once in the core rather than copied into seven providers:
+  anything that is not already part of OrionLock's contract is a backend fault. `OperationCanceledException`
+  (cancellation is control flow), `OrionLockBackendException` (including SQL Server's own, which already
+  modelled this shape), `ArgumentException` and friends (the caller's mistake), `InvalidOperationException`
+  (an OrionLock invariant) and `ObjectDisposedException` pass through untouched, with their stacks
+  intact. The full set is now on `IDistributedLock` and in the README.
+
+- **`LeaseLostException` is thrown somewhere.** It was defined and raised nowhere at all.
+  `IDistributedLockHandle.ThrowIfLost()` is its home: the checked counterpart of `IsHeld`, for the point
+  in a critical section where continuing without the lock would be wrong. Added as a default interface
+  method, so no existing implementation breaks.
+
+- **An undisposed handle now stops instead of holding the lock forever.** The renewal watchdog task
+  roots the handle, so a forgotten `await using` — the likeliest mistake with this API — was never
+  collected: it renewed the lease forever, the lock was never released, no other process could take the
+  key, and on SQL Server and PostgreSQL a dedicated open connection stayed pinned for the life of the
+  process. It was silent, because renewal kept succeeding. The new
+  `DistributedLockOptions.MaxHoldDuration` (default: ten times `LeaseDuration`) bounds the watchdog:
+  once it elapses the watchdog stops renewing, `IsHeld` goes false, `LostToken` trips, and the hold is
+  released best-effort — so the key comes back even on the session-scoped backends, where merely not
+  renewing would free nothing and the connection would stay pinned. `IDistributedLockHandle` now
+  documents the consequence of not disposing, which it previously did not mention at all. Raise
+  `MaxHoldDuration` for a genuinely long critical section; it is a leak backstop, not a work deadline,
+  and it applies only when `AutoRenew` is on.
+
+- **`DistributedLockOptions` is validated at every acquire entry point.** It never was, so a
+  misconfigured value either failed differently on each backend or did not fail at all:
+  `LeaseDuration = TimeSpan.Zero` produced `SET ... PX 0` on Redis — which is a DELETE, not a short
+  lease — while throwing from deep inside the Redis and PostgreSQL reader-writer providers; a negative
+  lease collapsed the renewal interval to its 10 ms floor and hammered the backend for the life of the
+  handle; a negative `RetryInterval` threw from inside `Task.Delay` in the acquire loop, with a stack
+  naming OrionLock rather than the caller; and `RenewalFailureGracePeriod = TimeSpan.Zero` surrendered a
+  perfectly good lease on the first transient blip. A non-positive `LeaseDuration`, a negative
+  `WaitTimeout` (including `Timeout.InfiniteTimeSpan`, which the subtraction-based budget reads as an
+  immediate timeout), a non-positive `RetryInterval` and a non-positive `RenewalFailureGracePeriod` now
+  each throw `ArgumentOutOfRangeException` on the caller's own thread, where the value was set. The
+  exclusive and reader-writer surfaces share one validator, mirroring
+  `WaitForAcquireOptions.ValidateAndNormalise`. Two shapes are deliberately NOT rejected because both
+  already work: a `RetryInterval` longer than `WaitTimeout` is clamped to the remaining budget by the
+  acquire loop, and a `LeaseDuration` shorter than `RetryInterval` acquires normally — an uncontended
+  acquire never waits at all, and under contention a shorter lease frees the key sooner.
 
 - **BREAKING (behaviour): reentrancy is now scoped to the flow that holds the lock, not to the key.**
   Same-process reentrancy was keyed on the lock key alone, and `AddOrionLock` registers

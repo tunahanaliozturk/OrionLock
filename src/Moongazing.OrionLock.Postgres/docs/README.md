@@ -1,4 +1,4 @@
-# OrionLock.Postgres
+﻿# OrionLock.Postgres
 
 PostgreSQL `pg_try_advisory_lock` backend for OrionLock distributed locking.
 
@@ -47,5 +47,13 @@ For a given key, any number of `Shared` (read) holders coexist, OR exactly one `
 var handle = await rwLock.TryAcquireExclusiveAsync("k", deadline: TimeSpan.FromSeconds(2));
 if (handle is null) { /* could not acquire in time - ordinary control flow */ }
 ```
+
+## Lease durations
+
+`pg_advisory_lock` is session-scoped: the hold lives until release or session end, and no wall clock
+bounds it. `LeaseDuration` therefore sets the renewal cadence and the watchdog's grace period but does
+not expire anything, so `handle.EffectiveLeaseDuration` reports `Timeout.InfiniteTimeSpan` rather than
+the value you asked for. That is also why a crashed process releases its locks immediately, without
+waiting out a TTL.
 
 Requires the `OrionLock` package. See https://github.com/tunahanaliozturk/OrionLock.

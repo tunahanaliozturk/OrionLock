@@ -108,6 +108,10 @@ if (bounded is null)
 // critical section
 ```
 
+## Option validation
+
+`DistributedLockOptions` is validated at every acquire entry point, on your own thread, where the value was set — a non-positive `LeaseDuration`, a negative `WaitTimeout`, a non-positive `RetryInterval` or a non-positive `RenewalFailureGracePeriod` throws `ArgumentOutOfRangeException` instead of surfacing later as a driver error or not at all. A `RetryInterval` longer than `WaitTimeout` is fine: the acquire loop clamps each poll to the remaining budget.
+
 ## Lease and renewal
 
 Each acquired lock carries a lease (default 30s). A background watchdog renews the lease at `LeaseDuration / 3` while the handle is alive. If renewal fails, `handle.IsHeld` flips to false and `handle.LostToken` is cancelled — so the critical section can observe and abort safely instead of running without the lock. See [docs/lease-and-renewal.md](docs/lease-and-renewal.md).
@@ -180,10 +184,43 @@ guard.Accept($"order:{orderId}", fence);        // throws FencingTokenRegressedE
 It is not a substitute for the SQL above: two application instances would each keep their own idea of the highest token.
 
 The token is also passed to `ILockEventObserver.OnAcquired(key, durationMs, fencingToken)` and attached to the acquire span as `orionlock.fencing_token`. It is deliberately **not** a metric tag — it is unique per acquisition, so as a metric dimension it would mint a fresh time series on every acquire ([docs/lock-key-cardinality.md](docs/lock-key-cardinality.md)).
+### Always dispose the handle
+
+Not disposing does not merely leak — it **holds the lock**. The renewal watchdog roots the handle, so a forgotten `await using` is not collected: it keeps renewing the lease, no other process can ever take the key, and on SQL Server and PostgreSQL it pins a dedicated open connection for as long as it runs. The failure is silent, because renewal keeps succeeding.
+
+`DistributedLockOptions.MaxHoldDuration` (default: ten times `LeaseDuration`) is the backstop. Once it elapses the watchdog stops renewing, `handle.IsHeld` goes false, `handle.LostToken` trips, and the hold is released best-effort — so the key comes back even on the session-scoped backends, where merely not renewing would free nothing. Raise it for a genuinely long critical section; it is a leak backstop, not a work deadline.
+
+## Exceptions
+
+An acquire on `IDistributedLock` raises only these, whichever backend is registered:
+
+| Exception | When |
+| --- | --- |
+| `ArgumentException` | the key is not a legal lock key (see **Lock keys**). Thrown synchronously, on your own thread. |
+| `ArgumentOutOfRangeException` | a `DistributedLockOptions` value is out of range, or `LeaseDuration` is below what the backend can honour. Also synchronous. |
+| `LockAcquisitionTimeoutException` | `AcquireAsync` only, on `WaitTimeout`. The `TryAcquireAsync` overloads return `null` instead. |
+| `OrionLockBackendException` | the backend failed for a reason that is not contention. |
+| `OperationCanceledException` | your cancellation token was cancelled. |
+| `InvalidOperationException` | an OrionLock invariant, in practice only the ownerToken collision SQL Server and PostgreSQL detect. |
+
+**Driver exceptions do not escape.** A `SqlException`, `PostgresException`, `RpcException`, `KeeperException`, `RedisException`, `DbException` or HTTP failure is wrapped in `OrionLockBackendException` at the lock's provider boundary, with the original as `InnerException` — so `catch (OrionLockBackendException)` works without referencing any backend's driver package, and stays correct when you switch backends. The wrapping is installed by `DistributedLock` itself, so it holds whether the lock came from `AddOrionLock` or from `new DistributedLock(provider)`.
+
+A lease lost *after* acquisition is not an exception from these methods. `handle.IsHeld` and `handle.LostToken` report it; `handle.ThrowIfLost()` turns it into `LeaseLostException` at a point in the critical section you choose — typically just before the write the lock was taken to protect.
 
 ## Reentrancy
 
 A single `DistributedLock` instance (a DI singleton) re-acquiring a key it already holds returns a counted nested handle without touching the backend. The outermost dispose releases. Reentrancy collapses same-process re-acquisition only; it does not cross process boundaries.
+
+## Lock keys
+
+A key is **one opaque name**, the same on every backend. `LockKey.Validate` runs in the core before any backend sees the key, and throws `ArgumentException` on your own thread at acquire time — not later, as a driver error from whichever server happened to mind. It refuses:
+
+- **`/`.** The key is caller data that two backends splice into a namespace they do not own: Consul builds `/v1/kv/{key}` out of it and ZooKeeper builds a znode path. A `/` used to mean "hierarchy" there and nothing on the other five, so the same key addressed different things depending on the registration. Express hierarchy through the backend's own namespace knob — `RedisLockOptions.KeyPrefix`, `ConsulLockOptions.KeyPrefix`, `ZooKeeperLockOptions.RootPath`, `SqlServerLockOptions.KeyPrefix` — which every backend already has.
+- **`.` and `..`**, which URI and znode canonicalisation resolve. This cannot be delegated to encoding: .NET unescapes `%2E` back to `.`, so `..` survives percent-encoding and still collapses.
+- **Control characters** (`U+0000`–`U+001F`, `U+007F`–`U+009F`) and the ranges ZooKeeper refuses in a znode name (`U+D800`–`U+F8FF`, `U+FFF0`–`U+FFFF`), so a key fails fast and identically everywhere rather than at one server.
+- **Keys longer than `LockKey.MaxLength` (200)** — the bound the EF Core row maps `Key` at, and small enough to fit SQL Server's `sp_getapplock` `@Resource` budget with a prefix.
+
+The core validates and rejects; it does not encode. A URI path, a znode name and a Redis key are different alphabets, so each backend encodes what remains for its own wire format.
 
 ## Shared / exclusive (reader-writer) locks
 
@@ -243,7 +280,25 @@ Every distributed reader-writer provider keeps a writer marker, a per-reader rec
 
 ## Choosing a backend
 
-All backends implement the same `IDistributedLock`, so application code never changes when you switch; only the registration does. Pick the in-memory backend for tests, then a distributed backend for production.
+All backends implement the same `IDistributedLock`, so application code compiles unchanged when you switch; only the registration does. Pick the in-memory backend for tests, then a distributed backend for production.
+
+**`LeaseDuration` is where the backends genuinely differ, so it is not portable in the way the rest of the API is.** It decides how long another process waits to take over after this one crashes, and each backend can honour a different range of it. Rather than raising a lease it cannot honour behind your back, a backend now advertises a floor and the core throws `ArgumentOutOfRangeException` at acquire time; what the backend *will* honour is on the handle as `EffectiveLeaseDuration`.
+
+| Backend | Shortest lease it can honour | `handle.EffectiveLeaseDuration` |
+| --- | --- | --- |
+| Redis | 1 ms | rounded **up** to a whole millisecond, which is all `PX` / `PEXPIRE` take |
+| EF Core, in-memory | 1 tick | the lease you asked for (on EF Core, subject to the mapped column's precision) |
+| Consul | `ConsulLockOptions.MinSessionTtl`, default **10 s** (Consul's own floor) | the lease you asked for |
+| etcd | `EtcdLockOptions.MinLeaseTtlSeconds`, default **5 s** | rounded **up** to a whole second |
+| PostgreSQL, SQL Server, ZooKeeper | any — the hold is session-scoped, not leased | `Timeout.InfiniteTimeSpan`: no wall clock bounds the hold; it lives until release or session loss |
+
+```csharp
+await using var handle = await locker.AcquireAsync(
+    "order:42", new DistributedLockOptions { LeaseDuration = TimeSpan.FromSeconds(2) });
+
+// Assert on what you actually got, rather than on what you asked for.
+Assert.Equal(TimeSpan.FromSeconds(2), handle.EffectiveLeaseDuration);
+```
 
 ```csharp
 using Microsoft.Extensions.DependencyInjection;
@@ -273,6 +328,16 @@ await using var handle = await locker.AcquireAsync(
 - **`OrionLock.SqlServer`** — native `sp_getapplock` with session-scope lifetime. Crash-safe (no clock-based expiry; SQL Server releases the lock when the session ends) and faster than the EF Core lock table on SQL Server.
 - **`OrionLock.Postgres`** — native `pg_try_advisory_lock` with session-scope lifetime, crash-safe with the same rationale as SqlServer. Also ships the distributed reader-writer lock (`UsePostgresSharedExclusive()`) over clock-leased rows serialized by `pg_advisory_xact_lock`.
 - **`OrionLock.Testing`** — in-memory provider for tests, no Redis or DB required.
+
+### Exactly one backend
+
+Every backend registers through the same `OrionLockBuilder.UseBackend(name, factory)`, so they all behave identically: one `IDistributedLock`, one backend. Asking for a second one on the same builder throws `InvalidOperationException` naming both, rather than silently picking one:
+
+```csharp
+services.AddOrionLock().UseInMemory().UseRedis("localhost:6379"); // throws
+```
+
+Re-registering the *same* backend replaces it, so a later `UseRedis(...)` with different options wins as you would expect. To override deliberately — a test host replacing the production registration — start a fresh builder with another `AddOrionLock()` call.
 
 ## Trimming and Native AOT
 

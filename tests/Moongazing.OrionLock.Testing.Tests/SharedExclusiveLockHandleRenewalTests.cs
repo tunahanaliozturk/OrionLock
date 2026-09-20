@@ -1,4 +1,4 @@
-using Moongazing.OrionLock.Internal;
+﻿using Moongazing.OrionLock.Internal;
 using Moongazing.OrionLock.Providers;
 
 namespace Moongazing.OrionLock.Testing.Tests;
@@ -53,6 +53,10 @@ public class SharedExclusiveLockHandleRenewalTests
             // Generous grace so repeated unrelated-OCE renew failures do NOT surrender during the
             // observation window; the point is that the loop keeps retrying, not that it surrenders.
             RenewalFailureGracePeriod = TimeSpan.FromSeconds(30),
+            // The hold is observed for ~1 s on a 60 ms lease, which is well past the default
+            // MaxHoldDuration of ten leases; pin it so the watchdog's leak backstop does not surrender
+            // a hold this test needs alive.
+            MaxHoldDuration = TimeSpan.FromSeconds(30),
             AutoRenew = true,
         };
 

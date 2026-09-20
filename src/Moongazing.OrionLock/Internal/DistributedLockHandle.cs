@@ -47,6 +47,7 @@ internal sealed class DistributedLockHandle : IDistributedLockHandle
         ArgumentNullException.ThrowIfNull(provider);
         ArgumentNullException.ThrowIfNull(options);
         Key = key;
+        EffectiveLeaseDuration = provider.EffectiveLeaseDuration(options.LeaseDuration);
         lease = new LeaseWatchdog(
             key,
             (leaseDuration, ct) => provider.TryRenewAsync(key, ownerToken, leaseDuration, ct),
@@ -60,6 +61,9 @@ internal sealed class DistributedLockHandle : IDistributedLockHandle
 
     /// <inheritdoc />
     public string Key { get; }
+
+    /// <inheritdoc />
+    public TimeSpan EffectiveLeaseDuration { get; }
 
     /// <inheritdoc />
     public bool IsHeld => lease.IsHeld;

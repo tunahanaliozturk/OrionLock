@@ -32,6 +32,10 @@ public static class ServiceCollectionExtensions
         {
             var raw = sp.GetRequiredService<IDistributedLockProvider>();
             var measured = raw is MeasuringLockProvider ? raw : new MeasuringLockProvider(raw);
+            // The backend-fault guard is NOT applied here: DistributedLock installs it at its own
+            // provider boundary, so the exception contract holds however the lock was constructed. It
+            // lands outside this measuring decorator either way, which is what keeps the backend metric
+            // tag resolving from the concrete provider rather than from the guard.
             var fifo = sp.GetRequiredService<IFifoWaiterCoordinator>();
             // v0.3.25: explicit GetService for the optional observer so consumer
             // registration is honoured (the ActivatorUtilities longest-ctor trap from

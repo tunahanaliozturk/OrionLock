@@ -21,8 +21,12 @@ using System.Text;
 /// anything containing <c>/</c> or a control character - without a separate rule for each.
 /// </para>
 /// <para>
-/// This is per-backend hardening of a rule that belongs to the whole library: the key is caller data on
-/// every backend, and only a shared validator in the core can give them all one rule.
+/// This is now only an encoder. Whether a key is acceptable at all - no <c>/</c>, no <c>.</c> or
+/// <c>..</c>, no control characters, a length bound - is decided by
+/// <see cref="Moongazing.OrionLock.LockKey"/> in the core before any backend sees the key, so all seven
+/// refuse the same keys on the caller's own thread. The escaping below stays because it is what makes a
+/// validated key a legal znode <i>name</i>, and because it keeps znode names stable for keys already in
+/// flight.
 /// </para>
 /// </remarks>
 internal static class ZooKeeperKeyName

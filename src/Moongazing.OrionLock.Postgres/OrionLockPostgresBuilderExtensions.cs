@@ -25,10 +25,7 @@ public static class OrionLockPostgresBuilderExtensions
         var options = new PostgresLockOptions();
         configure?.Invoke(options);
 
-        builder.Services.TryAddSingleton<IDistributedLockProvider>(
-            _ => new PostgresLockProvider(connectionString, options));
-
-        return builder;
+        return builder.UseBackend("postgres", _ => new PostgresLockProvider(connectionString, options));
     }
 
     /// <summary>

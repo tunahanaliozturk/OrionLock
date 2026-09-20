@@ -1,4 +1,4 @@
-using Microsoft.Extensions.DependencyInjection;
+﻿using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.DependencyInjection.Extensions;
 using Moongazing.OrionLock.DependencyInjection;
 using Moongazing.OrionLock.Providers;
@@ -24,9 +24,6 @@ public static class OrionLockSqlServerBuilderExtensions
         var options = new SqlServerLockOptions();
         configure?.Invoke(options);
 
-        builder.Services.TryAddSingleton<IDistributedLockProvider>(
-            _ => new SqlServerLockProvider(connectionString, options));
-
-        return builder;
+        return builder.UseBackend("sqlserver", _ => new SqlServerLockProvider(connectionString, options));
     }
 }

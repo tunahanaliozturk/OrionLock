@@ -1,4 +1,4 @@
-namespace Moongazing.OrionLock.Internal;
+﻿namespace Moongazing.OrionLock.Internal;
 
 /// <summary>
 /// A nested handle returned for a reentrant (same key, same process) acquisition. Its
@@ -35,6 +35,10 @@ internal sealed class ReentrantLockHandle : IDistributedLockHandle
     /// write happened to carry the lower one.
     /// </remarks>
     public long? FencingToken => entry.RealHandle.FencingToken;
+
+    /// <inheritdoc />
+    /// <remarks>A nested handle rides the outermost hold's lease; it takes none of its own.</remarks>
+    public TimeSpan EffectiveLeaseDuration => entry.RealHandle.EffectiveLeaseDuration;
 
     /// <inheritdoc />
     public async ValueTask DisposeAsync()

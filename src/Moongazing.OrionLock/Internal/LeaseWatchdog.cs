@@ -34,6 +34,10 @@ internal sealed class LeaseWatchdog : IAsyncDisposable
     private readonly bool leaseDurationIsTtl;
     private readonly TimeSpan leaseDuration;
     private readonly TimeSpan renewalGrace;
+    // How long this watchdog will keep the hold alive before giving up on it. See
+    // DistributedLockOptions.MaxHoldDuration: the watchdog task roots the handle, so without this an
+    // undisposed handle renews forever and the key is never released.
+    private readonly TimeSpan maxHold;
     private readonly CancellationTokenSource lostCts = new();
     // Captured at construction: CancellationTokenSource.Token throws ObjectDisposedException once the
     // source is disposed, so reading LostToken from a finally / logging path after `await using` used to
@@ -103,6 +107,7 @@ internal sealed class LeaseWatchdog : IAsyncDisposable
         this.leaseDurationIsTtl = leaseDurationIsTtl;
         leaseDuration = options.LeaseDuration;
         renewalGrace = options.RenewalFailureGracePeriod ?? options.LeaseDuration;
+        maxHold = options.ResolvedMaxHoldDuration;
         this.nowUtc = nowUtc ?? (() => DateTime.UtcNow);
         this.eventObserver = eventObserver is NullLockEventObserver ? null : eventObserver;
         lostToken = lostCts.Token;
@@ -167,6 +172,17 @@ internal sealed class LeaseWatchdog : IAsyncDisposable
             while (!ct.IsCancellationRequested)
             {
                 await Task.Delay(interval, ct).ConfigureAwait(false);
+
+                // A handle that is never disposed keeps this loop - and therefore itself - alive
+                // forever, so the lock is never released and no other process can have the key. Stop
+                // renewing once the hold has outlived MaxHoldDuration, and release, so a forgotten
+                // handle self-heals on session-scoped backends too (where simply not renewing frees
+                // nothing, and a dedicated connection stays pinned for the life of the process).
+                if (System.Diagnostics.Stopwatch.GetElapsedTime(acquireTimestamp) >= maxHold)
+                {
+                    await SurrenderOnMaxHoldAsync().ConfigureAwait(false);
+                    return;
+                }
 
                 bool renewed;
                 try
@@ -259,6 +275,25 @@ internal sealed class LeaseWatchdog : IAsyncDisposable
         // v0.3.27: nothing increments successfulRenewals after this point, so the count is final.
         EmitRenewalsPerHoldOnce();
         SafeCancelLost();
+    }
+
+    /// <summary>
+    /// The hold outlived <see cref="DistributedLockOptions.MaxHoldDuration"/>: surrender it exactly as a
+    /// backend-confirmed loss would, then release. The release is what makes this self-heal on a
+    /// session-scoped backend, where stopping renewal frees nothing; it is best-effort and idempotent,
+    /// so a later <see cref="DisposeAsync"/> on the abandoned handle is a harmless no-op.
+    /// </summary>
+    private async Task SurrenderOnMaxHoldAsync()
+    {
+        Surrender();
+        try
+        {
+            await release().ConfigureAwait(false);
+        }
+        catch
+        {
+            // Best-effort: on a TTL backend the lease now expires on its own.
+        }
     }
 
     /// <summary>

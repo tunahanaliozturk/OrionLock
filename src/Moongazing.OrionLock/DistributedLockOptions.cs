@@ -39,4 +39,105 @@ public sealed class DistributedLockOptions
     /// (matching the lease's natural TTL).
     /// </summary>
     public TimeSpan? RenewalFailureGracePeriod { get; set; }
+
+    /// <summary>
+    /// How long the renewal watchdog keeps a hold alive before giving up on it. Defaults to
+    /// <see langword="null"/> = ten times <see cref="LeaseDuration"/>.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// The watchdog task roots the handle, so a handle that is never disposed - a forgotten
+    /// <c>await using</c>, the likeliest mistake with this API - used to renew its lease forever: the
+    /// lock was never released, no other process could ever take the key, and on SQL Server and
+    /// PostgreSQL a dedicated open connection stayed pinned for the life of the process. Nothing ever
+    /// noticed, because renewal kept succeeding.
+    /// </para>
+    /// <para>
+    /// Once this elapses since acquisition the watchdog stops renewing, surrenders the hold
+    /// (<see cref="IDistributedLockHandle.IsHeld"/> goes false, <see cref="IDistributedLockHandle.LostToken"/>
+    /// trips) and runs a best-effort release, so the key comes back even on the session-scoped backends
+    /// where simply not renewing would free nothing. Only the watchdog is bounded: with
+    /// <see cref="AutoRenew"/> off there is nothing renewing to stop, and the backend's own TTL already
+    /// decides the hold's lifetime.
+    /// </para>
+    /// <para>
+    /// The default is deliberately generous - it is a backstop for a leak, not a work deadline. Raise it
+    /// for a genuinely long critical section; a hold that legitimately outlives it should say so rather
+    /// than be surrendered mid-flight.
+    /// </para>
+    /// </remarks>
+    public TimeSpan? MaxHoldDuration { get; set; }
+
+    /// <summary>
+    /// Validates the option values, on the caller's own thread at acquire time. Every acquire entry
+    /// point calls this, so a misconfigured value is reported where it was set rather than as a driver
+    /// error from inside the retry loop or the renewal watchdog - or, worse, not at all.
+    /// </summary>
+    /// <remarks>
+    /// The same job <see cref="Providers.WaitForAcquireOptions.ValidateAndNormalise"/> already did for
+    /// the polling helper one file over. Deliberately NOT rejected here, because both already work:
+    /// a <see cref="RetryInterval"/> longer than <see cref="WaitTimeout"/> is clamped to the remaining
+    /// budget by the acquire loop rather than overshooting it, and a <see cref="LeaseDuration"/> shorter
+    /// than <see cref="RetryInterval"/> acquires normally - an uncontended acquire never waits at all,
+    /// and under contention a short lease frees the key sooner, not later.
+    /// </remarks>
+    /// <exception cref="ArgumentOutOfRangeException">An option value is outside its supported range.</exception>
+    internal void ValidateAndNormalise()
+    {
+        if (LeaseDuration <= TimeSpan.Zero)
+        {
+            // Zero is not "a very short lease": on Redis it is SET ... PX 0, which is a DELETE, and the
+            // Redis and PostgreSQL reader-writer providers reject it outright. A negative one also
+            // collapses the renewal interval to its 10 ms floor, so the watchdog hammers the backend
+            // for the life of the handle.
+            throw new ArgumentOutOfRangeException(
+                nameof(LeaseDuration), LeaseDuration, "LeaseDuration must be positive.");
+        }
+
+        if (WaitTimeout < TimeSpan.Zero)
+        {
+            // Not Timeout.InfiniteTimeSpan either: the acquire loop measures the budget by subtraction,
+            // so a negative value is an immediate timeout wearing the costume of an unbounded wait.
+            throw new ArgumentOutOfRangeException(
+                nameof(WaitTimeout), WaitTimeout,
+                "WaitTimeout cannot be negative. Use TimeSpan.Zero for a single attempt; there is no "
+                + "infinite value - pass a bounded timeout.");
+        }
+
+        if (RetryInterval <= TimeSpan.Zero)
+        {
+            // A negative interval throws from inside Task.Delay, deep in the acquire loop, with a stack
+            // that names OrionLock rather than the caller. Zero is a busy spin on the backend.
+            throw new ArgumentOutOfRangeException(
+                nameof(RetryInterval), RetryInterval, "RetryInterval must be positive.");
+        }
+
+        if (RenewalFailureGracePeriod is { } grace && grace <= TimeSpan.Zero)
+        {
+            // Zero means the watchdog surrenders a perfectly good lease on the first transient blip.
+            throw new ArgumentOutOfRangeException(
+                nameof(RenewalFailureGracePeriod), grace,
+                "RenewalFailureGracePeriod must be positive when set; leave it null to default to "
+                + "LeaseDuration.");
+        }
+
+        if (MaxHoldDuration is { } maxHold && maxHold < LeaseDuration)
+        {
+            // Shorter than one lease means the watchdog gives up before it has renewed even once, which
+            // is not a leak backstop but an immediate surrender.
+            throw new ArgumentOutOfRangeException(
+                nameof(MaxHoldDuration), maxHold,
+                "MaxHoldDuration must be at least LeaseDuration when set; leave it null to default to "
+                + "ten times LeaseDuration.");
+        }
+    }
+
+    /// <summary>
+    /// The watchdog's give-up deadline: <see cref="MaxHoldDuration"/>, or ten leases when unset.
+    /// Saturates instead of overflowing on an absurdly long lease.
+    /// </summary>
+    internal TimeSpan ResolvedMaxHoldDuration =>
+        MaxHoldDuration ?? (LeaseDuration.Ticks > TimeSpan.MaxValue.Ticks / 10
+            ? TimeSpan.MaxValue
+            : TimeSpan.FromTicks(LeaseDuration.Ticks * 10));
 }

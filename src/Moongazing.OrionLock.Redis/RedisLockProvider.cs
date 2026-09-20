@@ -53,6 +53,20 @@ public sealed class RedisLockProvider : IDistributedLockProvider
         this.options = options;
     }
 
+    /// <inheritdoc />
+    /// <remarks>
+    /// Redis <c>PX</c> / <c>PEXPIRE</c> take whole milliseconds, so <see cref="RedisLease"/> rounds a
+    /// lease UP to the next one - a request of a single tick really is a 1 ms TTL. Without this override
+    /// the interface default reported the requested duration back verbatim, so the property that
+    /// promises the lease the backend actually honours was reporting the one it does not.
+    /// </remarks>
+    public TimeSpan EffectiveLeaseDuration(TimeSpan requested)
+        // A non-positive lease is refused by the core before any hold exists; return it unchanged rather
+        // than throwing, because this is a query about a lease and not an attempt to take one.
+        => requested <= TimeSpan.Zero
+            ? requested
+            : TimeSpan.FromMilliseconds(RedisLease.ToMilliseconds(requested));
+
     private IDatabase Db => multiplexer.GetDatabase(options.Database);
 
     private RedisKey Key(string key) => options.KeyPrefix + key;

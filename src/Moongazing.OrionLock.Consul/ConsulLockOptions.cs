@@ -1,4 +1,4 @@
-namespace Moongazing.OrionLock.Consul;
+﻿namespace Moongazing.OrionLock.Consul;
 
 /// <summary>
 /// Configuration for the Consul-backed <see cref="ConsulLockProvider"/>.
@@ -21,12 +21,17 @@ public sealed class ConsulLockOptions
     public string SessionBehavior { get; set; } = "release";
 
     /// <summary>
-    /// Consul session TTL refresh window above the OrionLock lease duration. Consul rejects
-    /// session TTLs shorter than 10 seconds, so the provider takes <c>max(LeaseDuration,
-    /// MinSessionTtl)</c> as the actual session TTL and renews on
-    /// <c>IDistributedLockProvider.TryRenewAsync</c>. Default 10 seconds, the Consul-enforced
-    /// floor.
+    /// The shortest lease this backend can honour. Consul rejects session TTLs shorter than 10
+    /// seconds, so the provider advertises this as its
+    /// <c>IDistributedLockProvider.MinimumLeaseDuration</c> and the core refuses a shorter
+    /// <c>LeaseDuration</c> with <see cref="ArgumentOutOfRangeException"/> at acquire time. A lease at
+    /// or above it becomes the session TTL verbatim and is renewed on
+    /// <c>IDistributedLockProvider.TryRenewAsync</c>. Default 10 seconds, the Consul-enforced floor.
     /// </summary>
+    /// <remarks>
+    /// The provider used to take <c>max(LeaseDuration, MinSessionTtl)</c> silently, so a caller who
+    /// asked for 2 seconds got 10 - a five-times-longer takeover window after a crash - with no warning.
+    /// </remarks>
     public TimeSpan MinSessionTtl { get; set; } = TimeSpan.FromSeconds(10);
 
     /// <summary>
@@ -44,8 +49,8 @@ public sealed class ConsulLockOptions
     /// <para>
     /// <b>It is only long enough if it outlasts that window.</b> With OrionLock's defaults the holder
     /// surrenders when <c>RenewalFailureGracePeriod</c> (default = <c>LeaseDuration</c>, 30s) elapses
-    /// without a successful renewal, and Consul invalidates the session when its TTL
-    /// (<c>max(LeaseDuration, MinSessionTtl)</c>, also 30s) elapses - the two coincide, so the delay only
+    /// without a successful renewal, and Consul invalidates the session when its TTL (the requested
+    /// <c>LeaseDuration</c>, also 30s) elapses - the two coincide, so the delay only
     /// has to cover scheduling and clock jitter, which 5 seconds does comfortably. Raise
     /// <c>RenewalFailureGracePeriod</c> above the session TTL and you MUST raise this by the same amount,
     /// or the guarantee is gone.
@@ -91,4 +96,43 @@ public sealed class ConsulLockOptions
     /// </para>
     /// </remarks>
     public bool FencingTokens { get; set; }
+
+    /// <summary>
+    /// Validate + normalise the options. Called by the provider constructor and by <c>UseConsul</c>, so a
+    /// misconfigured prefix fails at startup rather than at the first acquire.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// <see cref="KeyPrefix"/> is concatenated in front of the lock key and the result is spliced into
+    /// Consul's <c>/v1/kv/{path}</c> HTTP path, so the prefix is path data exactly as the key is. The
+    /// core's <see cref="Moongazing.OrionLock.LockKey"/> covers the caller-supplied half; this covers
+    /// the configured half. Without it a prefix of <c>"../session/destroy/"</c> in front of an ordinary
+    /// key canonicalises out of the KV namespace entirely and retargets a lock acquire at Consul's
+    /// session endpoint - and percent-encoding cannot save it, because .NET unescapes <c>%2E</c> back
+    /// to <c>.</c> during canonicalisation.
+    /// </para>
+    /// <para>
+    /// Each <c>/</c>-separated segment is held to the same rule a lock key is, so a prefix segment and a
+    /// key are the same kind of thing. One trailing <c>/</c> is the conventional shape
+    /// (<c>"orionlock/"</c>) and is allowed; a leading, doubled or otherwise empty segment is not,
+    /// because it collapses during canonicalisation and silently addresses a different key.
+    /// </para>
+    /// </remarks>
+    /// <exception cref="ArgumentException">A prefix segment is not a legal path segment.</exception>
+    internal void ValidateAndNormalise()
+    {
+        KeyPrefix ??= string.Empty;
+        if (KeyPrefix.Length == 0)
+        {
+            return;
+        }
+
+        // Strip exactly ONE trailing slash - the conventional "orionlock/" shape. A second one leaves an
+        // empty segment, which is caught below.
+        var body = KeyPrefix.EndsWith('/') ? KeyPrefix[..^1] : KeyPrefix;
+        foreach (var segment in body.Split('/'))
+        {
+            LockKey.Validate(segment, nameof(KeyPrefix));
+        }
+    }
 }

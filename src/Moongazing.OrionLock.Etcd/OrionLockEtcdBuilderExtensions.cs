@@ -1,4 +1,4 @@
-namespace Moongazing.OrionLock.Etcd;
+﻿namespace Moongazing.OrionLock.Etcd;
 
 using global::dotnet_etcd;
 using global::dotnet_etcd.interfaces;
@@ -31,11 +31,9 @@ public static class OrionLockEtcdBuilderExtensions
         builder.Services.AddSingleton<IEtcdClient>(_ => new EtcdClient(connectionString));
         builder.Services.TryAddSingleton<IEtcdClientAdapter>(
             sp => new DefaultEtcdClientAdapter(sp.GetRequiredService<IEtcdClient>()));
-        builder.Services.RemoveAll<IDistributedLockProvider>();
-        builder.Services.AddSingleton<IDistributedLockProvider>(
-            sp => new EtcdLockProvider(sp.GetRequiredService<IEtcdClientAdapter>(), options));
 
-        return builder;
+        return builder.UseBackend(
+            "etcd", sp => new EtcdLockProvider(sp.GetRequiredService<IEtcdClientAdapter>(), options));
     }
 
     /// <summary>
@@ -53,10 +51,8 @@ public static class OrionLockEtcdBuilderExtensions
 
         builder.Services.TryAddSingleton<IEtcdClientAdapter>(
             sp => new DefaultEtcdClientAdapter(sp.GetRequiredService<IEtcdClient>()));
-        builder.Services.RemoveAll<IDistributedLockProvider>();
-        builder.Services.AddSingleton<IDistributedLockProvider>(
-            sp => new EtcdLockProvider(sp.GetRequiredService<IEtcdClientAdapter>(), options));
 
-        return builder;
+        return builder.UseBackend(
+            "etcd", sp => new EtcdLockProvider(sp.GetRequiredService<IEtcdClientAdapter>(), options));
     }
 }

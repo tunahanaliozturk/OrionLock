@@ -51,6 +51,7 @@ internal sealed class SharedExclusiveLockHandle : IDistributedLockHandle
         ArgumentNullException.ThrowIfNull(options);
         Key = key;
         this.mode = mode;
+        EffectiveLeaseDuration = provider.EffectiveLeaseDuration(options.LeaseDuration);
         lease = new LeaseWatchdog(
             key,
             (leaseDuration, ct) => provider.TryRenewAsync(key, ownerToken, mode, leaseDuration, ct),
@@ -66,6 +67,9 @@ internal sealed class SharedExclusiveLockHandle : IDistributedLockHandle
 
     /// <summary>The mode (shared or exclusive) this hold was acquired in.</summary>
     public LockMode Mode => mode;
+
+    /// <inheritdoc />
+    public TimeSpan EffectiveLeaseDuration { get; }
 
     /// <inheritdoc />
     public bool IsHeld => lease.IsHeld;

@@ -52,4 +52,33 @@ public interface IDistributedLockProvider
     /// holds the lock longer than the configured <c>LeaseDuration</c>.
     /// </summary>
     bool LeaseDurationIsTtl => true;
+
+    /// <summary>
+    /// The shortest lease this backend can honour. A requested
+    /// <see cref="DistributedLockOptions.LeaseDuration"/> below this is rejected by the core with
+    /// <see cref="ArgumentOutOfRangeException"/> at acquire time. Defaults to
+    /// <see cref="TimeSpan.Zero"/> - no floor.
+    /// </summary>
+    /// <remarks>
+    /// Backends used to raise a too-short lease silently: Consul to 10 seconds, etcd to 5. A caller who
+    /// set 2 s and swapped Redis for Consul got a takeover window five times longer than they asked for
+    /// after a crash, with no warning - while the README promised that application code never changes
+    /// when you switch backends. Refusing is the honest answer: the caller either raises the lease or
+    /// picks a backend that can honour it.
+    /// </remarks>
+    TimeSpan MinimumLeaseDuration => TimeSpan.Zero;
+
+    /// <summary>
+    /// The lease this backend will ACTUALLY honour for <paramref name="requested"/>, as reported by
+    /// <see cref="IDistributedLockHandle.EffectiveLeaseDuration"/> so a caller can assert on it.
+    /// </summary>
+    /// <remarks>
+    /// The default says what <see cref="LeaseDurationIsTtl"/> already implies: a TTL backend honours the
+    /// requested duration as a wall clock, and a session-scoped one (PostgreSQL advisory locks, SQL
+    /// Server <c>sp_getapplock</c>, ZooKeeper ephemeral znodes) does not bound the hold by clock at all,
+    /// which is reported as <see cref="Timeout.InfiniteTimeSpan"/>. Only a backend that rounds - etcd,
+    /// which takes whole-second TTLs - needs to override.
+    /// </remarks>
+    TimeSpan EffectiveLeaseDuration(TimeSpan requested)
+        => LeaseDurationIsTtl ? requested : Timeout.InfiniteTimeSpan;
 }
