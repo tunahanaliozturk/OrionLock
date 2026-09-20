@@ -17,5 +17,9 @@
   <ItemGroup>
     <PackageReference Include="BenchmarkDotNet" Version="0.14.0" />
     <ProjectReference Include="..\..\src\Moongazing.OrionLock\Moongazing.OrionLock.csproj" />
+    <!-- SharedExclusiveLockBenchmarks measures the reader-writer path against the shipped
+         in-memory RW provider: the writer-fairness behaviour under test lives in that provider,
+         so a bench-local stand-in would measure a different algorithm. -->
+    <ProjectReference Include="..\..\src\Moongazing.OrionLock.Testing\Moongazing.OrionLock.Testing.csproj" />
   </ItemGroup>
 </Project>

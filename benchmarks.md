@@ -1,7 +1,8 @@
 # OrionLock Benchmarks
 
 A BenchmarkDotNet suite that measures the dependency-free hot paths of OrionLock: the core lock
-orchestration, the FIFO fairness coordinator, the metric key-bucketing hash, and same-process
+orchestration under contention and at rest, lease renewal at scale, release on its own, the
+reader-writer path, the FIFO fairness coordinator, the metric key-bucketing hash, and same-process
 reentrancy. Every scenario runs entirely in-process. None of them touch Redis, SQL Server, Postgres,
 ZooKeeper, etcd, or any other external service, so the numbers reflect the cost of the OrionLock
 abstraction itself rather than a network or database round-trip.
@@ -37,12 +38,20 @@ land in different buckets on different hosts).
 
 ### FifoCoordinatorBenchmarks
 
-Measures the uncontended fast path of `InProcessFifoWaiterCoordinator`. A single caller enters the
-per-key FIFO queue, becomes the head immediately with no wait, then leaves. This is the overhead the
-opt-in fair-lock option adds to every blocking `AcquireAsync` when the queue is empty, which is the
-common case under low contention. It exercises the real Enter/Leave contract end to end (queue
-allocation, head detection, queue-depth metric emission, ticket disposal), so the figure is the floor
-that opting into FIFO ordering imposes before any actual contention exists.
+Measures `InProcessFifoWaiterCoordinator` across a range of queue depths (0, 8, 64, 256). One caller
+takes the head of the per-key FIFO queue, `QueueDepth` more line up behind it, then the whole queue
+drains in arrival order.
+
+Depth 0 is the uncontended round trip this class used to measure on its own: enter an empty queue,
+become the head immediately, leave. That is the overhead the opt-in fair-lock option adds to every
+blocking `AcquireAsync` under low contention, and it remains the baseline row.
+
+The larger depths exist because the empty queue structurally cannot show what the coordinator does
+per enter: it counts the live waiters ahead of the newcomer with a LINQ scan over the whole queue,
+under the coordinator's single process-wide lock. That scan is O(N) in the current queue depth, so
+building a queue of N costs O(N^2) scanning, and because the lock is global rather than per key,
+every key in the process serializes behind it. The per-depth means and the allocation column (a LINQ
+enumerator per enter) are where that shows up.
 
 ### DistributedLockAcquireBenchmarks
 
@@ -63,6 +72,98 @@ for the whole run, so every measured acquire is a nested re-entry on an already-
 collapse into a counted nested handle in the reentrancy registry rather than issuing a second backend
 call. It quantifies how cheap a recursive critical section is, which matters for code that re-enters a
 held lock deep in a call chain (the very scenario the reentrancy-depth metrics exist to surface).
+
+## Benchmarks added as a pre-performance-work baseline
+
+Everything in this section was added to make the performance work measurable BEFORE anyone changes
+it. The numbers these produce today are a baseline, not a target and not an endorsement: they record
+what the current implementation costs, so a change can be shown to have improved or regressed it.
+Until this went in, the suite measured only the uncontended, single-handle, watchdog-off case, so
+none of the costs below were visible at all.
+
+### ContentionBenchmarks
+
+Races 2, 8, 64 and 256 concurrent blocking `AcquireAsync` callers for a SINGLE key, and reports both
+the drain latency and the number of `TryAcquireAsync` calls the backend actually saw.
+
+The call count is the point. `AcquireAsync` polls at a flat `RetryInterval` with no jitter and no
+backoff, so every waiter wakes on the same tick and the store sees an N-wide burst each interval,
+while only one of them can win. Against the in-process provider each call costs nanoseconds, so the
+latency column alone would never reveal this; the reported per-operation call count does, and it
+grows faster than the waiter count.
+
+Two details are deliberate. Each waiter gets its own `DistributedLock` instance over a shared
+provider, because reentrancy is tracked per instance and N waiters sharing one instance would
+collapse into nested handles and never contend at all. And a gate handle holds the key until every
+waiter has registered at least one failed attempt, so the burst is deterministic instead of a
+function of how fast the thread pool ramps. The retry interval is scaled down from the 250 ms
+default purely to keep wall time tractable; the call count is interval-independent, because each
+poll round still hands the key to exactly one waiter.
+
+### RenewalScaleBenchmarks
+
+Holds 1, 100 and 1000 auto-renewing handles for a fixed window, and reports allocations, renewals
+issued and wall time. This is the only class in the suite that runs with `AutoRenew = true`.
+
+Every held handle owns a private task, a private `CancellationTokenSource` and a private
+`Task.Delay` timer, and renews at exactly `LeaseDuration / 3` with no jitter. A host holding N leases
+therefore carries N background tasks and N timers, and because the interval is a fixed fraction of
+the lease with no spread, handles acquired together keep renewing together: the store sees N
+renewals on one tick rather than N spread over the interval. The allocation column is the per-handle
+overhead; the printed renewal count is the traffic.
+
+### ReleaseBenchmarks
+
+Measures disposal on its own, with `AutoRenew` on and off. Everywhere else the release path is fused
+to an acquire inside a single measured method, so its cost has never been separable, and the two
+halves are not symmetric: acquire is one provider call, while disposing an auto-renewing handle must
+cancel the watchdog's token source and await the watchdog task before it can issue the release.
+
+The on/off pair is the reading. The gap between the two rows is what every auto-renewing handle
+costs to put down, paid inline on the caller's way out of the `using` block. The handle is acquired
+in `[IterationSetup]` so only the dispose is timed, which is why this class runs one invocation per
+iteration; that buys a coarser timer, so read the rows as the on/off delta rather than as an
+absolute figure.
+
+### SharedExclusiveLockBenchmarks
+
+Covers `SharedExclusiveLock`, the reader-writer path, which had no benchmark at all. It is a
+separate orchestration from `DistributedLock` (its own retry loop, no reentrancy registry, no FIFO
+coordinator), so none of the exclusive-lock numbers transfer to it.
+
+Three shapes are measured: the uncontended shared acquire, which is the floor a reader pays; the
+shared-on-shared acquire, which is what a second concurrent reader costs while a first one holds and
+should land within noise of the baseline, since making that case cheap is the whole reason to reach
+for a reader-writer lock; and a writer waiting on readers, where the writer is refused while a
+reader holds, records the backend's pending-writer reservation, polls, and takes the key once the
+reader drains. The handoff is deterministic: the writer's first attempt runs inline before
+`AcquireExclusiveAsync` returns its task, so it is guaranteed to have been refused before the reader
+releases. What is left to measure is the poll-driven wake-up, because nothing notifies the writer.
+
+The backend is the shipped `InMemorySharedExclusiveLockProvider` rather than a bench-local stand-in,
+because the writer-fairness behaviour under test lives in the provider and a simplified fake would
+measure a different algorithm.
+
+### Backend round trips, asserted in the test suite
+
+The cost of a failed acquire attempt against a real backend is not a timing at all, it is a count of
+client calls, and a count belongs in a test rather than in a results table: a number in a table is
+something a human has to notice, a failing test is not. `ZooKeeperRoundTripCountTests`,
+`ConsulRoundTripCountTests` and `EtcdRoundTripCountTests` use hand-written counting fakes over
+`IZooKeeperClientAdapter`, `IConsulClientAdapter` and `IEtcdClientAdapter` to pin exactly what one
+attempt costs today:
+
+| Backend   | Failed attempt | Won attempt | The calls                                            |
+| --------- | -------------: | ----------: | ---------------------------------------------------- |
+| ZooKeeper |              4 |           3 | ensure path, create sequential, get children, delete |
+| Consul    |              3 |           2 | create session, KV acquire, destroy session          |
+| etcd      |              3 |           2 | lease grant, put-if-absent, lease revoke             |
+
+The failed-attempt column is the one that matters, because every poll of a contended key pays it and
+it multiplies by the waiter count and the poll rate. Each backend spends two thirds of a losing
+attempt creating and then tearing down a session or lease it never got to use. Like everything else
+in this section these are a baseline: when the backend work reduces a count, the expected value in
+the test changes in the same commit, with a reason.
 
 ## Running
 
