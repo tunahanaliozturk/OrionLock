@@ -207,7 +207,7 @@ public sealed class ZooKeeperPredecessorWatchTests
         var acquired = await sut.WaitForAcquireAsync(
             Key, "owner-1", Lease, TimeSpan.FromSeconds(30), LockWaitPolicy.Default, default);
 
-        Assert.False(acquired);
+        Assert.False(acquired.Acquired);
 
         // And nothing was registered, so a later release cannot delete a node we never held.
         await sut.ReleaseAsync(Key, "owner-1", default);
@@ -224,8 +224,8 @@ public sealed class ZooKeeperPredecessorWatchTests
         };
         var sut = new ZooKeeperLockProvider(zk);
 
-        Assert.False(await sut.WaitForAcquireAsync(
-            Key, "owner-1", Lease, TimeSpan.FromSeconds(30), LockWaitPolicy.Default, default));
+        Assert.False((await sut.WaitForAcquireAsync(
+            Key, "owner-1", Lease, TimeSpan.FromSeconds(30), LockWaitPolicy.Default, default)).Acquired);
     }
 
     [Fact]
@@ -243,8 +243,8 @@ public sealed class ZooKeeperPredecessorWatchTests
         };
         var sut = new ZooKeeperLockProvider(zk);
 
-        Assert.False(await sut.WaitForAcquireAsync(
-            Key, "owner-1", Lease, TimeSpan.FromSeconds(30), LockWaitPolicy.Default, default));
+        Assert.False((await sut.WaitForAcquireAsync(
+            Key, "owner-1", Lease, TimeSpan.FromSeconds(30), LockWaitPolicy.Default, default)).Acquired);
 
         Assert.Equal(2, zk.DeleteCalls);
         Assert.True(zk.NodeDeleted, "the waiter's node was orphaned at the head of the queue");

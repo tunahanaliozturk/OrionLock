@@ -56,6 +56,22 @@ public sealed class SqlServerWaitBudgetTests
     }
 
     [Fact]
+    public void The_provider_really_implements_the_wait_member_rather_than_inheriting_the_poll()
+    {
+        // WaitForAcquireAsync is a DEFAULT interface method, so a provider whose signature drifts
+        // out of step with the contract still compiles - it just stops overriding anything and
+        // silently falls back to polling. That is not hypothetical: it happened to this provider
+        // during the rebase onto fencing tokens, when the member's return type changed from bool to
+        // LockAcquisition and nothing failed to build. The interface map is the only thing that
+        // tells the difference between an override and the default.
+        var map = typeof(SqlServerLockProvider).GetInterfaceMap(typeof(Moongazing.OrionLock.Providers.IDistributedLockProvider));
+        var index = Array.FindIndex(map.InterfaceMethods, m => m.Name == "WaitForAcquireAsync");
+
+        Assert.True(index >= 0, "the contract no longer declares WaitForAcquireAsync");
+        Assert.Equal(typeof(SqlServerLockProvider), map.TargetMethods[index].DeclaringType);
+    }
+
+    [Fact]
     public async Task The_wait_validates_its_key_and_owner_exactly_as_the_single_shot_try_does()
     {
         var sut = NewProviderWithoutServer();

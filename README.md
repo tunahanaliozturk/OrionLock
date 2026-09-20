@@ -134,7 +134,7 @@ A blocking acquire makes one attempt, and if the lock is held it hands the rest 
 
 `RetryBackoffCeiling` is off by default, which keeps the flat `RetryInterval` every release before v2.1 used. Set it and each fallback poll sleeps a random duration in `[RetryInterval, min(RetryInterval * 2^attempts, ceiling)]` - the randomness is the point, because a flat interval keeps N waiters that arrived together waking on the same tick for the whole queue drain.
 
-**Writing a backend?** `WaitForAcquireAsync` is a default interface method whose default body is that poll loop, so an existing provider needs no change at all. Override it when your store can say "the lock is free now". If you decorate a provider, forward the member: a decorator that does not forward it makes every override below it unreachable.
+**Writing a backend?** `WaitForAcquireAsync` is a default interface method whose default body is that poll loop, so an existing provider needs no change at all. Override it when your store can say "the lock is free now", and report a `LockAcquisition` - a lock taken by waiting carries its fencing token exactly as one taken on the first attempt does, and a wait that drops the token would leave fencing working on an idle key and dark under contention. If you decorate a provider, forward the member: a decorator that does not forward it makes every override below it unreachable. And because it is a default method, a signature that drifts out of step with the contract still compiles and silently stops overriding anything, so a backend is worth one test that asserts it really implements the member.
 
 ## Lease and renewal
 

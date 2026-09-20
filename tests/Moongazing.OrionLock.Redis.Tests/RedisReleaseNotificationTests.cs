@@ -185,7 +185,7 @@ public sealed class RedisReleaseNotificationTests
             "k", "owner-1", Lease, TimeSpan.FromSeconds(10), LockWaitPolicy.Default, default);
         sw.Stop();
 
-        Assert.True(acquired);
+        Assert.True(acquired.Acquired);
         Assert.Equal(2, Volatile.Read(ref attempts));
         // The old code slept the full ten-second budget here.
         Assert.True(sw.ElapsedMilliseconds < 1000, $"the waiter parked for {sw.ElapsedMilliseconds}ms on a free lock");
@@ -213,7 +213,7 @@ public sealed class RedisReleaseNotificationTests
             "k", "owner-1", Lease, TimeSpan.FromMilliseconds(300),
             new LockWaitPolicy(TimeSpan.FromMilliseconds(50)), default);
 
-        Assert.False(acquired);
+        Assert.False(acquired.Acquired);
         // One immediate retry, then the poll floor: roughly 300 / 50 attempts, nowhere near a spin.
         Assert.InRange(Volatile.Read(ref attempts), 2, 20);
     }

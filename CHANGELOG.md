@@ -241,9 +241,12 @@ All notable changes to OrionLock are documented in this file. The format is base
   `RetryBackoffCeiling` left null the jitter window collapses onto `RetryInterval`, so the default is
   the same flat interval as before.
 
-- **`orion.lock.acquire.attempt_count` now counts the attempts the CORE issued**, which for a backend
-  that blocks or subscribes collapses towards 2 per acquire - the wait is one backend interaction
-  rather than N. The reduction is the win, stated in the metric rather than hidden by it.
+- **`orion.lock.acquire.attempt_count` on the EXCLUSIVE path now counts the attempts the core
+  issued**, which for a backend that blocks or subscribes collapses towards 2 per acquire - the wait
+  is one backend interaction rather than N. The reduction is the win, stated in the metric rather
+  than hidden by it. The reader-writer path emits the same instrument but still polls, so its
+  attempt count keeps its original meaning; if you chart the two together, split them by the
+  `orionlock.mode` span or they will not be comparable.
 
 - **`MeasuringLockProvider` forwards the new member.** It decorates every provider `AddOrionLock`
   registers, so without that every backend override above would be unreachable in production while
