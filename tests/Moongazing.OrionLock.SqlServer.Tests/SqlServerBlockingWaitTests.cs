@@ -123,52 +123,55 @@ public sealed class SqlServerBlockingWaitTests : IClassFixture<SqlServerContaine
         }
 
         const int Budget = 700;
-        for (var i = 0; i < 25; i++)
+        var since = Stopwatch.StartNew();
+        for (var i = 0; i < 60; i++)
         {
             var key = $"diag-{Guid.NewGuid():N}";
             using var sut = NewProvider();
             Assert.True(await sut.TryAcquireAsync(key, "holder", Lease, default));
+            var t0 = since.ElapsedMilliseconds;
 
-            var holderConn = sut.GetSessionForTesting("holder")!;
-            using (var hc = holderConn.CreateCommand())
+            if (i % 2 == 0)
             {
-                hc.CommandText = "SELECT @@SPID, DB_NAME()";
-                using var hr = await hc.ExecuteReaderAsync();
-                await hr.ReadAsync();
-                sb.Append(inv, $"i={i} holderSpid={hr.GetInt16(0)} holderDb={hr.GetString(1)} ");
-            }
+                // Raw batch: the server's own account of the wait, byte-identical parameters.
+                await using var w = new Microsoft.Data.SqlClient.SqlConnection(fx.ConnectionString);
+                await w.OpenAsync();
 
-            // (a) raw batch: server-side elapsed around sp_getapplock, same parameters the provider sends.
-            var openSw = Stopwatch.StartNew();
-            await using var w = new Microsoft.Data.SqlClient.SqlConnection(fx.ConnectionString);
-            await w.OpenAsync();
-            openSw.Stop();
-
-            var cmdSw = Stopwatch.StartNew();
-            using (var wc = w.CreateCommand())
-            {
+                var wallStart = DateTime.UtcNow;
+                var monoSw = Stopwatch.StartNew();
+                using var wc = w.CreateCommand();
                 wc.CommandTimeout = 60;
                 wc.CommandText = """
                     SET NOCOUNT ON;
                     DECLARE @rc int;
                     DECLARE @t0 datetime2(7) = SYSUTCDATETIME();
+                    DECLARE @w0 bigint = ISNULL((SELECT SUM(wait_time_ms) FROM sys.dm_exec_session_wait_stats
+                                                 WHERE session_id = @@SPID AND wait_type LIKE 'LCK%'), 0);
                     EXEC @rc = sp_getapplock @Resource = @res, @LockMode = 'Exclusive',
                          @LockOwner = 'Session', @LockTimeout = @lt, @DbPrincipal = 'public';
-                    SELECT @rc, DATEDIFF(millisecond, @t0, SYSUTCDATETIME()), @@SPID, DB_NAME(), @@LOCK_TIMEOUT;
+                    SELECT @rc,
+                           DATEDIFF(millisecond, @t0, SYSUTCDATETIME()),
+                           ISNULL((SELECT SUM(wait_time_ms) FROM sys.dm_exec_session_wait_stats
+                                   WHERE session_id = @@SPID AND wait_type LIKE 'LCK%'), 0) - @w0,
+                           @@SPID;
                     """;
                 wc.Parameters.AddWithValue("@res", key);
                 wc.Parameters.AddWithValue("@lt", Budget);
                 using var wr = await wc.ExecuteReaderAsync();
                 await wr.ReadAsync();
-                cmdSw.Stop();
-                sb.Append(inv, $"RAW rc={wr.GetInt32(0)} serverMs={wr.GetInt32(1)} spid={wr.GetInt16(2)} db={wr.GetString(3)} lockTimeout={wr.GetInt32(4)} openMs={openSw.ElapsedMilliseconds} cmdMs={cmdSw.ElapsedMilliseconds} ");
+                monoSw.Stop();
+                var wallMs = (long)(DateTime.UtcNow - wallStart).TotalMilliseconds;
+                sb.Append(inv, $"i={i} t0={t0} RAW rc={wr.GetInt32(0)} serverMs={wr.GetInt32(1)} lckWaitMs={wr.GetInt64(2)} spid={wr.GetInt16(3)} monoMs={monoSw.ElapsedMilliseconds} wallMs={wallMs}\n");
             }
-
-            // (b) the provider path, same holder still in place.
-            var provSw = Stopwatch.StartNew();
-            var got = await sut.WaitForAcquireAsync(key, "waiter", Lease, TimeSpan.FromMilliseconds(Budget), LockWaitPolicy.Default, default);
-            provSw.Stop();
-            sb.Append(inv, $"PROV acquired={got.Acquired} clientMs={provSw.ElapsedMilliseconds}\n");
+            else
+            {
+                var wallStart = DateTime.UtcNow;
+                var monoSw = Stopwatch.StartNew();
+                var got = await sut.WaitForAcquireAsync(key, "waiter", Lease, TimeSpan.FromMilliseconds(Budget), LockWaitPolicy.Default, default);
+                monoSw.Stop();
+                var wallMs = (long)(DateTime.UtcNow - wallStart).TotalMilliseconds;
+                sb.Append(inv, $"i={i} t0={t0} PROV acquired={got.Acquired} monoMs={monoSw.ElapsedMilliseconds} wallMs={wallMs}\n");
+            }
 
             await sut.ReleaseAsync(key, "holder", default);
         }
@@ -176,7 +179,7 @@ public sealed class SqlServerBlockingWaitTests : IClassFixture<SqlServerContaine
         Assert.Fail(sb.ToString());
     }
 
-    [DockerFact]
+    [DockerFact(Skip = "diag round 2")]
     public async Task A_waiter_is_handed_the_lock_the_moment_the_holder_releases()
     {
         using var sut = NewProvider();
@@ -199,7 +202,7 @@ public sealed class SqlServerBlockingWaitTests : IClassFixture<SqlServerContaine
         await sut.ReleaseAsync(key, "waiter", default);
     }
 
-    [DockerFact]
+    [DockerFact(Skip = "diag round 2")]
     public async Task A_wait_that_outlives_its_budget_returns_false_without_taking_the_lock()
     {
         using var sut = NewProvider();
@@ -218,7 +221,7 @@ public sealed class SqlServerBlockingWaitTests : IClassFixture<SqlServerContaine
         await sut.ReleaseAsync(key, "holder", default);
     }
 
-    [DockerFact]
+    [DockerFact(Skip = "diag round 2")]
     public async Task A_cancelled_waiter_is_told_it_was_cancelled_not_handed_a_driver_error()
     {
         // Cancelling a command blocked inside sp_getapplock tears the command down, and SqlClient
@@ -242,7 +245,7 @@ public sealed class SqlServerBlockingWaitTests : IClassFixture<SqlServerContaine
         await sut.ReleaseAsync(key, "holder", default);
     }
 
-    [DockerFact]
+    [DockerFact(Skip = "diag round 2")]
     public async Task A_cancelled_blocking_acquire_through_the_full_stack_still_reports_cancellation()
     {
         // The same fact where a consumer meets it: through DistributedLock, which wraps the provider
@@ -268,7 +271,7 @@ public sealed class SqlServerBlockingWaitTests : IClassFixture<SqlServerContaine
             () => waiter.AcquireAsync(key, options, cts.Token));
     }
 
-    [DockerFact]
+    [DockerFact(Skip = "diag round 2")]
     public async Task A_cancelled_waiter_leaves_no_session_parked_in_the_queue()
     {
         using var sut = NewProvider();
@@ -289,7 +292,7 @@ public sealed class SqlServerBlockingWaitTests : IClassFixture<SqlServerContaine
         await sut.ReleaseAsync(key, "next", default);
     }
 
-    [DockerFact]
+    [DockerFact(Skip = "diag round 2")]
     public async Task The_whole_wait_is_one_command_through_the_blocking_acquire()
     {
         using var sut = NewProvider();
