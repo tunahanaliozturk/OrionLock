@@ -144,7 +144,11 @@ internal sealed class DistributedLockHandle : IDistributedLockHandle
                 {
                     renewed = await provider.TryRenewAsync(Key, ownerToken, leaseDuration, ct).ConfigureAwait(false);
                 }
-                catch (OperationCanceledException)
+                // Only OUR watchdog token cancelling is terminal (Dispose stopped the loop). An OCE
+                // raised for any other reason - a provider that surfaces an unrelated cancellation -
+                // must be handled as a transient renew failure, not silently stop renewals while
+                // IsHeld stays true and LostToken never trips.
+                catch (OperationCanceledException) when (ct.IsCancellationRequested)
                 {
                     return;
                 }

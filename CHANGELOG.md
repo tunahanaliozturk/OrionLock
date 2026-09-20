@@ -9,6 +9,17 @@ All notable changes to OrionLock are documented in this file. The format is base
 
 ### Fixed
 
+- **A lock handle no longer stops renewing its lease in silence when the backend raises an unrelated
+  cancellation.** The exclusive handle's renewal watchdog caught *every* `OperationCanceledException`
+  from `TryRenewAsync` and returned. If a provider surfaced a cancellation that was not the handle's own
+  dispose (a client-library timeout token, an ambient request token threaded into the backend call), the
+  watchdog stopped renewing while `IsHeld` stayed `true` and `LostToken` never tripped — so the lease
+  quietly expired at the backend while your code went on believing it held the lock. Only the handle's
+  own dispose is terminal now; any other cancellation is treated as a transient renewal failure and the
+  watchdog keeps retrying, surrendering through the normal `RenewalFailureGracePeriod` path if the
+  backend stays unreachable. The reader-writer handle already behaved this way. If you had code watching
+  for the watchdog to go quiet, watch `LostToken` instead — it now actually fires.
+
 - **The internal measuring decorator no longer reports every backend as a TTL backend.**
   `AddOrionLock` wraps the registered `IDistributedLockProvider` in an internal measuring decorator, and
   that decorator did not forward `LeaseDurationIsTtl` — it fell back to the interface default of `true`.
