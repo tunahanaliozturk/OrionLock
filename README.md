@@ -118,7 +118,7 @@ A blocking acquire makes one attempt, and if the lock is held it hands the rest 
 
 | Backend | While waiting | Server-side requirement |
 | ------- | ------------- | ----------------------- |
-| SQL Server | Blocks in SQL Server's own application-lock queue (`sp_getapplock @LockTimeout`), FIFO | none |
+| SQL Server | Blocks in SQL Server's own application-lock queue (`sp_getapplock @LockTimeout`), FIFO; re-issued if the server's lock timer gives up short of the budget | none |
 | PostgreSQL | Blocks on `pg_advisory_lock`, bounded by `statement_timeout` | none |
 | Redis | Subscribes to a per-key release channel the provider publishes to | none; pub/sub only, NOT keyspace notifications |
 | etcd | Watches the key for a delete | none |
@@ -134,6 +134,8 @@ exclusive locks** below.
 `OrionLock.Etcd` and `OrionLock.ZooKeeper` ship no package README of their own, so their notes are here. **etcd** watches the lock key and retries when the cluster reports it deleted, which covers both a release and a lease that lapsed under a crashed holder; a failed attempt costs three round trips there, so the watch replaces three per waiter per tick with three once. **ZooKeeper** now runs the real recipe: the ephemeral sequential child is created ONCE and kept, and when it is not the lowest the waiter watches its immediate predecessor. Each position gained costs one children listing plus one watched `exists` - two round trips, against four per tick for the whole wait before - and because the child's sequence number is stable for the whole wait, arrival order is honoured again. The old loop re-created the child every tick, minting a new sequence number each time, which threw the queue away. Neither needs anything configured on the server, and both delete or tear down what they registered on every path that does not win.
 
 `RetryInterval` (default 250 ms) is now the FLOOR of the wait, not the whole of it. A backend that can block or subscribe returns the instant the lock frees and never sleeps an interval at all; the interval still bounds the poll a backend falls back to when it has no better option, or when its subscription drops.
+
+**The budget is kept on OrionLock's clock, not the store's.** `sp_getapplock`'s `@LockTimeout` is enforced against SQL Server's own lock-wait accounting rather than wall clock, and on a contended host that accounting runs ahead of it — a 700 ms budget has been measured giving up after 195 ms of real time. The SQL Server provider therefore times the wait itself and re-issues the command with what is left, so `WaitTimeout` means the same thing under load as it does on an idle box. That costs nothing when the server's timer is honest, which is the normal case.
 
 `WaitTimeout`, cancellation and the deadline overloads behave exactly as they always did. A wait that ends early without a grant is not a timeout: the core re-checks the budget, sleeps the retry floor and asks again, so a dropped subscription degrades to polling rather than failing the caller.
 

@@ -34,10 +34,10 @@ releases its locks immediately, without waiting out a TTL.
 
 A contended `AcquireAsync` no longer asks SQL Server again every `RetryInterval`. It passes the caller's
 remaining wait budget as `sp_getapplock @LockTimeout`, so the request sits in SQL Server's own
-application-lock queue and returns the instant the lock frees - one `sp_getapplock` command for the
-whole wait, however long it is. The single-shot `TryAcquireAsync` still passes `@LockTimeout = 0` and is unchanged.
+application-lock queue and returns the instant the lock frees - normally one `sp_getapplock` command for
+the whole wait, however long it is. The single-shot `TryAcquireAsync` still passes `@LockTimeout = 0` and is unchanged.
 
-Two consequences worth knowing:
+Three consequences worth knowing:
 
 - **Waiters are FIFO.** SQL Server's lock manager serves its application-lock queue in arrival order, so
   a waiter can no longer be overtaken indefinitely by a luckier poller. This is the lock manager's
@@ -45,6 +45,14 @@ Two consequences worth knowing:
 - **The command timeout is raised for the wait.** `SqlServerLockOptions.CommandTimeout` bounds the
   network round trip; the wait budget is added on top of it for the blocking call only. Left as it was,
   `Microsoft.Data.SqlClient` would abort a legitimate queued wait as though the link had hung.
+- **The budget is timed here, not by the server** - which is why "normally" one command. `@LockTimeout`
+  is enforced against SQL Server's own lock-wait accounting rather than wall clock, and on a contended
+  host that accounting runs ahead of it: a 700 ms budget has been measured returning "not acquired"
+  after 195 ms of real time. The provider therefore keeps the budget on its own monotonic clock and
+  re-issues the command with what is left when a round gives up early, so `WaitTimeout` means the same
+  thing under load as it does on an idle box. When the server's timer is honest it is still one command,
+  and an infinite wait is always one, since it has no budget to keep and re-issuing could only cost it
+  the place in the queue it already holds.
 
 Nothing has to be configured on the server. A cancelled caller's command is cancelled and its connection
 disposed, so no session is left holding a place in the queue.
