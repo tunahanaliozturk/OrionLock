@@ -52,11 +52,11 @@ under the coordinator's single process-wide lock. That scan is O(N) in the curre
 building a queue of N does O(N^2) scanning in total, and because the lock is global rather than per
 key, every key in the process serializes behind it.
 
-Read the per-depth means as cost per waiter rather than as a total. On the baseline run the scan is
-not yet the dominant term: the handoff itself, a `TaskCompletionSource` completion and a thread-pool
-hop per waiter, is most of it, and the quadratic term only begins to show at the deepest parameter.
-That is the useful state for a baseline. The measurement is in place and will move as soon as either
-term changes, which the empty-queue benchmark could never have shown.
+Read the mean as a batch, not as a per-waiter cost. One invocation performs all `QueueDepth + 1`
+enter/leave pairs, and `OperationsPerInvoke` cannot divide it down because that attribute takes a
+compile-time constant and `QueueDepth` is a `[Params]` value. The reported mean and allocations are
+therefore the cost of building and draining the whole queue. Dividing by `QueueDepth + 1` is a
+derivation you have to make deliberately; it is not what the table says.
 
 ### DistributedLockAcquireBenchmarks
 
@@ -100,10 +100,20 @@ grows faster than the waiter count.
 Two details are deliberate. Each waiter gets its own `DistributedLock` instance over a shared
 provider, because reentrancy is tracked per instance and N waiters sharing one instance would
 collapse into nested handles and never contend at all. And a gate handle holds the key until every
-waiter has registered at least one failed attempt, so the burst is deterministic instead of a
-function of how fast the thread pool ramps. The retry interval is scaled down from the 250 ms
-default purely to keep wall time tractable; the call count is interval-independent, because each
-poll round still hands the key to exactly one waiter.
+waiter has, for itself, seen one refused attempt, so the burst is deterministic instead of a
+function of how fast the thread pool ramps.
+
+That barrier is per waiter, not an aggregate count of refusals, and the difference matters. An
+aggregate cannot tell N waiters that each failed once apart from one fast waiter that failed N
+times, so at the larger waiter counts it would open the gate while other callers were still sitting
+in the thread-pool queue; those callers would find the key free, and the measurement would be of
+thread-pool scheduling rather than contention. The barrier costs an exact, known number of provider
+calls per operation, one gate acquire plus one probe per waiter, and the report prints the call
+totals both raw and net of it. Compare the net figure.
+
+The retry interval is scaled down from the 250 ms default purely to keep wall time tractable; the
+call count is interval-independent, because each poll round still hands the key to exactly one
+waiter.
 
 ### RenewalScaleBenchmarks
 
@@ -116,6 +126,15 @@ therefore carries N background tasks and N timers, and because the interval is a
 the lease with no spread, handles acquired together keep renewing together: the store sees N
 renewals on one tick rather than N spread over the interval. The allocation column is the per-handle
 overhead; the printed renewal count is the traffic.
+
+Renewals are counted across the hold window only, between a snapshot taken once every handle exists
+and one taken before the first disposal. A watchdog starts the moment its handle is constructed, so
+a handle acquired early is already renewing while later ones are still being created, and it keeps
+renewing while earlier ones are being disposed. Counting the whole method would fold an N-dependent
+acquisition and disposal window into the figure and make the per-handle number at 1000 incomparable
+with the one at 1. The window is the same 200 ms for every N, so the per-handle figures can be read
+side by side. The reported `Mean` is still the whole method, acquire plus window plus dispose, which
+is why it rises with N while the per-handle renewal count stays roughly flat.
 
 ### ReleaseBenchmarks
 

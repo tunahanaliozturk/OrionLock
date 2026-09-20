@@ -25,9 +25,13 @@ namespace Moongazing.OrionLock.Benchmarks;
 /// really is - N processes racing for one key in one store.
 /// </para>
 /// <para>
-/// A gate handle holds the key until every waiter has registered at least one failed attempt, so the
-/// burst is deterministic instead of depending on how fast the thread pool ramps. The gate adds
-/// exactly one acquire and one release call per operation to the reported totals.
+/// A gate handle holds the key until every waiter has, for itself, seen one refused attempt, so the
+/// burst is deterministic instead of depending on how fast the thread pool ramps. That barrier is
+/// per waiter rather than an aggregate count of refusals: an aggregate cannot distinguish N waiters
+/// that each failed once from one fast waiter that failed N times, which at the larger waiter counts
+/// would let the gate open while some callers were still sitting in the thread-pool queue. The
+/// scaffolding costs an exact, known number of provider calls per operation - one gate acquire plus
+/// one barrier probe per waiter - and the report prints the totals both raw and net of it.
 /// </para>
 /// </remarks>
 [MultiRuntimeConfig]
@@ -40,6 +44,8 @@ public class ContentionBenchmarks
     private DistributedLock[] waiterLocks = null!;
     private DistributedLockOptions options = null!;
     private long operations;
+    private int barrierRemaining;
+    private TaskCompletionSource barrierReached = null!;
 
     /// <summary>How many callers race for the one key.</summary>
     [Params(2, 8, 64, 256)]
@@ -92,11 +98,17 @@ public class ContentionBenchmarks
         {
             return;
         }
+        // The harness itself costs a known, exact number of provider calls per operation: one gate
+        // acquire, plus one barrier probe per waiter. Report the raw total AND that total net of
+        // the harness, so the retry-loop figure is not quietly inflated by the scaffolding that
+        // makes the measurement deterministic.
+        var harnessCalls = Waiters + 1;
+        var rawPerOp = provider.AcquireCalls / (double)ops;
         Console.WriteLine(
             $"// ContentionBenchmarks Waiters={Waiters}: ops={ops}, " +
-            $"TryAcquireAsync/op={provider.AcquireCalls / (double)ops:F1}, " +
-            $"ReleaseAsync/op={provider.ReleaseCalls / (double)ops:F1} " +
-            $"(includes 1 acquire + 1 release for the gate handle)");
+            $"TryAcquireAsync/op={rawPerOp:F1} raw, {rawPerOp - harnessCalls:F1} net of harness " +
+            $"(harness = 1 gate acquire + {Waiters} barrier probes), " +
+            $"ReleaseAsync/op={provider.ReleaseCalls / (double)ops:F1} (includes the gate release)");
     }
 
     /// <summary>
@@ -109,28 +121,46 @@ public class ContentionBenchmarks
         // Hold the key so no waiter can win until all of them are inside the retry loop.
         var gate = await gateLock.TryAcquireAsync(Key, options).ConfigureAwait(false)
             ?? throw new InvalidOperationException("Gate handle could not take a free key.");
-        var attemptsBefore = provider.AcquireCalls;
+
+        barrierRemaining = Waiters;
+        barrierReached = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
 
         var waiters = new Task[Waiters];
         for (var i = 0; i < Waiters; i++)
         {
             var waiterLock = waiterLocks[i];
-            waiters[i] = Task.Run(() => AcquireAndReleaseAsync(waiterLock));
+            waiters[i] = Task.Run(() => ProbeThenAcquireAndReleaseAsync(waiterLock));
         }
 
-        // Every waiter has now failed at least once, so the release below starts a clean N-wide race.
-        while (provider.AcquireCalls - attemptsBefore < Waiters)
-        {
-            await Task.Yield();
-        }
+        // Every waiter has now been scheduled AND has seen the key held for itself, so releasing
+        // the gate starts a genuine N-wide race rather than a race with the thread-pool queue.
+        await barrierReached.Task.ConfigureAwait(false);
 
         await gate.DisposeAsync().ConfigureAwait(false);
         await Task.WhenAll(waiters).ConfigureAwait(false);
         Interlocked.Increment(ref operations);
     }
 
-    private async Task AcquireAndReleaseAsync(DistributedLock waiterLock)
+    private async Task ProbeThenAcquireAndReleaseAsync(DistributedLock waiterLock)
     {
+        // Per-waiter barrier. An aggregate count of failed attempts cannot prove that every waiter
+        // has started: with a 1 ms retry interval one already-running waiter contributes several
+        // failures while other Task.Run items are still queued, so at the larger waiter counts the
+        // gate would open before some callers had attempted at all. Those callers would then find
+        // the key free, and both the call count and the drain time would be measuring thread-pool
+        // scheduling instead of contention. Each waiter therefore signals for ITSELF, after its own
+        // first refused attempt.
+        var probe = await waiterLock.TryAcquireAsync(Key, options).ConfigureAwait(false);
+        if (probe is not null)
+        {
+            // Never expected while the gate holds the key; release it rather than deadlock the run.
+            await probe.DisposeAsync().ConfigureAwait(false);
+        }
+        if (Interlocked.Decrement(ref barrierRemaining) == 0)
+        {
+            barrierReached.TrySetResult();
+        }
+
         var handle = await waiterLock.AcquireAsync(Key, options).ConfigureAwait(false);
         await handle.DisposeAsync().ConfigureAwait(false);
     }

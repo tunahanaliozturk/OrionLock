@@ -35,6 +35,7 @@ public class RenewalScaleBenchmarks
     private DistributedLockOptions options = null!;
     private string[] keys = null!;
     private long operations;
+    private long windowRenewals;
 
     /// <summary>How many auto-renewing handles are held simultaneously.</summary>
     [Params(1, 100, 1000)]
@@ -61,14 +62,16 @@ public class RenewalScaleBenchmarks
         }
 
         operations = 0;
+        windowRenewals = 0;
         provider.Reset();
     }
 
     /// <summary>
     /// Prints the renewal traffic, which no BenchmarkDotNet column can carry (the benchmark runs in a
-    /// child process). Renewals per handle should stay near <c>HoldWindow / (LeaseDuration / 3)</c>;
-    /// a jittered or shared-timer renewal scheme should leave this figure intact while cutting the
-    /// allocation column.
+    /// child process). Per-handle renewals should stay near
+    /// <c>HoldWindow / (LeaseDuration / 3)</c> and, because only the fixed hold window is counted,
+    /// should be flat across every <c>Handles</c> value. A jittered or shared-timer renewal scheme
+    /// should leave this figure intact while cutting the allocation column.
     /// </summary>
     [GlobalCleanup]
     public void ReportRenewals()
@@ -78,18 +81,27 @@ public class RenewalScaleBenchmarks
         {
             return;
         }
-        var perOp = provider.RenewCalls / (double)ops;
+        var perOp = Interlocked.Read(ref windowRenewals) / (double)ops;
         Console.WriteLine(
             $"// RenewalScaleBenchmarks Handles={Handles}: ops={ops}, " +
             $"TryRenewAsync/op={perOp:F1}, per handle={perOp / Handles:F2} " +
-            $"over a {HoldWindow.TotalMilliseconds:F0} ms hold at a " +
+            $"(hold window only) over a {HoldWindow.TotalMilliseconds:F0} ms hold at a " +
             $"{options.LeaseDuration.TotalMilliseconds / 3:F0} ms renewal interval");
     }
 
     /// <summary>
     /// Acquire N auto-renewing handles, hold them all for a fixed window while their watchdogs run,
-    /// then dispose them. Wall time, allocations and renewals issued are all a function of N.
+    /// then dispose them.
     /// </summary>
+    /// <remarks>
+    /// Renewals are counted across the HOLD WINDOW ONLY, between a snapshot taken once every handle
+    /// exists and a snapshot taken before the first disposal. A watchdog starts the moment its handle
+    /// is constructed, so a handle acquired early is already renewing while later ones are still
+    /// being created, and it keeps renewing while earlier ones are being disposed. Counting the whole
+    /// method would therefore fold an N-dependent acquisition and disposal window into the figure and
+    /// make the per-handle number at 1000 incomparable with the one at 1. The window delta is the
+    /// same 200 ms for every N, so the per-handle figures can be compared directly.
+    /// </remarks>
     [Benchmark]
     public async Task HoldAutoRenewingHandles()
     {
@@ -99,7 +111,11 @@ public class RenewalScaleBenchmarks
             handles[i] = await distributedLock.AcquireAsync(keys[i], options).ConfigureAwait(false);
         }
 
+        // Every handle now exists and every watchdog is running: the window starts here, not at the
+        // top of the method.
+        var renewsBeforeWindow = provider.RenewCalls;
         await Task.Delay(HoldWindow).ConfigureAwait(false);
+        Interlocked.Add(ref windowRenewals, provider.RenewCalls - renewsBeforeWindow);
 
         for (var i = 0; i < Handles; i++)
         {

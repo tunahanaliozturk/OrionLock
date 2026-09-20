@@ -22,11 +22,12 @@ namespace Moongazing.OrionLock.Benchmarks;
 /// rather than per key, every key in the process serializes behind it.
 /// </para>
 /// <para>
-/// Read the per-depth means as cost PER WAITER, not as a total. On the baseline run the scan is not
-/// yet what dominates: the handoff itself (a TaskCompletionSource completion and a thread-pool hop
-/// per waiter) is the bulk of it, and the quadratic term is only starting to show at the deepest
-/// parameter. That is the useful state for a baseline - the measurement is in place and will move
-/// the moment either term changes, which the empty-queue benchmark could never have shown.
+/// READ THE MEAN AS A BATCH, NOT AS A PER-WAITER COST. One invocation performs all
+/// <c>QueueDepth + 1</c> enter/leave pairs, and there is no <c>OperationsPerInvoke</c> to divide by
+/// (it must be a compile-time constant, which a <c>[Params]</c> value cannot be). So the reported
+/// mean and allocations are the cost of building AND draining the whole queue. Dividing by
+/// <c>QueueDepth + 1</c> is a derivation the reader has to do deliberately - it is not what the
+/// table says.
 /// </para>
 /// </remarks>
 [MultiRuntimeConfig]
@@ -43,7 +44,9 @@ public class FifoCoordinatorBenchmarks
     /// Enter as the head, line <see cref="QueueDepth"/> waiters up behind, then drain the queue in
     /// order. The waiters are enqueued synchronously (<c>EnterAsync</c> does its queue work before
     /// the first await), so the queue really is <c>QueueDepth + 1</c> deep before the head leaves
-    /// and the handoff chain is deterministic rather than a race with the thread pool.
+    /// and the handoff chain is deterministic rather than a race with the thread pool. One
+    /// invocation is the WHOLE build-and-drain, so the reported mean and allocations cover
+    /// <c>QueueDepth + 1</c> enter/leave pairs, not one.
     /// </summary>
     [Benchmark]
     public async Task EnterLeaveWithQueueDepth()
