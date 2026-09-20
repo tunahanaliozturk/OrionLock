@@ -1,1 +1,2 @@
 #nullable enable
+Moongazing.OrionLock.Postgres.PostgresLockProvider.WaitForAcquireAsync(string! key, string! ownerToken, System.TimeSpan leaseDuration, System.TimeSpan maxWait, Moongazing.OrionLock.Providers.LockWaitPolicy waitPolicy, System.Threading.CancellationToken cancellationToken) -> System.Threading.Tasks.Task<bool>!
