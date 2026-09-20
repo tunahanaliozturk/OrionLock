@@ -187,6 +187,79 @@ public sealed class DefaultEtcdClientAdapter : IEtcdClientAdapter, IEtcdFencingA
     }
 
     /// <inheritdoc />
+    /// <remarks>
+    /// One watch stream for the whole wait, torn down on every exit path by cancelling the linked
+    /// source the stream runs under - so a caller that gives up leaves no watcher registered on the
+    /// cluster. A DELETE event is the only thing that resolves it; etcd emits one both for an
+    /// explicit delete and for a key removed because its lease lapsed, which is exactly the two
+    /// ways a lock becomes free.
+    /// </remarks>
+    public async Task<bool> WaitForKeyDeletedAsync(string key, TimeSpan maxWait, CancellationToken cancellationToken)
+    {
+        var tcs = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
+        using var stop = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+        if (maxWait != Timeout.InfiniteTimeSpan)
+        {
+            // Bound the stream itself rather than abandoning it: a watch nobody is waiting on is
+            // still a watch the cluster is maintaining.
+            stop.CancelAfter(maxWait < TimeSpan.Zero ? TimeSpan.Zero : maxWait);
+        }
+
+        void OnEvents(global::dotnet_etcd.WatchEvent[] events)
+        {
+            foreach (var watchEvent in events)
+            {
+                if (watchEvent.Type != Mvccpb.Event.Types.EventType.Delete)
+                {
+                    continue;
+                }
+                if (tcs.TrySetResult(true))
+                {
+                    StopStream(stop);
+                }
+                return;
+            }
+        }
+
+        try
+        {
+            await client.WatchAsync(key, (Action<global::dotnet_etcd.WatchEvent[]>)OnEvents, null, default, stop.Token).ConfigureAwait(false);
+        }
+        catch (Grpc.Core.RpcException)
+        {
+            // A watch that could not be established or was dropped is not a lock failure: the
+            // caller falls back to polling, which is the behaviour it had before watches existed.
+            return false;
+        }
+        catch (Exception ex) when (IsCancellation(ex))
+        {
+            // Our own stop, the caller's cancellation, or the budget running out. Which one it was
+            // is decided below, exactly as in the keep-alive above.
+        }
+
+        if (tcs.Task.IsCompletedSuccessfully)
+        {
+            return tcs.Task.Result;
+        }
+
+        cancellationToken.ThrowIfCancellationRequested();
+        return false;
+    }
+
+    private static void StopStream(CancellationTokenSource stop)
+    {
+        try
+        {
+            stop.Cancel();
+        }
+        catch (ObjectDisposedException)
+        {
+            // The call already returned and the linked source is gone; the answer is recorded,
+            // which is all that matters.
+        }
+    }
+
+    /// <inheritdoc />
     public async Task<bool> KvDeleteIfMatchAsync(string key, string expectedValue, CancellationToken cancellationToken)
     {
         var txn = new TxnRequest();

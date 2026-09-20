@@ -126,6 +126,65 @@ public sealed class EtcdLockProvider : IDistributedLockProvider
         return put;
     }
 
+    /// <summary>
+    /// Watches the lock key instead of re-attempting the acquire every retry interval. A failed
+    /// attempt costs three round trips here (lease grant, transactional put, lease revoke), so the
+    /// poll loop was paying three per waiter per tick; a watch pays them once and then waits.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// etcd emits a DELETE event both for an explicit release and for a key dropped because its
+    /// lease lapsed, so the watch covers the crashed-holder case too - no TTL bound is needed on
+    /// top of it, unlike the Redis release channel.
+    /// </para>
+    /// <para>
+    /// The watch is a hint, never the authority: every wake re-attempts the acquire, because
+    /// several waiters see the same DELETE and only one of them can win. An adapter that does not
+    /// implement watches answers <see langword="false"/> immediately, and this degrades to the poll
+    /// loop it replaced.
+    /// </para>
+    /// </remarks>
+    public async Task<bool> WaitForAcquireAsync(
+        string key, string ownerToken, TimeSpan leaseDuration, TimeSpan maxWait,
+        LockWaitPolicy waitPolicy, CancellationToken cancellationToken)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(key);
+        ArgumentException.ThrowIfNullOrWhiteSpace(ownerToken);
+
+        var elapsed = System.Diagnostics.Stopwatch.StartNew();
+        var infinite = maxWait == Timeout.InfiniteTimeSpan;
+
+        while (true)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+
+            if (await TryAcquireAsync(key, ownerToken, leaseDuration, cancellationToken).ConfigureAwait(false))
+            {
+                return true;
+            }
+
+            var remaining = maxWait - elapsed.Elapsed;
+            if (!infinite && remaining <= TimeSpan.Zero)
+            {
+                return false;
+            }
+
+            if (!await etcd.WaitForKeyDeletedAsync(
+                    FullKey(key), infinite ? Timeout.InfiniteTimeSpan : remaining, cancellationToken)
+                .ConfigureAwait(false))
+            {
+                // Budget spent, no watch available, or the stream dropped. Returning false is how
+                // the contract says so: the core re-checks the budget, sleeps the caller's retry
+                // floor, and asks again - which is the poll loop, reached only when the watch is
+                // not doing its job.
+                return false;
+            }
+
+            // The key is gone. Race for it at the top of the loop: every waiter watching this key
+            // saw the same delete, and only one of them can win.
+        }
+    }
+
     /// <inheritdoc />
     public async Task<bool> TryRenewAsync(
         string key, string ownerToken, TimeSpan leaseDuration, CancellationToken cancellationToken)
