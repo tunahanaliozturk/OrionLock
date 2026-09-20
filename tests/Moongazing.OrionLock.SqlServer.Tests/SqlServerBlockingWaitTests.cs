@@ -104,6 +104,79 @@ public sealed class SqlServerBlockingWaitTests : IClassFixture<SqlServerContaine
     private SqlServerLockProvider NewProvider() => new(fx.ConnectionString, new SqlServerLockOptions());
 
     [DockerFact]
+    public async Task ZZZ_DIAGNOSTIC_applock_timeout_fidelity()
+    {
+        var sb = new System.Text.StringBuilder();
+        var inv = System.Globalization.CultureInfo.InvariantCulture;
+
+        await using (var info = new Microsoft.Data.SqlClient.SqlConnection(fx.ConnectionString))
+        {
+            await info.OpenAsync();
+            using var c = info.CreateCommand();
+            c.CommandText = "SELECT @@VERSION, DB_NAME(), @@LOCK_TIMEOUT, @@SPID, SERVERPROPERTY('EngineEdition'), cpu_count, scheduler_count FROM sys.dm_os_sys_info";
+            using var r = await c.ExecuteReaderAsync();
+            while (await r.ReadAsync())
+            {
+                sb.Append(inv, $"VERSION={r.GetString(0).Replace('\n', ' ').Replace('\r', ' ')}\n");
+                sb.Append(inv, $"DB={r.GetString(1)} LOCK_TIMEOUT={r.GetInt32(2)} SPID={r.GetInt16(3)} EngineEdition={r.GetValue(4)} cpu_count={r.GetValue(5)} schedulers={r.GetValue(6)}\n");
+            }
+        }
+
+        const int Budget = 700;
+        for (var i = 0; i < 25; i++)
+        {
+            var key = $"diag-{Guid.NewGuid():N}";
+            using var sut = NewProvider();
+            Assert.True(await sut.TryAcquireAsync(key, "holder", Lease, default));
+
+            var holderConn = sut.GetSessionForTesting("holder")!;
+            using (var hc = holderConn.CreateCommand())
+            {
+                hc.CommandText = "SELECT @@SPID, DB_NAME()";
+                using var hr = await hc.ExecuteReaderAsync();
+                await hr.ReadAsync();
+                sb.Append(inv, $"i={i} holderSpid={hr.GetInt16(0)} holderDb={hr.GetString(1)} ");
+            }
+
+            // (a) raw batch: server-side elapsed around sp_getapplock, same parameters the provider sends.
+            var openSw = Stopwatch.StartNew();
+            await using var w = new Microsoft.Data.SqlClient.SqlConnection(fx.ConnectionString);
+            await w.OpenAsync();
+            openSw.Stop();
+
+            var cmdSw = Stopwatch.StartNew();
+            using (var wc = w.CreateCommand())
+            {
+                wc.CommandTimeout = 60;
+                wc.CommandText = """
+                    SET NOCOUNT ON;
+                    DECLARE @rc int;
+                    DECLARE @t0 datetime2(7) = SYSUTCDATETIME();
+                    EXEC @rc = sp_getapplock @Resource = @res, @LockMode = 'Exclusive',
+                         @LockOwner = 'Session', @LockTimeout = @lt, @DbPrincipal = 'public';
+                    SELECT @rc, DATEDIFF(millisecond, @t0, SYSUTCDATETIME()), @@SPID, DB_NAME(), @@LOCK_TIMEOUT;
+                    """;
+                wc.Parameters.AddWithValue("@res", key);
+                wc.Parameters.AddWithValue("@lt", Budget);
+                using var wr = await wc.ExecuteReaderAsync();
+                await wr.ReadAsync();
+                cmdSw.Stop();
+                sb.Append(inv, $"RAW rc={wr.GetInt32(0)} serverMs={wr.GetInt32(1)} spid={wr.GetInt16(2)} db={wr.GetString(3)} lockTimeout={wr.GetInt32(4)} openMs={openSw.ElapsedMilliseconds} cmdMs={cmdSw.ElapsedMilliseconds} ");
+            }
+
+            // (b) the provider path, same holder still in place.
+            var provSw = Stopwatch.StartNew();
+            var got = await sut.WaitForAcquireAsync(key, "waiter", Lease, TimeSpan.FromMilliseconds(Budget), LockWaitPolicy.Default, default);
+            provSw.Stop();
+            sb.Append(inv, $"PROV acquired={got.Acquired} clientMs={provSw.ElapsedMilliseconds}\n");
+
+            await sut.ReleaseAsync(key, "holder", default);
+        }
+
+        Assert.Fail(sb.ToString());
+    }
+
+    [DockerFact]
     public async Task A_waiter_is_handed_the_lock_the_moment_the_holder_releases()
     {
         using var sut = NewProvider();
