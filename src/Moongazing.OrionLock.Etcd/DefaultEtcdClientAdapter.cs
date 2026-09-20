@@ -28,44 +28,102 @@ public sealed class DefaultEtcdClientAdapter : IEtcdClientAdapter
     }
 
     /// <inheritdoc />
+    /// <remarks>
+    /// <para>
+    /// Single-shot keep-alive ping over dotnet-etcd's <c>LeaseKeepAlive</c> helper, which takes a request
+    /// plus a per-response callback and a cancellation token. etcd's contract: a response with
+    /// <c>TTL &gt; 0</c> means the lease was refreshed for that many seconds; <c>TTL == 0</c> means the
+    /// lease is gone.
+    /// </para>
+    /// <para>
+    /// <b>Only the server decides.</b> The <see langword="false"/> this method returns is a CONFIRMED
+    /// lease loss - the caller's handle trips its lost-token and revokes the lease while the application
+    /// may still be inside its critical section - so it is returned ONLY when etcd actually said so
+    /// (<c>TTL == 0</c>, or a gRPC <c>NotFound</c>). The previous implementation resolved its
+    /// <see cref="TaskCompletionSource{TResult}"/> to <see langword="false"/> the moment the keep-alive
+    /// call returned, racing its own response callback: whichever ran first won, so a SUCCESSFUL renewal
+    /// could be reported as a lost lease. Now the callback stops the stream as soon as it has an answer,
+    /// which orders the two, and a stream that ends with no response at all is treated as what it is - a
+    /// transient backend fault - and throws, so the core watchdog retries under its grace period instead
+    /// of surrendering a lease that is very likely still held.
+    /// </para>
+    /// </remarks>
     public async Task<bool> LeaseKeepAliveAsync(long leaseId, CancellationToken cancellationToken)
     {
-        // Single-shot keep-alive ping: dotnet-etcd 7.x's high-level LeaseKeepAlive helper
-        // takes a request + a result-collecting callback and a cancellation token. The
-        // callback fires for each refresh response; etcd's documented contract is that any
-        // response with TTL > 0 means the lease was refreshed for that many seconds.
-        // TTL == 0 means the lease expired and the server is reporting lease-lost. We use
-        // an asynchronous TaskCompletionSource so the first response (or the stream's
-        // completion without a response) unblocks the await without holding the keep-alive
-        // call open forever.
         var tcs = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
-        Action<LeaseKeepAliveResponse> onResponse = r =>
+        using var stop = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+
+        void OnResponse(LeaseKeepAliveResponse response)
         {
-            // First response wins; subsequent refreshes (if any) are no-ops on the TCS.
-            tcs.TrySetResult(r.TTL > 0);
-        };
+            // First response is the answer; stop the stream so the call returns promptly and cannot
+            // resolve the outcome behind this callback's back.
+            if (!tcs.TrySetResult(response.TTL > 0))
+            {
+                return;
+            }
+
+            try
+            {
+                stop.Cancel();
+            }
+            catch (ObjectDisposedException)
+            {
+                // The call already returned and the linked source is gone; the answer is recorded, which
+                // is all that matters.
+            }
+        }
+
         try
         {
             await client.LeaseKeepAlive(
                 new[] { new LeaseKeepAliveRequest { ID = leaseId } },
-                new[] { onResponse },
-                cancellationToken).ConfigureAwait(false);
+                new Action<LeaseKeepAliveResponse>[] { OnResponse },
+                stop.Token).ConfigureAwait(false);
         }
         catch (Grpc.Core.RpcException rpc) when (rpc.StatusCode == Grpc.Core.StatusCode.NotFound)
         {
-            // gRPC NotFound is the conventional "lease not found" mapping from etcd; treat
-            // as confirmed lease-loss so the OrionLock watchdog can react.
+            // gRPC NotFound is the conventional "lease not found" mapping from etcd: a confirmed
+            // lease-loss the OrionLock watchdog should act on.
             return false;
         }
-        // The keep-alive call returned without throwing, but the callback fires
-        // asynchronously. Resolve the TCS with the captured outcome, or fall back to
-        // "false" when the server completed the stream without writing any response.
-        tcs.TrySetResult(false);
-        return await tcs.Task.ConfigureAwait(false);
-        // Other exceptions (transient gRPC errors, cancellation) bubble up so the caller's
-        // core watchdog retries the renew instead of misclassifying a temporary backend
-        // fault as confirmed lease loss.
+        catch (Exception ex) when (IsCancellation(ex))
+        {
+            // Cancellation of the keep-alive stream is NEVER by itself an outcome, so it is swallowed
+            // here and the checks below decide what actually happened. Both shapes have to be caught: a
+            // cancelled Grpc.Core response stream can complete by throwing OperationCanceledException OR
+            // an RpcException carrying StatusCode.Cancelled, and the cancellation is usually OUR OWN -
+            // OnResponse stops the stream the moment it has the answer. Letting the RpcException
+            // propagate would turn every successful renewal into a transient backend failure, and the
+            // handle's renewal loop would count those until the grace period ran out and declared the
+            // lease lost: the exact failure this method was fixed to prevent, re-entering through the fix.
+        }
+
+        if (tcs.Task.IsCompletedSuccessfully)
+        {
+            // The server answered before the stream stopped, so the answer stands however the stream
+            // ended.
+            return tcs.Task.Result;
+        }
+
+        // The caller gave up; surface that rather than dressing it as a backend fault.
+        cancellationToken.ThrowIfCancellationRequested();
+
+        throw new InvalidOperationException(
+            $"etcd closed the keep-alive stream for lease {leaseId} without sending a response, so the "
+            + "lease could neither be confirmed refreshed nor confirmed lost. Treated as a transient "
+            + "backend fault: the caller retries the renew instead of surrendering a lease that is "
+            + "probably still held.");
+
+        // Other exceptions (transient gRPC errors, caller cancellation) bubble up for the same reason.
     }
+
+    // Every way a cancelled keep-alive stream can surface. Grpc.Core reports cancellation as an
+    // RpcException with StatusCode.Cancelled at least as often as it throws OperationCanceledException,
+    // and which one arrives depends on where in the call the cancellation landed - so neither shape may
+    // be treated as an outcome on its own.
+    private static bool IsCancellation(Exception ex)
+        => ex is OperationCanceledException
+            || (ex is Grpc.Core.RpcException rpc && rpc.StatusCode == Grpc.Core.StatusCode.Cancelled);
 
     /// <inheritdoc />
     public async Task LeaseRevokeAsync(long leaseId, CancellationToken cancellationToken)

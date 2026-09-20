@@ -1,0 +1,55 @@
+# OrionLock.Consul
+
+HashiCorp Consul backend for [OrionLock](https://www.nuget.org/packages/OrionLock). Each
+`(lockKey, ownerToken)` pair gets a Consul session whose TTL is the OrionLock lease duration; acquire is a
+session-scoped KV acquire, renew is a session renew, and release drops the KV entry and then destroys the
+session.
+
+```csharp
+services.AddOrionLock().UseConsul(new ConsulLockOptions());
+```
+
+## `LockDelay` is the safety mechanism, not a tuning knob
+
+**Default: 5 seconds. This changed from `TimeSpan.Zero`; see below if you relied on the old value.**
+
+Consul invalidating a session does not stop the process that held it. That process finds out only when
+its next renewal fails. If the key it held becomes available the instant Consul gives up on the session,
+a second holder can enter the critical section while the first one is still inside it — mutual exclusion
+is gone precisely in the partition case the lock exists for. `LockDelay` is the window in which the old
+holder notices and stands down, and a zero delay removes it.
+
+**What the value has to be.** `LockDelay` must outlast the gap between *Consul invalidating the session*
+and *the old holder giving up the lock*. Those two are:
+
+| Event | When it happens |
+| --- | --- |
+| Consul invalidates the session | one session TTL — `max(LeaseDuration, MinSessionTtl)` — after the last successful renew |
+| The holder surrenders the lock | one `RenewalFailureGracePeriod` (default: `LeaseDuration`) after the last successful renew |
+
+With the shipped defaults (30 s lease, 10 s `MinSessionTtl`, grace period defaulted to the lease) both
+land at 30 s, so the delay only has to absorb scheduling and clock jitter between the two — 5 seconds
+does that with room to spare.
+
+So: **`LockDelay >= RenewalFailureGracePeriod − session TTL + jitter`.** If you raise
+`RenewalFailureGracePeriod` above the session TTL, raise `LockDelay` by at least the same amount, or the
+guarantee no longer holds. Likewise if you lower `LeaseDuration` far enough that the session TTL floors
+at `MinSessionTtl` (10 s) while the grace period does not.
+
+**It does not slow down a normal release.** `ReleaseAsync` releases the KV entry *before* destroying the
+session, so the session holds no lock when it is invalidated and Consul never applies the delay. The cost
+is paid only on the crash and partition paths. Consul's own default is 15 seconds; 5 was chosen so that
+even on those paths half of OrionLock's default 10-second `WaitTimeout` stays usable.
+
+Set `LockDelay = TimeSpan.Zero` only if you accept that a partitioned holder and its successor can
+overlap.
+
+## Lock keys are URI path data
+
+The lock key is concatenated into Consul's `/v1/kv/{key}` HTTP path. Keys are percent-encoded per path
+segment, and a key containing an empty segment (a leading, trailing or doubled `/`) or a relative segment
+(`.`, `..`) is rejected with an `ArgumentException` — URI canonicalisation would resolve those and send
+the request somewhere other than the KV store. Use `ConsulLockOptions.KeyPrefix` for namespacing; its
+slashes are hierarchy and are preserved.
+
+See <https://github.com/tunahanaliozturk/OrionLock>.

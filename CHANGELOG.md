@@ -104,6 +104,62 @@ All notable changes to OrionLock are documented in this file. The format is base
   on the flag behaved as if the lease were a wall-clock TTL. The decorator now forwards the inner
   provider's value. If you relied on the `orion.lock.lease.expired_before_release` counter firing for a
   session-scoped backend, it will now correctly stay silent there.
+- **EF Core: two hosts with clock drift could hold the same exclusive lock.** `EfCoreLockProvider`
+  computed lease deadlines from `DateTime.UtcNow` on the application host, then compared them against a
+  deadline some other host had written with *its* clock. Hosts whose clocks differed by more than the
+  lease both saw the row as expired and both took it. Every instant now comes from the database server —
+  the same single authoritative clock the reader-writer providers already use — so drift between your
+  application hosts no longer affects mutual exclusion. Note that SQLite's `CURRENT_TIMESTAMP` has
+  whole-second resolution, so leases under about two seconds are not meaningful on SQLite.
+- **EF Core: the "provider-agnostic" SQL only ran on SQLite.** The table name and the `Key` column were
+  spliced into raw SQL unquoted. `Key` is a reserved word in T-SQL and MySQL, where the statement is a
+  syntax error, and PostgreSQL case-folded the bare table name to `orionlock_locks`, which does not
+  exist. Identifiers now come from your EF model and are quoted by the active provider, so renamed
+  tables, schemas and remapped columns work too. The provider is now exercised against real PostgreSQL
+  and SQL Server in CI, not SQLite alone.
+- **EF Core: a lost race on a brand-new key threw instead of returning `false`.** The first-use
+  `INSERT ... WHERE NOT EXISTS` is not atomic under READ COMMITTED, and its `catch` named
+  `DbUpdateException`, which raw SQL never raises — so a genuine primary-key violation escaped
+  `TryAcquireAsync` as a raw driver exception. A genuine unique / primary-key violation is now caught and
+  reported as "you did not get the lock". Only that one error is: a not-null, foreign-key or check
+  violation — which a customised lock-table mapping, an added constraint or a trigger can raise — still
+  reaches you as an exception rather than being retried forever as contention against a schema that can
+  never accept the row.
+- **etcd: a successful lease renewal could be reported as a lost lease.** The keep-alive resolved its
+  result in a race with its own response callback, so the handle could trip its lost-token and revoke
+  the lease while your code was still inside the critical section. Only etcd itself now decides: `false`
+  means the server said the lease is gone. A keep-alive stream that ends without any answer is treated
+  as a transient backend fault and throws, which the renewal loop already retries under its grace period
+  instead of surrendering the lock.
+- **Consul: a key freed by session invalidation was available before its old holder knew.** See the
+  breaking note below.
+- **Consul: a lock key could retarget the request at a different Consul endpoint.** Keys are spliced into
+  the `/v1/kv/{key}` HTTP path, where URI canonicalisation collapses `/../` and `?`/`#` splice or
+  truncate the request. Segments are now percent-encoded, and a key with an empty or relative (`.`,
+  `..`) segment is rejected with `ArgumentException`.
+- **ZooKeeper: the provider now declares itself session-scoped.** A ZooKeeper hold lasts as long as its
+  session, not for a TTL, but the provider left `LeaseDurationIsTtl` at the default `true`. That produced
+  false `expired_before_release` events for callers legitimately still holding the lock, and reported a
+  lost lease after a connection blip that merely delayed a renewal.
+- **ZooKeeper: a lock key containing `/` grew the ensemble's tree with no way back.** Each `/`-separated
+  segment became a persistent znode that release never deleted, and ZooKeeper keeps its whole tree in
+  memory. A key is now encoded into exactly one znode name, and a key's parent znode is deleted once its
+  last holder releases. Express hierarchy through `ZooKeeperLockOptions.RootPath`, not through the key.
+- **Redis: a sub-millisecond lease was destructive rather than short.** `RedisLockProvider` floored the
+  lease to whole milliseconds, so a positive sub-millisecond lease became `PEXPIRE key 0` — which
+  *deletes* the key, meaning the first renewal dropped the lock. Leases now round up to at least 1 ms,
+  and a zero or negative lease is rejected with `ArgumentOutOfRangeException` instead of silently
+  producing a broken lock. The provider also now validates `key` and `ownerToken` and honours the
+  `CancellationToken` on acquire and renew (release deliberately still runs, so a cancelled caller cannot
+  strand the lock).
+- **Redis: FIFO waiters were not actually ordered within a millisecond.** A sorted-set score is a double,
+  and the coordinator's packing overflowed its exact-integer range, so runs of about 16 same-millisecond
+  waiters collapsed onto one score and fell back to arbitrary ordering. The packing now stays inside that
+  range, so arrival order holds. **The score encoding changed:** during a rolling upgrade, waiters queued
+  on the same key by old and new coordinators order against each other incorrectly for one window.
+- **Testing: `InMemorySharedExclusiveLockProvider` could hand out an already-expired hold.** It read the
+  clock before taking the per-key lock, so a thread that waited stamped expiries against a stale instant.
+  The clock is now read under the lock.
 
 ### Changed
 
@@ -116,6 +172,14 @@ All notable changes to OrionLock are documented in this file. The format is base
   hides failures behind `continue-on-error`: it tolerates an already-published version and fails on
   anything else. The pre-pull step now names the SQL Server image the tests actually use
   (`2022-latest`), which it stopped doing when the suites moved to Testcontainers 4.
+- **BREAKING (Consul, default value): `ConsulLockOptions.LockDelay` now defaults to 5 seconds instead of
+  `TimeSpan.Zero`.** The zero default removed the mechanism that makes a Consul session lock safe under
+  partition: Consul invalidating a session does not stop the process that held it, so with no delay a new
+  holder can enter the critical section while the old one is still inside it. The delay is *not* paid on
+  a normal release — `ReleaseAsync` releases the KV entry before destroying the session — only on the
+  crash and partition paths. If you raise `RenewalFailureGracePeriod` above the Consul session TTL you
+  must raise `LockDelay` by the same amount; the package README states the rule. Set it back to
+  `TimeSpan.Zero` only if you accept that a partitioned holder and its successor can overlap.
 
 - **The container-backed tests skip instead of failing when Docker is absent.** The Redis, PostgreSQL,
   SQL Server and EF Core suites hard-failed on a machine with no Docker daemon - 135 red tests that said

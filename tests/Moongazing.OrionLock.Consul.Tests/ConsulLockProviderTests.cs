@@ -1,4 +1,4 @@
-using Moongazing.OrionLock.Consul;
+﻿using Moongazing.OrionLock.Consul;
 using Moq;
 
 namespace Moongazing.OrionLock.Consul.Tests;
@@ -6,6 +6,10 @@ namespace Moongazing.OrionLock.Consul.Tests;
 public sealed class ConsulLockProviderTests
 {
     private static readonly TimeSpan Lease = TimeSpan.FromSeconds(30);
+
+    // The shipped LockDelay, read from the options rather than hardcoded: it is a safety value with a
+    // documented derivation, not a number these tests get to pin independently.
+    private static readonly TimeSpan DefaultLockDelay = new ConsulLockOptions().LockDelay;
 
     private static (Mock<IConsulClientAdapter> adapter, ConsulLockProvider sut) NewProvider(
         ConsulLockOptions? options = null)
@@ -29,7 +33,7 @@ public sealed class ConsulLockProviderTests
         var acquired = await sut.TryAcquireAsync("k", "owner-1", Lease, CancellationToken.None);
 
         Assert.True(acquired);
-        adapter.Verify(a => a.CreateSessionAsync(Lease, "release", TimeSpan.Zero, It.IsAny<CancellationToken>()), Times.Once);
+        adapter.Verify(a => a.CreateSessionAsync(Lease, "release", DefaultLockDelay, It.IsAny<CancellationToken>()), Times.Once);
         adapter.Verify(a => a.KvAcquireAsync("orionlock/k", "owner-1", "session-1", It.IsAny<CancellationToken>()), Times.Once);
     }
 
@@ -63,7 +67,7 @@ public sealed class ConsulLockProviderTests
 
         await sut.TryAcquireAsync("k", "owner-1", TimeSpan.FromSeconds(5), CancellationToken.None);
 
-        adapter.Verify(a => a.CreateSessionAsync(TimeSpan.FromSeconds(15), "release", TimeSpan.Zero, It.IsAny<CancellationToken>()), Times.Once);
+        adapter.Verify(a => a.CreateSessionAsync(TimeSpan.FromSeconds(15), "release", DefaultLockDelay, It.IsAny<CancellationToken>()), Times.Once);
     }
 
     [Fact]
@@ -143,7 +147,7 @@ public sealed class ConsulLockProviderTests
 
         await sut.TryAcquireAsync("k", "owner-1", Lease, CancellationToken.None);
 
-        adapter.Verify(a => a.CreateSessionAsync(It.IsAny<TimeSpan>(), "delete", TimeSpan.Zero, It.IsAny<CancellationToken>()), Times.Once);
+        adapter.Verify(a => a.CreateSessionAsync(It.IsAny<TimeSpan>(), "delete", DefaultLockDelay, It.IsAny<CancellationToken>()), Times.Once);
     }
 
     [Fact]

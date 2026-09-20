@@ -1,4 +1,4 @@
-using System.Collections.Concurrent;
+﻿using System.Collections.Concurrent;
 using Moongazing.OrionLock.Diagnostics;
 using Moongazing.OrionLock.Providers;
 
@@ -80,10 +80,14 @@ public sealed class InMemorySharedExclusiveLockProvider : ISharedExclusiveLockPr
         ArgumentException.ThrowIfNullOrEmpty(ownerToken);
 
         var state = keys.GetOrAdd(key, static _ => new KeyState());
-        var now = DateTime.UtcNow;
 
         lock (state)
         {
+        // The clock is read INSIDE the monitor, never before it. A thread that waited here would
+        // otherwise prune and stamp expiries against an instant from before the wait, and could be handed
+        // a hold that had already expired. Same reason the PostgreSQL provider reads its clock after it
+        // is serialized.
+            var now = DateTime.UtcNow;
             PruneExpired(state, now);
 
             return Task.FromResult(mode == LockMode.Shared
@@ -157,9 +161,13 @@ public sealed class InMemorySharedExclusiveLockProvider : ISharedExclusiveLockPr
             return Task.FromResult(false);
         }
 
-        var now = DateTime.UtcNow;
         lock (state)
         {
+        // The clock is read INSIDE the monitor, never before it. A thread that waited here would
+        // otherwise prune and stamp expiries against an instant from before the wait, and could be handed
+        // a hold that had already expired. Same reason the PostgreSQL provider reads its clock after it
+        // is serialized.
+            var now = DateTime.UtcNow;
             PruneExpired(state, now);
 
             if (mode == LockMode.Shared)
@@ -192,9 +200,13 @@ public sealed class InMemorySharedExclusiveLockProvider : ISharedExclusiveLockPr
             return Task.CompletedTask;
         }
 
-        var now = DateTime.UtcNow;
         lock (state)
         {
+        // The clock is read INSIDE the monitor, never before it. A thread that waited here would
+        // otherwise prune and stamp expiries against an instant from before the wait, and could be handed
+        // a hold that had already expired. Same reason the PostgreSQL provider reads its clock after it
+        // is serialized.
+            var now = DateTime.UtcNow;
             if (mode == LockMode.Shared)
             {
                 state.SharedHolders.Remove(ownerToken);

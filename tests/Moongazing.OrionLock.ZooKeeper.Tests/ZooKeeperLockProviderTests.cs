@@ -1,4 +1,4 @@
-using Moongazing.OrionLock.ZooKeeper;
+﻿using Moongazing.OrionLock.ZooKeeper;
 using Moq;
 
 namespace Moongazing.OrionLock.ZooKeeper.Tests;
@@ -233,6 +233,19 @@ public sealed class ZooKeeperLockProviderTests
         var cId = c.CreatePersistentParentAcl("/x").Single().getId().getId();
         Assert.Equal(aId, bId);
         Assert.NotEqual(aId, cId);
+    }
+
+    [Fact]
+    public void LeaseDurationIsTtl_IsFalse_BecauseHoldsAreSessionScoped()
+    {
+        // A ZooKeeper hold lives as long as the ephemeral znode's session; the leaseDuration is never
+        // written anywhere, so there is no TTL for the core to account for. Reporting the interface
+        // default of true made the core raise a false expired_before_release for a caller still
+        // legitimately holding the lock, and call the lease lost after a connection blip. Same answer as
+        // the equally session-scoped Postgres and SQL Server advisory-lock providers.
+        var (_, sut) = NewProvider();
+
+        Assert.False(sut.LeaseDurationIsTtl);
     }
 
     private static async Task<(Mock<IZooKeeperClientAdapter> adapter, ZooKeeperLockProvider sut)> AcquireAsync()

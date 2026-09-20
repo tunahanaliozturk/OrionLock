@@ -1,4 +1,4 @@
-namespace Moongazing.OrionLock.ZooKeeper;
+﻿namespace Moongazing.OrionLock.ZooKeeper;
 
 /// <summary>
 /// Configuration for the ZooKeeper-backed <see cref="ZooKeeperLockProvider"/>.
@@ -10,6 +10,12 @@ public sealed class ZooKeeperLockOptions
     /// the parent znode for lock key <c>k</c> becomes <c>/orionlock/k</c>. Override to
     /// namespace multiple OrionLock consumers sharing one ZooKeeper ensemble.
     /// </summary>
+    /// <remarks>
+    /// The lock key is encoded into a SINGLE znode name under this root, so a key containing
+    /// <c>/</c> adds one znode rather than a chain of persistent ones - characters outside
+    /// <c>[A-Za-z0-9-_]</c> appear as <c>~XXXX</c>. Express hierarchy through this root path, not
+    /// through the key. A key's parent znode is pruned when its last child is released.
+    /// </remarks>
     public string RootPath { get; set; } = "/orionlock";
 
     /// <summary>

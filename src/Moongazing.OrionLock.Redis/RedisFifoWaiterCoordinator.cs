@@ -1,4 +1,4 @@
-namespace Moongazing.OrionLock.Redis;
+﻿namespace Moongazing.OrionLock.Redis;
 
 using Moongazing.OrionLock.Fairness;
 using StackExchange.Redis;
@@ -11,8 +11,9 @@ using StackExchange.Redis;
 /// <remarks>
 /// <para>
 /// Storage shape: one sorted set per key under the configured prefix
-/// (<see cref="RedisFifoWaiterOptions.KeyPrefix"/>). Member = unique waiter id (Guid),
-/// score = arrival epoch millisecond.
+/// (<see cref="RedisFifoWaiterOptions.KeyPrefix"/>). Member = unique waiter id (Guid), score = the
+/// arrival millisecond packed with a per-process arrival sequence. The packing is chosen so the whole
+/// score stays inside a double's exact-integer range; see the score constants below.
 /// </para>
 /// <para>
 /// Leave semantics: <see cref="LeaveAsync"/> issues a <c>ZREM</c>. If the caller never
@@ -34,11 +35,25 @@ public sealed class RedisFifoWaiterCoordinator : IFifoWaiterCoordinator
     private readonly RedisFifoWaiterOptions options;
     private readonly TimeProvider clock;
 
-    // Sub-millisecond tiebreaker: when two processes ZADD inside the same epoch ms, the
-    // pair (ms, monotonic-sequence) produces a unique score that preserves arrival order.
-    // The sequence counter is process-local and wraps; equal-score collisions are still
-    // possible across two processes but the per-process burst case (which is what triggers
-    // the unfair-by-Guid-ordering hazard the most) is fixed.
+    // Sub-millisecond tiebreaker: when two ZADDs land inside the same epoch millisecond, the pair
+    // (ms, monotonic-sequence) still produces a unique score that preserves arrival order. The sequence
+    // counter is process-local and wraps; equal-score collisions remain possible across two processes,
+    // but the per-process burst case - the one that actually triggers the unfair-by-Guid-ordering hazard
+    // - is ordered.
+    //
+    // THE SCORE MUST FIT IN 53 BITS. A Redis sorted-set score is a double, which represents integers
+    // exactly only up to 2^53; above that the ULP grows and neighbouring packed values quantize onto the
+    // SAME score. The previous packing, (unixMs << 16) | seq, needs 57 bits at a 2020s epoch, so its ULP
+    // was 16: runs of ~16 same-millisecond waiters collapsed to one score and fell back to lexicographic
+    // Guid ordering - exactly the unfairness the tiebreaker was added to remove. The budget is therefore
+    // spent deliberately: milliseconds are counted from a fixed 2020 epoch rather than 1970 (38 bits
+    // today instead of 41), and the sequence gets 12 bits (4096 waiters per millisecond per process,
+    // orders of magnitude beyond what a round-tripping ZADD can produce). That totals ~50 bits now and
+    // stays under 2^53 - every score exact, no quantization - until roughly the year 2089.
+    private const long ScoreEpochMs = 1_577_836_800_000; // 2020-01-01T00:00:00Z
+    private const int SequenceBits = 12;
+    private const long SequenceMask = (1L << SequenceBits) - 1;
+
     private static long sequenceCounter;
 
     /// <summary>Construct against an already-connected <see cref="IConnectionMultiplexer"/>.</summary>
@@ -112,11 +127,18 @@ public sealed class RedisFifoWaiterCoordinator : IFifoWaiterCoordinator
     }
 
     private long ComputeScore()
-    {
-        var ms = clock.GetUtcNow().ToUnixTimeMilliseconds();
-        var seq = Interlocked.Increment(ref sequenceCounter) & 0xFFFF; // 16-bit wrap
-        return (ms << 16) | seq;
-    }
+        => PackScore(clock.GetUtcNow().ToUnixTimeMilliseconds(), Interlocked.Increment(ref sequenceCounter));
+
+    /// <summary>
+    /// Packs an arrival millisecond and a monotonic sequence into one sorted-set score. Internal so the
+    /// precision budget can be asserted directly, without a Redis server: a score that has quantized is
+    /// invisible end-to-end until two waiters happen to tie.
+    /// </summary>
+    internal static long PackScore(long unixMs, long sequence)
+        => ((unixMs - ScoreEpochMs) << SequenceBits) | (sequence & SequenceMask);
+
+    /// <summary>The score every waiter that arrived at or before <paramref name="unixMs"/> sorts at or below.</summary>
+    internal static long PackCutoff(long unixMs) => (unixMs - ScoreEpochMs) << SequenceBits;
 
     /// <inheritdoc />
     public async Task LeaveAsync(IFifoWaiterTicket ticket, CancellationToken cancellationToken)
@@ -140,15 +162,13 @@ public sealed class RedisFifoWaiterCoordinator : IFifoWaiterCoordinator
             return;
         }
         var cutoffMs = clock.GetUtcNow().ToUnixTimeMilliseconds() - (long)options.WaiterTtl.TotalMilliseconds;
-        if (cutoffMs <= 0)
+        if (cutoffMs <= ScoreEpochMs)
         {
             return;
         }
-        // Scores are packed (ms << 16) | sequence. Shift the millisecond cutoff into the
-        // same encoding so RemoveRangeByScore compares like-for-like; without this the raw
-        // ms cutoff (e.g. 850) is smaller than every packed score (>= 65,536,000) and
-        // pruning would never remove anything.
-        var cutoffScore = cutoffMs << 16;
+        // The cutoff has to be expressed in the SAME packing as the scores, or RemoveRangeByScore
+        // compares a raw millisecond count against packed values and prunes nothing.
+        var cutoffScore = PackCutoff(cutoffMs);
         await Db.SortedSetRemoveRangeByScoreAsync(redisKey, double.NegativeInfinity, cutoffScore).ConfigureAwait(false);
     }
 

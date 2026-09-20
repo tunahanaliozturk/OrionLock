@@ -1,4 +1,4 @@
-namespace Moongazing.OrionLock.Consul;
+﻿namespace Moongazing.OrionLock.Consul;
 
 using System.Text;
 using global::Consul;
@@ -65,7 +65,9 @@ public sealed class DefaultConsulClientAdapter : IConsulClientAdapter
     /// <inheritdoc />
     public async Task<bool> KvAcquireAsync(string key, string ownerToken, string sessionId, CancellationToken cancellationToken)
     {
-        var pair = new KVPair(key)
+        // The key is spliced into /v1/kv/{key} as a URI path; see ConsulKvPath for what an unencoded
+        // one can be made to do.
+        var pair = new KVPair(ConsulKvPath.Encode(key, nameof(key)))
         {
             Value = Encoding.UTF8.GetBytes(ownerToken),
             Session = sessionId,
@@ -77,7 +79,7 @@ public sealed class DefaultConsulClientAdapter : IConsulClientAdapter
     /// <inheritdoc />
     public async Task<bool> KvReleaseAsync(string key, string sessionId, CancellationToken cancellationToken)
     {
-        var pair = new KVPair(key)
+        var pair = new KVPair(ConsulKvPath.Encode(key, nameof(key)))
         {
             Session = sessionId,
         };

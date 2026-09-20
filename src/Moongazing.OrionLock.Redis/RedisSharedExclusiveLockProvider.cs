@@ -1,4 +1,4 @@
-using Moongazing.OrionLock.Diagnostics;
+﻿using Moongazing.OrionLock.Diagnostics;
 using Moongazing.OrionLock.Providers;
 using StackExchange.Redis;
 
@@ -183,35 +183,9 @@ public sealed class RedisSharedExclusiveLockProvider : ISharedExclusiveLockProvi
 
     private IDatabase Db => multiplexer.GetDatabase(options.Database);
 
-    /// <summary>
-    /// Converts a lease <see cref="TimeSpan"/> to the integer-millisecond <c>PX</c> / score value the
-    /// Lua scripts use, rejecting non-positive leases and never truncating a positive lease to zero.
-    /// </summary>
-    /// <remarks>
-    /// A raw <c>(long)leaseDuration.TotalMilliseconds</c> would floor a positive sub-millisecond lease
-    /// to <c>0</c> (Redis <c>PX 0</c> / a now-relative score that has already passed produces an
-    /// immediately-expired, effectively useless lock) and would silently accept zero or negative
-    /// durations. Rounding up with <see cref="Math.Ceiling(double)"/> guarantees every positive lease
-    /// maps to at least <c>1</c> ms, and the guard makes a non-positive lease a caller error rather
-    /// than a silently broken lock. Every lease-to-ms conversion - shared and exclusive acquire and
-    /// renew, and (transitively, via <c>ARGV[2]</c>) the pending-writer marker TTL - routes through
-    /// here so the normalization can never be bypassed.
-    /// </remarks>
-    /// <param name="leaseDuration">The requested lease duration.</param>
-    /// <returns>The lease length in whole milliseconds, always &gt;= 1.</returns>
-    /// <exception cref="ArgumentOutOfRangeException">
-    /// <paramref name="leaseDuration"/> is less than or equal to <see cref="TimeSpan.Zero"/>.
-    /// </exception>
-    private static long ToLeaseMilliseconds(TimeSpan leaseDuration)
-    {
-        if (leaseDuration <= TimeSpan.Zero)
-        {
-            throw new ArgumentOutOfRangeException(
-                nameof(leaseDuration), leaseDuration, "Lease duration must be positive.");
-        }
-
-        return (long)Math.Ceiling(leaseDuration.TotalMilliseconds);
-    }
+    // The single lease-to-milliseconds normalization for the whole package; see RedisLease for why a
+    // raw (long) cast is destructive rather than merely imprecise.
+    private static long ToLeaseMilliseconds(TimeSpan leaseDuration) => RedisLease.ToMilliseconds(leaseDuration);
 
     // The three physical keys for one logical key. Hash-tagged on the logical key so a clustered
     // deployment routes all three to the same slot, which a multi-key Lua script requires.
