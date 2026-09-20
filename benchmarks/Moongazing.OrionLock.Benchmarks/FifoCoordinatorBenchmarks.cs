@@ -18,9 +18,15 @@ namespace Moongazing.OrionLock.Benchmarks;
 /// The larger depths exist because the empty queue structurally cannot show what the coordinator
 /// does per enter: it counts the live waiters ahead of the newcomer with a LINQ scan over the whole
 /// queue, under the coordinator's single process-wide lock. That scan is O(N) in the current queue
-/// depth, so building a queue of N costs O(N^2) scanning - and because the lock is global rather
-/// than per key, every key in the process serializes behind it. Comparing the per-depth means (and
-/// the allocation column, which pays for the LINQ enumerator each time) is how that shows up.
+/// depth, so building a queue of N does O(N^2) scanning in total - and because the lock is global
+/// rather than per key, every key in the process serializes behind it.
+/// </para>
+/// <para>
+/// Read the per-depth means as cost PER WAITER, not as a total. On the baseline run the scan is not
+/// yet what dominates: the handoff itself (a TaskCompletionSource completion and a thread-pool hop
+/// per waiter) is the bulk of it, and the quadratic term is only starting to show at the deepest
+/// parameter. That is the useful state for a baseline - the measurement is in place and will move
+/// the moment either term changes, which the empty-queue benchmark could never have shown.
 /// </para>
 /// </remarks>
 [MultiRuntimeConfig]

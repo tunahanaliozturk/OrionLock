@@ -49,9 +49,14 @@ blocking `AcquireAsync` under low contention, and it remains the baseline row.
 The larger depths exist because the empty queue structurally cannot show what the coordinator does
 per enter: it counts the live waiters ahead of the newcomer with a LINQ scan over the whole queue,
 under the coordinator's single process-wide lock. That scan is O(N) in the current queue depth, so
-building a queue of N costs O(N^2) scanning, and because the lock is global rather than per key,
-every key in the process serializes behind it. The per-depth means and the allocation column (a LINQ
-enumerator per enter) are where that shows up.
+building a queue of N does O(N^2) scanning in total, and because the lock is global rather than per
+key, every key in the process serializes behind it.
+
+Read the per-depth means as cost per waiter rather than as a total. On the baseline run the scan is
+not yet the dominant term: the handoff itself, a `TaskCompletionSource` completion and a thread-pool
+hop per waiter, is most of it, and the quadratic term only begins to show at the deepest parameter.
+That is the useful state for a baseline. The measurement is in place and will move as soon as either
+term changes, which the empty-queue benchmark could never have shown.
 
 ### DistributedLockAcquireBenchmarks
 
@@ -139,6 +144,12 @@ reader holds, records the backend's pending-writer reservation, polls, and takes
 reader drains. The handoff is deterministic: the writer's first attempt runs inline before
 `AcquireExclusiveAsync` returns its task, so it is guaranteed to have been refused before the reader
 releases. What is left to measure is the poll-driven wake-up, because nothing notifies the writer.
+
+Expect the handoff row to land near one operating-system timer tick (about 15.6 ms on Windows)
+rather than near the 1 ms retry interval the benchmark configures, because that is what a
+`Task.Delay` shorter than a tick actually sleeps for. That is the finding rather than an artefact:
+shrinking `RetryInterval` below a tick buys nothing, so handoff latency cannot be tuned down. Only
+replacing the poll with a notification can move it.
 
 The backend is the shipped `InMemorySharedExclusiveLockProvider` rather than a bench-local stand-in,
 because the writer-fairness behaviour under test lives in the provider and a simplified fake would

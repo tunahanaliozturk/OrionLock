@@ -54,8 +54,12 @@ public class SharedExclusiveLockBenchmarks
         };
 
         // Held for the whole run so SharedOnShared always measures a SECOND reader joining an
-        // existing one rather than a first reader taking a free key.
-        outerReader = await rwLock.AcquireSharedAsync(SharedOnSharedKey, options).ConfigureAwait(false);
+        // existing one rather than a first reader taking a free key. The lease is an hour rather
+        // than the 30 s used elsewhere BECAUSE the watchdog is off: a 30 s lease would quietly
+        // expire partway through a longer run, the provider would prune the holder, and the
+        // benchmark would go on reporting an uncontended acquire under a shared-on-shared name.
+        var outerOptions = new DistributedLockOptions { AutoRenew = false, LeaseDuration = TimeSpan.FromHours(1) };
+        outerReader = await rwLock.AcquireSharedAsync(SharedOnSharedKey, outerOptions).ConfigureAwait(false);
     }
 
     [GlobalCleanup]
@@ -88,6 +92,13 @@ public class SharedExclusiveLockBenchmarks
     /// releases. What is left to measure is the poll-driven wake-up: the writer finds out the key is
     /// free only on its next retry tick, because nothing notifies it.
     /// </summary>
+    /// <remarks>
+    /// Expect this row to come out near one operating-system timer tick (about 15.6 ms on Windows)
+    /// rather than near the 1 ms retry interval, because that is what a <c>Task.Delay</c> shorter
+    /// than a tick actually sleeps for. That is the finding, not an artefact: shrinking
+    /// <see cref="DistributedLockOptions.RetryInterval"/> below a tick buys nothing, so handoff
+    /// latency cannot be tuned down - only a notification instead of a poll can move it.
+    /// </remarks>
     [Benchmark]
     public async Task ExclusiveWaitingOnReaders()
     {
