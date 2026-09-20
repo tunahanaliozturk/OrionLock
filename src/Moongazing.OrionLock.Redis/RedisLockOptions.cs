@@ -21,11 +21,18 @@ public sealed class RedisLockOptions
     /// </para>
     /// <para>
     /// <b>It costs storage, which is why it is opt-in.</b> The counter lives in a second key
-    /// (<c>{lockKey}:fence</c>) that has NO expiry and is NOT deleted on release - it cannot have one.
+    /// (<c>orionlock-fence:{lockKey}</c>) that has NO expiry and is NOT deleted on release - it cannot
+    /// have one.
     /// A counter that expired would restart at 1 and hand a later holder a token an earlier one already
     /// used, which is precisely the failure a fencing token exists to prevent. So enabling this leaves
     /// one small permanent key per lock key you ever take, and turning it on silently on upgrade would
     /// have been a storage change nobody asked for.
+    /// </para>
+    /// <para>
+    /// Counter keys live under the reserved <see cref="RedisFencingKeys.ReservedPrefix"/> namespace, and
+    /// while this is on, a lock key that would resolve into it is rejected with an
+    /// <see cref="ArgumentException"/> - otherwise one physical key would be both a lock and another
+    /// key's counter. With the default <see cref="KeyPrefix"/> that rejection can never fire.
     /// </para>
     /// <para>
     /// The counter key is written with a hash tag so it shares a slot with the lock key on Redis

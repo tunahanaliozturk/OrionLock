@@ -194,22 +194,42 @@ public sealed class FencingTokenTests
         Assert.Equal(atAcquire, handle.FencingToken);
     }
 
-    [Fact]
-    public async Task The_acquire_span_carries_the_token_and_the_meter_never_does()
+    /// <summary>
+    /// Captures the acquire span for ONE key. An <see cref="ActivityListener"/> is process-global and
+    /// receives every OrionLock acquire in the run, including those of test classes executing in
+    /// parallel - so the key is filtered inside the callback (exact match, because one test's key can be
+    /// a prefix of another's) and the collection is concurrent, since the callback is not called on this
+    /// test's thread alone.
+    /// </summary>
+    private static async Task<Activity> CaptureAcquireSpanAsync(IDistributedLockProvider provider, string key)
     {
-        var activities = new List<Activity>();
+        var expectedName = $"OrionLock.Acquire {key}";
+        var captured = new System.Collections.Concurrent.ConcurrentQueue<Activity>();
         using var listener = new ActivityListener
         {
             ShouldListenTo = s => s.Name == OrionLockDiagnostics.ActivitySourceName,
             Sample = (ref ActivityCreationOptions<ActivityContext> _) => ActivitySamplingResult.AllData,
-            ActivityStopped = activities.Add,
+            ActivityStopped = a =>
+            {
+                if (string.Equals(a.DisplayName, expectedName, StringComparison.Ordinal))
+                {
+                    captured.Enqueue(a);
+                }
+            },
         };
         ActivitySource.AddActivityListener(listener);
 
-        var sut = new DistributedLock(new InMemoryLockProvider());
-        await using (await sut.AcquireAsync("fence-span", NoRenew)) { }
+        var sut = new DistributedLock(provider);
+        await using (await sut.AcquireAsync(key, NoRenew)) { }
 
-        var acquire = Assert.Single(activities, a => a.DisplayName.Contains("fence-span", StringComparison.Ordinal));
+        return Assert.Single(captured);
+    }
+
+    [Fact]
+    public async Task The_acquire_span_carries_the_token_and_the_meter_never_does()
+    {
+        var acquire = await CaptureAcquireSpanAsync(new InMemoryLockProvider(), "fence-span");
+
         // Unbounded cardinality is fine on a sampled, per-trace span and fatal on an aggregated metric
         // series - see docs/lock-key-cardinality.md, which is why this assertion lives on the Activity.
         Assert.Equal(1L, acquire.GetTagItem("orionlock.fencing_token"));
@@ -218,19 +238,8 @@ public sealed class FencingTokenTests
     [Fact]
     public async Task An_unfenced_backend_leaves_the_span_tag_off_entirely()
     {
-        var activities = new List<Activity>();
-        using var listener = new ActivityListener
-        {
-            ShouldListenTo = s => s.Name == OrionLockDiagnostics.ActivitySourceName,
-            Sample = (ref ActivityCreationOptions<ActivityContext> _) => ActivitySamplingResult.AllData,
-            ActivityStopped = activities.Add,
-        };
-        ActivitySource.AddActivityListener(listener);
+        var acquire = await CaptureAcquireSpanAsync(new UnfencedProvider(), "fence-span-absent");
 
-        var sut = new DistributedLock(new UnfencedProvider());
-        await using (await sut.AcquireAsync("fence-span-absent", NoRenew)) { }
-
-        var acquire = Assert.Single(activities, a => a.DisplayName.Contains("fence-span-absent", StringComparison.Ordinal));
         Assert.Null(acquire.GetTagItem("orionlock.fencing_token"));
     }
 }

@@ -18,10 +18,12 @@ All notable changes to OrionLock are documented in this file. The format is base
 
   `handle.FencingToken` is a `long?` that strictly increases with each acquisition **of that key**, across
   processes. Pass it to the resource you are protecting and have the resource refuse any write carrying a
-  token lower than the highest it has already accepted — then the resumed process is turned away by the
-  only participant in a position to know. The check must be one statement with the write, not a `SELECT`
-  then an `UPDATE`; [README](README.md#fencing-tokens) and [docs/fencing-tokens.md](docs/fencing-tokens.md)
-  have the SQL and the reasoning.
+  token **lower** than the highest it has already accepted — then the resumed process is turned away by
+  the only participant in a position to know. A token equal to the mark is the current holder writing
+  again and must be accepted: the token identifies the acquisition, not the write, and stays stable for
+  the whole hold. The check must also be one statement with the write, not a `SELECT` then an `UPDATE`;
+  [README](README.md#fencing-tokens) and [docs/fencing-tokens.md](docs/fencing-tokens.md) have the SQL
+  (`last_fence <= @fence`) and the reasoning.
 
   **Which backends provide one.** `null` means the backend has nothing it can make strictly monotonic, and
   OrionLock reports that rather than inventing a counter you would then trust:
@@ -37,7 +39,12 @@ All notable changes to OrionLock are documented in this file. The format is base
 
   Redis is opt-in because the counter key can never expire or be deleted — one that restarted would
   reissue a token an earlier holder already spent — so enabling it leaves one small permanent key per lock
-  key. Consul is opt-in because its acquire returns no index, so the token costs one extra GET.
+  key. Those counters live under a reserved `orionlock-fence:` prefix, and with fencing on, a lock key
+  that would resolve into that namespace is rejected with an `ArgumentException` rather than becoming both
+  a lock and another key's counter; with the default `orionlock:` key prefix that can never happen.
+  Consul is opt-in because its acquire returns no index, so the token costs one extra GET — and a read
+  that comes back empty fails the acquire (releasing the key) rather than returning an untokened hold over
+  a lock that may already be gone.
   ZooKeeper reports `null` because both numbers it offers (the sequential znode's suffix and the parent's
   `cversion`) reset when the provider prunes the empty parent znode; PostgreSQL advisory locks and SQL
   Server `sp_getapplock` report `null` because they keep no per-key state to count, and the schema-free

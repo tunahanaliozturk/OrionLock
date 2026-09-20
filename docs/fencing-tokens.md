@@ -34,7 +34,7 @@ The contract, in full:
 | Backend | Derived from | Genuinely monotonic? | Default |
 | --- | --- | --- | --- |
 | **etcd** | the mvcc revision in the acquiring transaction's own response header | **Yes.** Cluster-wide, advances on every committed write, never reset — not by deleting the key, not by lease expiry, not by leader election | On. Free: the revision already comes back with the acquire |
-| **Redis** | `INCR` on `{lockKey}:fence`, in the same Lua call as the `SET NX PX` | **Yes.** One atomic script, so the token and the lock cannot come apart and two acquirers cannot read the same value | Off (`RedisLockOptions.FencingTokens`) |
+| **Redis** | `INCR` on a per-key counter, in the same Lua call as the `SET NX PX` | **Yes.** One atomic script, so the token and the lock cannot come apart and two acquirers cannot read the same value | Off (`RedisLockOptions.FencingTokens`) |
 | **EF Core** | the `FencingToken` column, `+ 1` in the same `UPDATE` that takes the row | **Yes.** The row is never deleted — release nulls the owner and leaves the row — so the counter only moves forward | On, but needs a [migration](migrations/orionlock-locks-table.md) |
 | **Consul** | the KV `ModifyIndex` of the acquired key | **Yes.** It is the Raft log index: cluster-global, advances on every committed write, never rewound | Off (`ConsulLockOptions.FencingTokens`) |
 | **In-memory (Testing)** | a per-key counter bumped under the same compare-and-swap that grants the lease | **Yes, within one process** — the only scope this backend ever claims | On |
@@ -46,7 +46,11 @@ The contract, in full:
 
 The counter key can never expire and is never deleted. It cannot: a counter that restarted would hand a later holder a token an earlier one already spent, which is precisely the failure being prevented. So turning fencing on leaves one small permanent key for every lock key you ever take. That is a storage change, and a library should not make one on your behalf during an upgrade.
 
-The counter key is written as `{prefix+key}:fence` — braces included — so Redis Cluster hashes it into the lock key's slot and the two-key script is not rejected. A lock key that contains a brace of its own can break that co-location, and the cluster then answers `CROSSSLOT`: loudly, at acquire time.
+Counter keys live under their own reserved prefix, `orionlock-fence:{prefix+key}` — braces included, so Redis Cluster hashes the counter into the lock key's slot and the two-key script is not rejected. A lock key that contains a brace of its own can break that co-location, and the cluster then answers `CROSSSLOT`: loudly, at acquire time.
+
+The reserved prefix is not decoration. Lock keys and counter keys share one physical keyspace and `KeyPrefix` may be empty, so a counter key built by decorating the lock key is a key some caller can also ask to lock — and then two unrelated locks contend through one counter. Worse, the counter key would hold an owner token instead of an integer, the script's `INCR` would fail at runtime *after* its `SET` had already taken the lease, and Redis does not roll back a script's earlier writes: the lock would be held by nobody until it expired. Two things prevent that. The counter prefix sits in a fixed leading position the caller's key cannot occupy, and with fencing on, a lock key that would still resolve into `orionlock-fence:` is refused with an `ArgumentException` — naming alone cannot separate the two when the caller controls the whole key, so the refusal is what makes it a guarantee. With the shipped `orionlock:` prefix the refusal can never fire, because every physical lock key starts with that instead.
+
+Belt and braces, the script runs its `INCR` *before* the `SET`, so even a counter key that somehow holds the wrong type costs a counter value rather than a stranded lease.
 
 ### Why Consul fencing is opt-in, and why not `LockIndex`
 
@@ -91,8 +95,8 @@ This is the part that goes wrong. The comparison and the write must be **one sta
 UPDATE orders
    SET status     = @status,
        last_fence = @fence
- WHERE id         = @orderId
-   AND last_fence < @fence;
+ WHERE id          = @orderId
+   AND last_fence  <= @fence;
 ```
 
 ```csharp
@@ -107,7 +111,7 @@ if (rows == 0)
 Details that matter:
 
 - **One statement, not two.** A `SELECT last_fence` followed by an `UPDATE` can be interleaved by exactly the stale writer you are trying to stop — it slips in between your read and your write, and your write then overwrites it.
-- **`<`, not `<=`.** Two acquisitions never share a token, so a repeat is a replay of an old one.
+- **`<=`, not `<`.** Fencing rejects a token *below* the high-water mark, never one equal to it. The token identifies the acquisition, not the write, and stays stable for the whole hold — so a critical section that writes twice presents the same number twice, and both writes belong to the current holder. `<` would reject the second one and report a stale holder where there is none. The rule is symmetric with `FencingGuard`, which accepts a repeat for the same reason.
 - **`last_fence NOT NULL DEFAULT 0`,** so the first write to a brand-new row passes.
 - **Zero rows is a real outcome, not an error to swallow.** It means your lease is gone and something else is already doing the work. Retrying is the worst possible response.
 - **One `last_fence` per lock key,** because the token is only monotonic per key. If one lock protects several rows, the column belongs on whatever the key identifies.

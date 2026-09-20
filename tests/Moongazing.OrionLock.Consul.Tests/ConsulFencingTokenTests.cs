@@ -1,3 +1,4 @@
+using Moongazing.OrionLock;
 using Moongazing.OrionLock.Consul;
 using Moq;
 
@@ -70,6 +71,41 @@ public sealed class ConsulFencingTokenTests
         adapter.Verify(
             a => a.KvReleaseAsync("orionlock/k", "session-1", It.IsAny<CancellationToken>()), Times.Once);
         adapter.Verify(a => a.DestroySessionAsync("session-1", It.IsAny<CancellationToken>()), Times.Once);
+    }
+
+    [Fact]
+    public async Task An_index_read_that_finds_no_key_releases_rather_than_reporting_an_untokened_hold()
+    {
+        // KvModifyIndexAsync returns null when the key is not there - which, between a successful
+        // acquire and the read-back, means the session was invalidated or the entry deleted. We did not
+        // really end up holding it. Returning "acquired, no token" here would hand a caller who
+        // explicitly asked for fencing a handle with no token over a lock that may already be gone:
+        // the same outcome as the throwing case, so it takes the same exit.
+        var (adapter, fencing, sut) = NewProvider(fencingTokens: true);
+        fencing.Setup(a => a.KvModifyIndexAsync(It.IsAny<string>(), It.IsAny<CancellationToken>()))
+            .ReturnsAsync((long?)null);
+
+        await Assert.ThrowsAsync<OrionLockBackendException>(
+            () => sut.TryAcquireFencedAsync("k", "owner-1", Lease, CancellationToken.None));
+
+        adapter.Verify(
+            a => a.KvReleaseAsync("orionlock/k", "session-1", It.IsAny<CancellationToken>()), Times.Once);
+        adapter.Verify(a => a.DestroySessionAsync("session-1", It.IsAny<CancellationToken>()), Times.Once);
+    }
+
+    [Fact]
+    public async Task A_failed_index_read_does_not_leave_the_owner_mapping_behind()
+    {
+        // The mapping is what Renew and Release key off. Publishing it for a hold we just gave back
+        // would let a later Release destroy a session some other acquirer now owns.
+        var (adapter, fencing, sut) = NewProvider(fencingTokens: true);
+        fencing.Setup(a => a.KvModifyIndexAsync(It.IsAny<string>(), It.IsAny<CancellationToken>()))
+            .ReturnsAsync((long?)null);
+
+        await Assert.ThrowsAsync<OrionLockBackendException>(
+            () => sut.TryAcquireFencedAsync("k", "owner-1", Lease, CancellationToken.None));
+
+        Assert.False(await sut.TryRenewAsync("k", "owner-1", Lease, CancellationToken.None));
     }
 
     [Fact]

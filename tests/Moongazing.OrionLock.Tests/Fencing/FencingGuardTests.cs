@@ -22,13 +22,47 @@ public sealed class FencingGuardTests
     }
 
     [Fact]
-    public void A_repeated_token_is_rejected_because_two_acquisitions_never_share_one()
+    public void The_same_token_is_accepted_again_because_one_holder_may_write_more_than_once()
     {
+        // The token identifies the ACQUISITION, not the write, and it is stable for the whole hold. A
+        // critical section that touches the resource twice presents the same number twice, and both
+        // times it is the current holder. Rejecting the repeat would fail ordinary code with a
+        // "someone superseded you" error when nobody had.
         var guard = new FencingGuard();
         guard.TryAccept("orders", 7);
 
-        Assert.False(guard.TryAccept("orders", 7));
+        Assert.True(guard.TryAccept("orders", 7));
+        Assert.True(guard.TryAccept("orders", 7));
         Assert.Equal(7, guard.HighestAccepted("orders"));
+    }
+
+    [Fact]
+    public void Accept_does_not_throw_for_a_token_equal_to_the_high_water_mark()
+    {
+        var guard = new FencingGuard();
+        guard.Accept("orders", 7);
+
+        guard.Accept("orders", 7);
+
+        Assert.Equal(7, guard.HighestAccepted("orders"));
+    }
+
+    [Fact]
+    public async Task A_holder_can_write_repeatedly_with_the_token_its_handle_carries()
+    {
+        // End to end, because this is the shape real code takes: acquire once, write several times.
+        var resource = new FencingGuard();
+        var locker = new DistributedLock(new InMemoryLockProvider());
+
+        await using var handle = await locker.AcquireAsync(
+            "orders", new DistributedLockOptions { LeaseDuration = TimeSpan.FromSeconds(30), AutoRenew = false });
+        var token = handle.RequireFencingToken();
+
+        resource.Accept("orders", token);
+        resource.Accept("orders", token);
+        resource.Accept("orders", token);
+
+        Assert.Equal(token, resource.HighestAccepted("orders"));
     }
 
     [Fact]

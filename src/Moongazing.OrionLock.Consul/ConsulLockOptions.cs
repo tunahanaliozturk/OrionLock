@@ -84,7 +84,10 @@ public sealed class ConsulLockOptions
     /// </para>
     /// <para>
     /// If that read fails, the acquire fails: the provider releases the key and destroys the session
-    /// before rethrowing, rather than returning a hold with a silently missing token.
+    /// before rethrowing, rather than returning a hold with a silently missing token. A read that comes
+    /// back EMPTY counts as a failure too - it means the entry vanished between the acquire and the
+    /// read, so the session was invalidated or the key deleted and the lock is not really held; that
+    /// surfaces as <see cref="OrionLockBackendException"/>.
     /// </para>
     /// </remarks>
     public bool FencingTokens { get; set; }

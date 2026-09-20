@@ -1,4 +1,8 @@
 #nullable enable
+Moongazing.OrionLock.Redis.RedisFencingKeys
 Moongazing.OrionLock.Redis.RedisLockOptions.FencingTokens.get -> bool
 Moongazing.OrionLock.Redis.RedisLockOptions.FencingTokens.set -> void
 Moongazing.OrionLock.Redis.RedisLockProvider.TryAcquireFencedAsync(string! key, string! ownerToken, System.TimeSpan leaseDuration, System.Threading.CancellationToken cancellationToken) -> System.Threading.Tasks.Task<Moongazing.OrionLock.Providers.LockAcquisition>!
+const Moongazing.OrionLock.Redis.RedisFencingKeys.ReservedPrefix = "orionlock-fence:" -> string!
+static Moongazing.OrionLock.Redis.RedisFencingKeys.CounterKey(string! physicalLockKey) -> string!
+static Moongazing.OrionLock.Redis.RedisFencingKeys.ThrowIfReserved(string! physicalLockKey, string! paramName) -> void

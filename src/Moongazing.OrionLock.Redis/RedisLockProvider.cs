@@ -21,15 +21,25 @@ public sealed class RedisLockProvider : IDistributedLockProvider
     private const string ReleaseScript =
         "if redis.call('GET', KEYS[1]) == ARGV[1] then return redis.call('DEL', KEYS[1]) else return 0 end";
 
-    // Acquire and mint the fencing token as ONE atomic step. Splitting them - SET NX, then INCR - would
-    // let the process die between the two and hand the next holder a token no higher than ours, or let
-    // two acquirers interleave their INCRs and read each other's number. KEYS[2] is the counter; it is
-    // never given a TTL and never deleted, because a counter that restarted would repeat a token that
-    // some resource has already accepted. INCR on a missing key starts at 1, so 0 can only ever mean
-    // "lost the race" and needs no separate nil reply to distinguish it.
+    // Acquire and mint the fencing token as ONE atomic step. Splitting them into two round trips would
+    // let the process die between them and hand the next holder a token no higher than ours, or let two
+    // acquirers interleave their INCRs and read each other's number. KEYS[2] is the counter; it is never
+    // given a TTL and never deleted, because a counter that restarted would repeat a token that some
+    // resource has already accepted. INCR on a missing key starts at 1, so 0 can only ever mean "lost
+    // the race" and needs no separate nil reply to distinguish it.
+    //
+    // The INCR runs BEFORE the SET on purpose. Redis does not roll back the writes a script has already
+    // made when a later command raises a runtime error, so with the SET first, an INCR that failed -
+    // against a counter key holding a non-integer, say - would leave the lease taken and return an error
+    // to the caller, who never gets a handle and so never releases it: a lock held by nobody until it
+    // expires. Ordered this way the error costs a counter value and nothing else. The leading EXISTS
+    // keeps the common contended case to one command and stops a long polling wait from burning a token
+    // per attempt; gaps are harmless either way, since a fencing token must increase, not be dense.
     private const string FencedAcquireScript =
-        "if redis.call('SET', KEYS[1], ARGV[1], 'NX', 'PX', ARGV[2]) then "
-        + "return redis.call('INCR', KEYS[2]) else return 0 end";
+        "if redis.call('EXISTS', KEYS[1]) == 1 then return 0 end "
+        + "local token = redis.call('INCR', KEYS[2]) "
+        + "if redis.call('SET', KEYS[1], ARGV[1], 'NX', 'PX', ARGV[2]) then return token end "
+        + "return 0";
 
     private readonly IConnectionMultiplexer multiplexer;
     private readonly RedisLockOptions options;
@@ -47,10 +57,9 @@ public sealed class RedisLockProvider : IDistributedLockProvider
 
     private RedisKey Key(string key) => options.KeyPrefix + key;
 
-    // The counter key carries a hash tag around the WHOLE lock key so Redis Cluster routes both keys of
-    // the acquire script to the same slot. A lock key containing a brace of its own truncates the tag and
-    // the cluster answers CROSSSLOT - a loud failure at acquire time, not a silent wrong answer.
-    private RedisKey FenceKey(string key) => $"{{{options.KeyPrefix}{key}}}:fence";
+    // Counter keys live under their own reserved prefix, and a lock key that would land in it is refused
+    // - see RedisFencingKeys for why decorating the lock key was not enough.
+    private RedisKey FenceKey(string key) => RedisFencingKeys.CounterKey(options.KeyPrefix + key);
 
     /// <inheritdoc />
     public async Task<bool> TryAcquireAsync(string key, string ownerToken, TimeSpan leaseDuration, CancellationToken cancellationToken)
@@ -74,6 +83,8 @@ public sealed class RedisLockProvider : IDistributedLockProvider
 
         if (!options.FencingTokens)
         {
+            // No counter keys exist on this path, so there is no reserved namespace to police and a key
+            // that looks like one is just a key.
             // keepTtl is spelled out so this binds to the current StringSetAsync overload rather than the
             // legacy one the compiler would otherwise pick.
             var taken = await Db.StringSetAsync(
@@ -81,6 +92,8 @@ public sealed class RedisLockProvider : IDistributedLockProvider
                 .ConfigureAwait(false);
             return taken ? LockAcquisition.Unfenced : LockAcquisition.NotAcquired;
         }
+
+        RedisFencingKeys.ThrowIfReserved(options.KeyPrefix + key, nameof(key));
 
         var result = await Db.ScriptEvaluateAsync(
             FencedAcquireScript,

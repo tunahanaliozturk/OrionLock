@@ -96,16 +96,32 @@ public sealed class ConsulLockProvider : IDistributedLockProvider
             {
                 modifyIndex = await fencing.KvModifyIndexAsync(FullKey(key), cancellationToken)
                     .ConfigureAwait(false);
+
+                // A null index means the entry is not there - so between the acquire Consul just
+                // granted and this read, the session was invalidated or the key was deleted. We do not
+                // hold what we were told we hold. Treating that as "acquired, no token" would be the
+                // worst of both: a caller who explicitly enabled fencing gets a handle with no token,
+                // over a lock that may already belong to someone else. It is the same failure as a
+                // throwing read, so it takes the same exit - the catch below gives the key back.
+                if (modifyIndex is null)
+                {
+                    throw new OrionLockBackendException(
+                        key,
+                        "the KV entry disappeared between the successful acquire and the fencing-index "
+                        + "read, so the session was invalidated or the key deleted and the lock is not "
+                        + "actually held.");
+                }
             }
 
             ownerKeyToSession[(ownerToken, key)] = sessionId;
         }
         catch
         {
-            // Same protection if the index read or the mapping store throws (e.g. OOM). Release the KV
+            // Same protection if the index read or the mapping store fails (e.g. OOM). Release the KV
             // lock and destroy the session so we do not strand state in Consul that the local process
             // cannot recover - and so a caller that asked for a fenced acquire never receives a hold
-            // whose token is quietly missing.
+            // whose token is quietly missing. The mapping is published only AFTER the read succeeds, so
+            // nothing here can leave a (owner, key) entry pointing at a session we just destroyed.
             await consul.KvReleaseAsync(FullKey(key), sessionId, CancellationToken.None).ConfigureAwait(false);
             await consul.DestroySessionAsync(sessionId, CancellationToken.None).ConfigureAwait(false);
             throw;

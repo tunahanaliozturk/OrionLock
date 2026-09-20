@@ -28,8 +28,12 @@ services.AddOrionLock().UseRedis("localhost:6379", o => o.FencingTokens = true);
 
 It is opt-in because the counter key can never expire or be deleted — one that restarted would hand a
 later holder a token an earlier one already spent — so enabling it leaves one small permanent
-`{key}:fence` key per lock key you take. See the OrionLock docs on fencing tokens for what to do with the
-number.
+`orionlock-fence:{key}` key per lock key you take.
+
+Counters live under that reserved `orionlock-fence:` prefix so no lock key can also be somebody's
+counter; with fencing on, a lock key that would resolve into that namespace is rejected with an
+`ArgumentException`. With the default `orionlock:` prefix the rejection can never fire. See the OrionLock
+docs on fencing tokens for what to do with the number.
 
 ## Lease durations
 

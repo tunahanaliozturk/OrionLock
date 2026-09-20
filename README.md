@@ -153,7 +153,7 @@ UPDATE orders
    SET status          = @status,
        last_fence      = @fence
  WHERE id              = @orderId
-   AND last_fence      < @fence;   -- strictly less: two acquisitions never share a token
+   AND last_fence      <= @fence;  -- reject only a token BELOW the mark; see below
 ```
 
 ```csharp
@@ -166,7 +166,9 @@ if (rows == 0)
 }
 ```
 
-`last_fence` starts at 0 (or `NOT NULL DEFAULT 0`) so the first write always passes. Use `<`, never `<=`: a token is never handed out twice, so a repeat means the caller is replaying an old one.
+`last_fence` starts at 0 (or `NOT NULL DEFAULT 0`) so the first write always passes.
+
+Use `<=`, not `<`. What fencing rejects is a token **below** the high-water mark — never one equal to it. The token identifies the *acquisition*, not the write, and it is stable for the whole hold, so a critical section that writes twice presents the same number twice and both writes are the current holder's. `<` would reject the second one and report a stale holder where there is none.
 
 For a resource that genuinely lives in this process, `FencingGuard` does the same bookkeeping in memory:
 

@@ -105,6 +105,57 @@ public sealed class RedisFencingTokenTests : IAsyncLifetime
     }
 
     [DockerFact]
+    public async Task A_lock_key_shaped_like_a_counter_key_does_not_collide_with_one()
+    {
+        // The reported collision: with an empty prefix, locking `a` used to generate the counter key
+        // `{a}:fence`, which is also the physical key for the logical lock `{a}:fence`. The two locks
+        // then contended through one key - and when the counter key held an owner token, the script's
+        // INCR failed AFTER its SET had already taken the lease, which Redis does not roll back, so the
+        // lock was held by nobody until it expired.
+        var p = new RedisLockProvider(mux, new RedisLockOptions { FencingTokens = true, KeyPrefix = string.Empty });
+        var k = NewKey();
+        var counterShaped = $"{{{k}}}:fence";
+
+        var both = await Task.WhenAll(
+            p.TryAcquireFencedAsync(k, "owner-plain", TimeSpan.FromSeconds(30), default),
+            p.TryAcquireFencedAsync(counterShaped, "owner-shaped", TimeSpan.FromSeconds(30), default));
+
+        // Two unrelated keys: both callers get their lock, and both get a token.
+        Assert.True(both[0].Acquired);
+        Assert.True(both[1].Acquired);
+        Assert.NotNull(both[0].FencingToken);
+        Assert.NotNull(both[1].FencingToken);
+
+        // And each is really held - neither acquire half-ran and stranded a lease.
+        Assert.False((await p.TryAcquireFencedAsync(k, "intruder", TimeSpan.FromSeconds(30), default)).Acquired);
+        Assert.False((await p.TryAcquireFencedAsync(counterShaped, "intruder", TimeSpan.FromSeconds(30), default)).Acquired);
+
+        await p.ReleaseAsync(k, "owner-plain", default);
+        await p.ReleaseAsync(counterShaped, "owner-shaped", default);
+        Assert.True((await p.TryAcquireFencedAsync(k, "next", TimeSpan.FromSeconds(30), default)).Acquired);
+    }
+
+    [DockerFact]
+    public async Task The_counters_of_two_counter_shaped_keys_stay_independent()
+    {
+        var p = new RedisLockProvider(mux, new RedisLockOptions { FencingTokens = true, KeyPrefix = string.Empty });
+        var k = NewKey();
+        var counterShaped = $"{{{k}}}:fence";
+
+        // Drive the plain key's counter up on its own. If the two shared a counter, the other key's
+        // first-ever acquisition would come back as 4 rather than 1.
+        for (var i = 0; i < 3; i++)
+        {
+            await p.TryAcquireFencedAsync(k, $"o{i}", TimeSpan.FromSeconds(30), default);
+            await p.ReleaseAsync(k, $"o{i}", default);
+        }
+
+        var shaped = await p.TryAcquireFencedAsync(counterShaped, "owner-shaped", TimeSpan.FromSeconds(30), default);
+
+        Assert.Equal(1L, shaped.FencingToken);
+    }
+
+    [DockerFact]
     public async Task Fencing_is_off_by_default_and_leaves_no_counter_key_behind()
     {
         var p = new RedisLockProvider(mux, new RedisLockOptions());
@@ -116,6 +167,6 @@ public sealed class RedisFencingTokenTests : IAsyncLifetime
         Assert.Null(taken.FencingToken);
         // The opt-in exists because the counter key is permanent. A default-on feature would have
         // started growing every existing consumer's keyspace on upgrade.
-        Assert.False(await mux.GetDatabase().KeyExistsAsync($"{{orionlock:{k}}}:fence"));
+        Assert.False(await mux.GetDatabase().KeyExistsAsync(RedisFencingKeys.CounterKey("orionlock:" + k)));
     }
 }

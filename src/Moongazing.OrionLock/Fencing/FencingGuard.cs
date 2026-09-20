@@ -1,14 +1,15 @@
 namespace Moongazing.OrionLock.Fencing;
 
 /// <summary>
-/// Thrown when a write presents a fencing token that is not greater than the highest one the resource
-/// has already accepted for that key - i.e. when a holder that had already been superseded came back.
+/// Thrown when a write presents a fencing token LOWER than the highest one the resource has already
+/// accepted for that key - i.e. when a holder that had already been superseded came back. A token equal
+/// to the highest is the current holder writing again and is not an error.
 /// </summary>
 public sealed class FencingTokenRegressedException : Exception
 {
     /// <summary>Initializes the exception.</summary>
     public FencingTokenRegressedException(string key, long presented, long highestSeen)
-        : base($"Fencing token {presented} for '{key}' is not newer than the highest already accepted "
+        : base($"Fencing token {presented} for '{key}' is lower than the highest already accepted "
             + $"({highestSeen}); the caller no longer holds the lock it thinks it holds.")
     {
         Key = key;
@@ -51,18 +52,25 @@ public sealed class FencingGuard
     private readonly object gate = new();
 
     /// <summary>
-    /// Accepts <paramref name="token"/> for <paramref name="key"/> if it is strictly greater than the
-    /// highest already accepted, recording it as the new highest. Returns false without recording
-    /// anything when it is not - a token equal to the highest is rejected too, because two acquisitions
-    /// never share a token and a repeat means the caller is replaying an old one.
+    /// Accepts <paramref name="token"/> for <paramref name="key"/> unless it is LOWER than the highest
+    /// already accepted, recording it as the new highest when it is higher. Returns false, without
+    /// recording anything, only for a token below the high-water mark.
     /// </summary>
+    /// <remarks>
+    /// A token equal to the mark is accepted, and must be. The token identifies an ACQUISITION, not a
+    /// write, and it is stable for the whole hold - so a critical section that touches the resource more
+    /// than once presents the same number each time, and every one of those calls comes from the current
+    /// holder. Rejecting the repeat would fail perfectly ordinary code with a "someone superseded you"
+    /// error when nobody had. What fencing rejects is a token from a holder that has been overtaken, and
+    /// that token is strictly lower.
+    /// </remarks>
     public bool TryAccept(string key, long token)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(key);
 
         lock (gate)
         {
-            if (highest.TryGetValue(key, out var seen) && token <= seen)
+            if (highest.TryGetValue(key, out var seen) && token < seen)
             {
                 return false;
             }
