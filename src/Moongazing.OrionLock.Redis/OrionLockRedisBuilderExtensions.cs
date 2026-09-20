@@ -11,7 +11,25 @@ namespace Moongazing.OrionLock.Redis;
 /// <summary>Registers the Redis OrionLock backend.</summary>
 public static class OrionLockRedisBuilderExtensions
 {
-    /// <summary>Uses Redis as the OrionLock backend, connecting with <paramref name="connectionString"/>.</summary>
+    /// <summary>
+    /// The DI key the connection-string overload registers OrionLock's own multiplexer under.
+    /// </summary>
+    private const string LockMultiplexerKey = "Moongazing.OrionLock.Redis";
+
+    /// <summary>
+    /// Uses Redis as the OrionLock backend, connecting with <paramref name="connectionString"/>.
+    /// </summary>
+    /// <remarks>
+    /// The connection string is honoured even when the application has already registered an
+    /// <see cref="IConnectionMultiplexer"/> of its own - which is the normal case, since the same app
+    /// usually caches with Redis too. This overload used to register the lock's multiplexer with
+    /// <c>TryAddSingleton</c>, so an existing registration won and the argument you passed was silently
+    /// discarded: the locks went to the cache's Redis, not the one you named. OrionLock now keeps its
+    /// own multiplexer under a private DI key, so the app's <see cref="IConnectionMultiplexer"/> is
+    /// neither read nor replaced. Use the no-argument
+    /// <see cref="UseRedis(OrionLockBuilder, Action{RedisLockOptions})"/> overload when you DO want the
+    /// locks to share the application's connection.
+    /// </remarks>
     public static OrionLockBuilder UseRedis(
         this OrionLockBuilder builder, string connectionString, Action<RedisLockOptions>? configure = null)
     {
@@ -21,14 +39,21 @@ public static class OrionLockRedisBuilderExtensions
         var options = new RedisLockOptions();
         configure?.Invoke(options);
 
-        builder.Services.TryAddSingleton<IConnectionMultiplexer>(
-            _ => ConnectionMultiplexer.Connect(connectionString));
+        // Keyed, so a repeat call replaces rather than stacks, and the container still owns disposal.
+        builder.Services.RemoveAllKeyed<IConnectionMultiplexer>(LockMultiplexerKey);
+        builder.Services.AddKeyedSingleton<IConnectionMultiplexer>(
+            LockMultiplexerKey, (_, _) => ConnectionMultiplexer.Connect(connectionString));
 
         return builder.UseBackend(
-            "redis", sp => new RedisLockProvider(sp.GetRequiredService<IConnectionMultiplexer>(), options));
+            "redis",
+            sp => new RedisLockProvider(
+                sp.GetRequiredKeyedService<IConnectionMultiplexer>(LockMultiplexerKey), options));
     }
 
-    /// <summary>Uses Redis as the OrionLock backend over an already-registered <see cref="IConnectionMultiplexer"/>.</summary>
+    /// <summary>
+    /// Uses Redis as the OrionLock backend over the application's already-registered
+    /// <see cref="IConnectionMultiplexer"/>, sharing its connection.
+    /// </summary>
     public static OrionLockBuilder UseRedis(
         this OrionLockBuilder builder, Action<RedisLockOptions>? configure = null)
     {

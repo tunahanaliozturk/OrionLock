@@ -112,6 +112,21 @@ All notable changes to OrionLock are documented in this file. The format is base
   provider without the guard. Custom backends should call `UseBackend` rather than registering
   `IDistributedLockProvider` by hand.
 
+- **BREAKING: `UseRedis(connectionString)` now actually uses that connection string.**
+  It registered the multiplexer with `TryAddSingleton`, so an application that had already registered an
+  `IConnectionMultiplexer` — the common case, since the same app usually caches with Redis too — won the
+  registration. **Used to happen:** the connection string you passed was silently discarded and your
+  locks went to the cache's Redis, not the one you named; nothing reported it. The Consul and etcd
+  builders already used `AddSingleton` *precisely because* the `TryAdd` shape swallows the caller's
+  address argument, and carried comments saying so — the same bug was fixed in two backends and left in
+  the flagship one. **Happens now:** the connection-string overload connects with that string and keeps
+  its multiplexer under a private DI key, so the application's own `IConnectionMultiplexer` is neither
+  read nor replaced, and the container still owns disposal. **What to do:** nothing, if you meant the
+  connection string — you now get it. If you were relying on the old behaviour to make OrionLock share
+  the application's connection, switch to the no-argument `UseRedis()` overload, which is the explicit
+  opt-in to sharing. Note that an app pointing OrionLock at a *different* Redis than its cache now opens
+  a second multiplexer, as it asked to.
+
 ### Fixed
 
 - **BREAKING (behaviour): reentrancy is now scoped to the flow that holds the lock, not to the key.**
