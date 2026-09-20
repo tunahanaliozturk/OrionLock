@@ -305,6 +305,38 @@ All notable changes to OrionLock are documented in this file. The format is base
   acquire loop, and a `LeaseDuration` shorter than `RetryInterval` acquires normally — an uncontended
   acquire never waits at all, and under contention a shorter lease frees the key sooner.
 
+- **A Redis waiter no longer sleeps through a lock that is already free.** When the holder's lease
+  lapsed between the failed `SET NX` and the `PTTL` read, Redis reported no TTL - and the branch
+  that retries immediately on that was gated on the wait being INFINITE, which is backwards: the
+  finite waiter is the one with a budget to burn. It parked on the release channel for its whole
+  remaining budget with the key free the entire time, and nothing was ever coming, because a TTL
+  expiry publishes nothing. A missing key now means "try again now" whatever the budget. The retry
+  happens once and a second consecutive null falls back to the poll floor, because
+  StackExchange.Redis reports "key absent" and "key with no expiry" identically and an
+  unconditional retry on the second would be a hot spin.
+
+- **An etcd watch can no longer start after the event it is waiting for.** The watch was created at
+  whatever revision the stream went up at, which is after the caller's failed transaction; a holder
+  releasing in that window produced a DELETE the watch began past and never saw, so the waiter
+  parked for its whole budget with the key free. The adapter now reads the key first and anchors the
+  watch to one past the revision that read observed - already gone means yes with no watch opened,
+  and still present at revision R means a watch from R+1 that cannot miss what follows. Costs one
+  extra read per wait, not per retry interval.
+
+- **A ZooKeeper waiter no longer abandons its znode at the head of the queue over a blip.**
+  `Disconnected` was treated as terminal alongside `Expired`. It does not expire the session: the
+  node is still queued and the client re-registers watches on reconnect. Giving up there made the
+  provider best-effort-delete its node - a delete very likely to fail *while* disconnected, and
+  swallowed when it did - so the node was orphaned for the life of the session and every later retry
+  queued behind it, blocking the key for this waiter and all subsequent ones. Only `Expired` is
+  terminal now, and the cleanup delete gets three attempts across a reconnect instead of one.
+
+- **A ZooKeeper waiter no longer claims a lock it does not hold.** Ownership was inferred from "no
+  child sorts before us", which is also true when our own node is not in the list at all - removed
+  by an operator or another client. An empty list, or a list of only later children, therefore read
+  as ownership and the caller entered its critical section with no ZooKeeper lock behind it. The
+  helper now answers whether we are in the queue before answering who is ahead of us.
+
 - **BREAKING (behaviour): reentrancy is now scoped to the flow that holds the lock, not to the key.**
   Same-process reentrancy was keyed on the lock key alone, and `AddOrionLock` registers
   `IDistributedLock` as a singleton — so two *unrelated* callers on the same instance (two concurrent
