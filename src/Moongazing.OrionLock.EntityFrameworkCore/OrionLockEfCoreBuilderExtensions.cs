@@ -21,10 +21,9 @@ public static class OrionLockEfCoreBuilderExtensions
         ArgumentNullException.ThrowIfNull(builder);
 
         builder.Services.TryAddScoped<DbContext>(sp => sp.GetRequiredService<TDbContext>());
-        builder.Services.TryAddSingleton<IDistributedLockProvider>(
-            sp => new EfCoreLockProvider(sp.GetRequiredService<IServiceScopeFactory>()));
 
-        return builder;
+        return builder.UseBackend(
+            "efcore", sp => new EfCoreLockProvider(sp.GetRequiredService<IServiceScopeFactory>()));
     }
 
     /// <summary>

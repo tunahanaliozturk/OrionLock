@@ -1,4 +1,4 @@
-namespace Moongazing.OrionLock.Consul;
+﻿namespace Moongazing.OrionLock.Consul;
 
 using global::Consul;
 using Microsoft.Extensions.DependencyInjection;
@@ -32,11 +32,9 @@ public static class OrionLockConsulBuilderExtensions
             new ConsulClient(cfg => cfg.Address = new Uri(address)));
         builder.Services.TryAddSingleton<IConsulClientAdapter>(
             sp => new DefaultConsulClientAdapter(sp.GetRequiredService<IConsulClient>()));
-        builder.Services.RemoveAll<IDistributedLockProvider>();
-        builder.Services.AddSingleton<IDistributedLockProvider>(
-            sp => new ConsulLockProvider(sp.GetRequiredService<IConsulClientAdapter>(), options));
 
-        return builder;
+        return builder.UseBackend(
+            "consul", sp => new ConsulLockProvider(sp.GetRequiredService<IConsulClientAdapter>(), options));
     }
 
     /// <summary>
@@ -54,10 +52,8 @@ public static class OrionLockConsulBuilderExtensions
 
         builder.Services.TryAddSingleton<IConsulClientAdapter>(
             sp => new DefaultConsulClientAdapter(sp.GetRequiredService<IConsulClient>()));
-        builder.Services.RemoveAll<IDistributedLockProvider>();
-        builder.Services.AddSingleton<IDistributedLockProvider>(
-            sp => new ConsulLockProvider(sp.GetRequiredService<IConsulClientAdapter>(), options));
 
-        return builder;
+        return builder.UseBackend(
+            "consul", sp => new ConsulLockProvider(sp.GetRequiredService<IConsulClientAdapter>(), options));
     }
 }

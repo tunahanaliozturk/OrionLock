@@ -1,4 +1,4 @@
-namespace Moongazing.OrionLock.ZooKeeper;
+﻿namespace Moongazing.OrionLock.ZooKeeper;
 
 using global::org.apache.zookeeper;
 using Microsoft.Extensions.DependencyInjection;
@@ -36,11 +36,9 @@ public static class OrionLockZooKeeperBuilderExtensions
             sp => new DefaultZooKeeperClientAdapter(
                 sp.GetRequiredService<ZooKeeper>(),
                 sp.GetRequiredService<IZooKeeperAclFactory>()));
-        builder.Services.RemoveAll<IDistributedLockProvider>();
-        builder.Services.AddSingleton<IDistributedLockProvider>(
+        return builder.UseBackend(
+            "zookeeper",
             sp => new ZooKeeperLockProvider(sp.GetRequiredService<IZooKeeperClientAdapter>(), options));
-
-        return builder;
     }
 
     /// <summary>

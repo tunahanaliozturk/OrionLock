@@ -285,6 +285,16 @@ await using var handle = await locker.AcquireAsync(
 - **`OrionLock.Postgres`** — native `pg_try_advisory_lock` with session-scope lifetime, crash-safe with the same rationale as SqlServer. Also ships the distributed reader-writer lock (`UsePostgresSharedExclusive()`) over clock-leased rows serialized by `pg_advisory_xact_lock`.
 - **`OrionLock.Testing`** — in-memory provider for tests, no Redis or DB required.
 
+### Exactly one backend
+
+Every backend registers through the same `OrionLockBuilder.UseBackend(name, factory)`, so they all behave identically: one `IDistributedLock`, one backend. Asking for a second one on the same builder throws `InvalidOperationException` naming both, rather than silently picking one:
+
+```csharp
+services.AddOrionLock().UseInMemory().UseRedis("localhost:6379"); // throws
+```
+
+Re-registering the *same* backend replaces it, so a later `UseRedis(...)` with different options wins as you would expect. To override deliberately — a test host replacing the production registration — start a fresh builder with another `AddOrionLock()` call.
+
 ## Trimming and Native AOT
 
 OrionLock's own surface uses no dynamic code generation; the only reflection in the core reads assembly and attribute metadata for telemetry, which is trimmer- and AOT-safe. The posture below reflects what each package's dependencies allow.

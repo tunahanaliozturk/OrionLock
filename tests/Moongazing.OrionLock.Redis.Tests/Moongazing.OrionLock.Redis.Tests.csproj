@@ -19,6 +19,8 @@
     <PackageReference Include="Testcontainers.Redis" Version="4.15.0" />
     <ProjectReference Include="..\..\src\Moongazing.OrionLock\Moongazing.OrionLock.csproj" />
     <ProjectReference Include="..\..\src\Moongazing.OrionLock.Redis\Moongazing.OrionLock.Redis.csproj" />
+    <!-- UseInMemory() + UseRedis() is the registration pair the DI-convention regression is about. -->
+    <ProjectReference Include="..\..\src\Moongazing.OrionLock.Testing\Moongazing.OrionLock.Testing.csproj" />
   </ItemGroup>
   <ItemGroup>
     <!-- One copy of the Docker probe, linked rather than duplicated into each container-backed suite. -->

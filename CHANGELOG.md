@@ -94,6 +94,24 @@ All notable changes to OrionLock are documented in this file. The format is base
   keep their existing on-the-wire names: this changes what you may ask for, not how a valid key is
   encoded. `ConsulKvPath` is now only a percent-encoder and no longer rejects anything itself.
 
+- **BREAKING: every backend registers the same way, and registering two backends now throws.**
+  The library carried two opposite DI conventions behind one identical composition-root shape. Redis,
+  SQL Server, PostgreSQL, EF Core and Testing registered with `TryAddSingleton` (first registration
+  won); Consul, etcd and ZooKeeper used `RemoveAll` + `AddSingleton` (last registration won).
+  **Used to happen:** `AddOrionLock().UseInMemory().UseRedis("...")` ran the **in-memory fake in
+  production**, silently, because Redis could not overwrite the fake's earlier registration — while the
+  same code with `UseConsul(...)` in place of `UseRedis(...)` ran Consul. Which of the two you got was
+  decided entirely by which backend you picked. **Happens now:** all nine `Use*` registrations go
+  through the new `OrionLockBuilder.UseBackend(backendName, factory)`, and asking for a second, different
+  backend on the same builder throws `InvalidOperationException` naming both. Exactly one backend backs
+  one `IDistributedLock`, so two of them is a composition-root mistake rather than a preference to
+  resolve silently. **What to do:** keep the one `Use*` call you meant and delete the other. Registering
+  the *same* backend twice still works and replaces the earlier registration, so a later `UseRedis(...)`
+  with different options wins as you would expect; a test host that deliberately overrides the
+  production registration starts a fresh builder with another `AddOrionLock()` call, which replaces the
+  provider without the guard. Custom backends should call `UseBackend` rather than registering
+  `IDistributedLockProvider` by hand.
+
 ### Fixed
 
 - **BREAKING (behaviour): reentrancy is now scoped to the flow that holds the lock, not to the key.**

@@ -23,10 +23,9 @@ public static class OrionLockRedisBuilderExtensions
 
         builder.Services.TryAddSingleton<IConnectionMultiplexer>(
             _ => ConnectionMultiplexer.Connect(connectionString));
-        builder.Services.TryAddSingleton<IDistributedLockProvider>(
-            sp => new RedisLockProvider(sp.GetRequiredService<IConnectionMultiplexer>(), options));
 
-        return builder;
+        return builder.UseBackend(
+            "redis", sp => new RedisLockProvider(sp.GetRequiredService<IConnectionMultiplexer>(), options));
     }
 
     /// <summary>Uses Redis as the OrionLock backend over an already-registered <see cref="IConnectionMultiplexer"/>.</summary>
@@ -38,10 +37,8 @@ public static class OrionLockRedisBuilderExtensions
         var options = new RedisLockOptions();
         configure?.Invoke(options);
 
-        builder.Services.TryAddSingleton<IDistributedLockProvider>(
-            sp => new RedisLockProvider(sp.GetRequiredService<IConnectionMultiplexer>(), options));
-
-        return builder;
+        return builder.UseBackend(
+            "redis", sp => new RedisLockProvider(sp.GetRequiredService<IConnectionMultiplexer>(), options));
     }
 
     /// <summary>
