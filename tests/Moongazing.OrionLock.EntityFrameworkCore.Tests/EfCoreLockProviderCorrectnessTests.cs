@@ -138,6 +138,60 @@ public sealed class EfCoreLockProviderCorrectnessTests
             () => provider.TryAcquireAsync(NewKey(), "owner-1", Lease, default));
     }
 
+    [Theory]
+    // Every one of these is SQLSTATE class 23 but NOT a unique violation. Matching the class treated all
+    // of them as "someone else got there first", so TryAcquireAsync returned false and the caller retried
+    // forever against a schema that can never accept the row. They have to reach the caller.
+    [InlineData("23502", "null value in column \"OwnerToken\" violates not-null constraint")]
+    [InlineData("23503", "insert or update on table \"OrionLock_Locks\" violates foreign key constraint \"fk_tenant\"")]
+    [InlineData("23514", "new row for relation \"OrionLock_Locks\" violates check constraint \"ck_key_format\"")]
+    [InlineData("23001", "restrict violation")]
+    public async Task FirstUseInsert_HittingSomeOtherConstraint_StillThrows(string sqlState, string message)
+    {
+        using var conn = new SqliteConnection("Filename=:memory:");
+        conn.Open();
+        await using var services = BuildServices(conn, new FailInsertInterceptor(
+            new FakeDbException(message, sqlState)));
+
+        var provider = new EfCoreLockProvider(services.GetRequiredService<IServiceScopeFactory>());
+
+        await Assert.ThrowsAsync<FakeDbException>(
+            () => provider.TryAcquireAsync(NewKey(), "owner-1", Lease, default));
+    }
+
+    [Fact]
+    public async Task FirstUseInsert_HittingTheActualUniqueViolation_IsStillTreatedAsContention()
+    {
+        // The narrowing must not go so far that the case it exists for stops working: 23505 is the one
+        // SQLSTATE that really does mean another acquirer inserted the row first.
+        using var conn = new SqliteConnection("Filename=:memory:");
+        conn.Open();
+        await using var services = BuildServices(conn, new FailInsertInterceptor(
+            new FakeDbException(
+                "duplicate key value violates unique constraint \"PK_OrionLock_Locks\"", "23505")));
+
+        var provider = new EfCoreLockProvider(services.GetRequiredService<IServiceScopeFactory>());
+
+        Assert.False(await provider.TryAcquireAsync(NewKey(), "owner-1", Lease, default));
+    }
+
+    [Fact]
+    public async Task FirstUseInsert_HittingSqlServersDuplicateKeyNumber_IsTreatedAsContention()
+    {
+        // SQL Server reports no SQLSTATE, so it is matched on its own error numbers and wording.
+        using var conn = new SqliteConnection("Filename=:memory:");
+        conn.Open();
+        await using var services = BuildServices(conn, new FailInsertInterceptor(
+            new FakeDbException(
+                "Violation of PRIMARY KEY constraint 'PK_OrionLock_Locks'. Cannot insert duplicate key "
+                + "in object 'dbo.OrionLock_Locks'.",
+                sqlState: null)));
+
+        var provider = new EfCoreLockProvider(services.GetRequiredService<IServiceScopeFactory>());
+
+        Assert.False(await provider.TryAcquireAsync(NewKey(), "owner-1", Lease, default));
+    }
+
     // ---- helpers --------------------------------------------------------------------------------------
 
     private static string NewKey() => "k-" + Guid.NewGuid().ToString("N");
@@ -256,4 +310,14 @@ internal sealed class ReservedWordLockRowConfiguration : IEntityTypeConfiguratio
         builder.Property(x => x.OwnerToken).HasColumnName("Order").HasMaxLength(64);
         builder.Property(x => x.ExpiresOnUtc).HasColumnName("Limit");
     }
+}
+
+/// <summary>
+/// A <see cref="DbException"/> with a chosen SQLSTATE. <see cref="DbException.SqlState"/> is virtual and
+/// provider-supplied, and no provider this test project references raises the class-23 codes that are NOT
+/// unique violations, so the distinction the provider has to draw is only reachable through a fake.
+/// </summary>
+internal sealed class FakeDbException(string message, string? sqlState) : DbException(message)
+{
+    public override string? SqlState { get; } = sqlState;
 }

@@ -86,13 +86,22 @@ public sealed class DefaultEtcdClientAdapter : IEtcdClientAdapter
             // lease-loss the OrionLock watchdog should act on.
             return false;
         }
-        catch (OperationCanceledException) when (tcs.Task.IsCompletedSuccessfully)
+        catch (Exception ex) when (IsCancellation(ex))
         {
-            // This is our own stop-the-stream cancellation after the answer arrived, not the caller's.
+            // Cancellation of the keep-alive stream is NEVER by itself an outcome, so it is swallowed
+            // here and the checks below decide what actually happened. Both shapes have to be caught: a
+            // cancelled Grpc.Core response stream can complete by throwing OperationCanceledException OR
+            // an RpcException carrying StatusCode.Cancelled, and the cancellation is usually OUR OWN -
+            // OnResponse stops the stream the moment it has the answer. Letting the RpcException
+            // propagate would turn every successful renewal into a transient backend failure, and the
+            // handle's renewal loop would count those until the grace period ran out and declared the
+            // lease lost: the exact failure this method was fixed to prevent, re-entering through the fix.
         }
 
         if (tcs.Task.IsCompletedSuccessfully)
         {
+            // The server answered before the stream stopped, so the answer stands however the stream
+            // ended.
             return tcs.Task.Result;
         }
 
@@ -107,6 +116,14 @@ public sealed class DefaultEtcdClientAdapter : IEtcdClientAdapter
 
         // Other exceptions (transient gRPC errors, caller cancellation) bubble up for the same reason.
     }
+
+    // Every way a cancelled keep-alive stream can surface. Grpc.Core reports cancellation as an
+    // RpcException with StatusCode.Cancelled at least as often as it throws OperationCanceledException,
+    // and which one arrives depends on where in the call the cancellation landed - so neither shape may
+    // be treated as an outcome on its own.
+    private static bool IsCancellation(Exception ex)
+        => ex is OperationCanceledException
+            || (ex is Grpc.Core.RpcException rpc && rpc.StatusCode == Grpc.Core.StatusCode.Cancelled);
 
     /// <inheritdoc />
     public async Task LeaseRevokeAsync(long leaseId, CancellationToken cancellationToken)

@@ -120,8 +120,11 @@ All notable changes to OrionLock are documented in this file. The format is base
 - **EF Core: a lost race on a brand-new key threw instead of returning `false`.** The first-use
   `INSERT ... WHERE NOT EXISTS` is not atomic under READ COMMITTED, and its `catch` named
   `DbUpdateException`, which raw SQL never raises — so a genuine primary-key violation escaped
-  `TryAcquireAsync` as a raw driver exception. It is now caught and reported as "you did not get the
-  lock"; unrelated database errors still propagate.
+  `TryAcquireAsync` as a raw driver exception. A genuine unique / primary-key violation is now caught and
+  reported as "you did not get the lock". Only that one error is: a not-null, foreign-key or check
+  violation — which a customised lock-table mapping, an added constraint or a trigger can raise — still
+  reaches you as an exception rather than being retried forever as contention against a schema that can
+  never accept the row.
 - **etcd: a successful lease renewal could be reported as a lost lease.** The keep-alive resolved its
   result in a race with its own response callback, so the handle could trip its lost-token and revoke
   the lease while your code was still inside the critical section. Only etcd itself now decides: `false`

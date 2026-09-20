@@ -147,22 +147,26 @@ public sealed class EfCoreLockProvider : IDistributedLockProvider
         {
             if (e is DbException db)
             {
-                if (db.SqlState?.StartsWith("23", StringComparison.Ordinal) == true)
+                // SQLSTATE 23505 is unique_violation EXACTLY. Matching the whole class 23 would be far
+                // too wide: it is every integrity-constraint violation, including 23502 not-null, 23503
+                // foreign key and 23514 check. A customised lock-table mapping, an added constraint or a
+                // trigger that rejects the row raises those, and reporting them as contention would make
+                // TryAcquireAsync return false forever against a schema that can never accept the row -
+                // a silent infinite retry instead of a visible schema error.
+                if (string.Equals(db.SqlState, "23505", StringComparison.Ordinal))
                 {
                     return true;
                 }
 
+                // SQL Server leaves SqlState null: 2627 is a PRIMARY KEY / UNIQUE constraint violation,
+                // 2601 a duplicate key in a unique index. Neither number is shared with any other error.
                 if (db.ErrorCode is 2627 or 2601)
                 {
                     return true;
                 }
             }
 
-            var message = e.Message;
-            if (message.Contains("duplicate key", StringComparison.OrdinalIgnoreCase)
-                || message.Contains("UNIQUE constraint", StringComparison.OrdinalIgnoreCase)
-                || message.Contains("PRIMARY KEY", StringComparison.OrdinalIgnoreCase)
-                || message.Contains("unique_violation", StringComparison.OrdinalIgnoreCase))
+            if (IsUniqueViolationMessage(e.Message))
             {
                 return true;
             }
@@ -170,6 +174,21 @@ public sealed class EfCoreLockProvider : IDistributedLockProvider
 
         return false;
     }
+
+    // Providers that report neither a SQLSTATE nor a distinct number - Microsoft.Data.Sqlite raises the
+    // whole constraint family as error 19 and distinguishes them only by an extended code this package
+    // cannot read without referencing the provider - are matched on the exact wording of a UNIQUE / PK
+    // failure. Each phrase belongs to one error, so a not-null, foreign-key or check violation matches
+    // none of them. A bare "PRIMARY KEY" would NOT be safe here: a foreign-key message names the primary
+    // key it references.
+    private static bool IsUniqueViolationMessage(string message)
+        => message.Contains("UNIQUE constraint failed", StringComparison.OrdinalIgnoreCase)       // SQLite
+            || message.Contains("PRIMARY KEY must be unique", StringComparison.OrdinalIgnoreCase)  // SQLite
+            || message.Contains("Violation of PRIMARY KEY constraint", StringComparison.OrdinalIgnoreCase) // SQL Server
+            || message.Contains("Violation of UNIQUE KEY constraint", StringComparison.OrdinalIgnoreCase)  // SQL Server
+            || message.Contains("Cannot insert duplicate key", StringComparison.OrdinalIgnoreCase)         // SQL Server
+            || message.Contains("Duplicate entry", StringComparison.OrdinalIgnoreCase)                     // MySQL
+            || message.Contains("duplicate key value violates unique constraint", StringComparison.OrdinalIgnoreCase); // PostgreSQL
 
     // The table and column identifiers, quoted for the context's own provider. Names come from the EF
     // model rather than string literals so a consumer that remapped OrionLockRow (a different table name,

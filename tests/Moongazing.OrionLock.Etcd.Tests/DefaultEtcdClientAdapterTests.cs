@@ -38,6 +38,62 @@ public sealed class DefaultEtcdClientAdapterTests
     }
 
     [Fact]
+    public async Task KeepAlive_ReportsTheRefresh_WhenTheStoppedStreamFaultsWithRpcCancelled()
+    {
+        // Grpc.Core reports a cancelled response stream as an RpcException carrying StatusCode.Cancelled
+        // at least as often as it throws OperationCanceledException - and the cancellation here is OUR
+        // OWN, the adapter stopping the stream the moment it had the answer. Letting that propagate turns
+        // every successful renewal into a transient backend failure, which the handle's renewal loop
+        // counts until the grace period runs out and declares the lease lost. That is the very failure
+        // this method exists to prevent, so the answer must win over how the stream happened to end.
+        var client = NewClient((methods, ct) =>
+        {
+            Respond(methods, ttl: 30);
+            ct.ThrowIfCancellationRequested();
+            return Task.CompletedTask;
+        }, cancellationBecomes: () => new RpcException(new Status(StatusCode.Cancelled, "Cancelled")));
+
+        var sut = new DefaultEtcdClientAdapter(client);
+
+        Assert.True(await sut.LeaseKeepAliveAsync(LeaseId, default).WaitAsync(TimeSpan.FromSeconds(10)));
+    }
+
+    [Fact]
+    public async Task KeepAlive_ReportsLeaseLost_WhenTheStoppedStreamFaultsWithRpcCancelled_AfterTtlZero()
+    {
+        // Same ordering the other way round: an answer of "the lease is gone" must also survive the
+        // stream ending as a gRPC cancellation.
+        var client = NewClient((methods, ct) =>
+        {
+            Respond(methods, ttl: 0);
+            ct.ThrowIfCancellationRequested();
+            return Task.CompletedTask;
+        }, cancellationBecomes: () => new RpcException(new Status(StatusCode.Cancelled, "Cancelled")));
+
+        var sut = new DefaultEtcdClientAdapter(client);
+
+        Assert.False(await sut.LeaseKeepAliveAsync(LeaseId, default).WaitAsync(TimeSpan.FromSeconds(10)));
+    }
+
+    [Fact]
+    public async Task KeepAlive_StillReportsCallerCancellation_WhenItArrivesAsRpcCancelled()
+    {
+        // No answer arrived, so gRPC cancellation is not an outcome to report - the caller gave up, and
+        // that is what the caller should see, not a backend fault and certainly not a lost lease.
+        var client = NewClient((_, ct) =>
+        {
+            ct.ThrowIfCancellationRequested();
+            return Task.CompletedTask;
+        }, cancellationBecomes: () => new RpcException(new Status(StatusCode.Cancelled, "Cancelled")));
+        var sut = new DefaultEtcdClientAdapter(client);
+        using var cts = new CancellationTokenSource();
+        await cts.CancelAsync();
+
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(
+            () => sut.LeaseKeepAliveAsync(LeaseId, cts.Token));
+    }
+
+    [Fact]
     public async Task KeepAlive_ReportsLeaseLost_WhenTheServerAnswersWithTtlZero()
     {
         var client = NewClient(async (methods, ct) =>
@@ -187,7 +243,9 @@ public sealed class DefaultEtcdClientAdapterTests
     /// callbacks the adapter registered and the token the adapter passed, so each test decides exactly
     /// when - and whether - the server answers, and whether the stream outlives the answer.
     /// </summary>
-    private static IEtcdClient NewClient(Func<Action<LeaseKeepAliveResponse>[], CancellationToken, Task> stream)
+    private static IEtcdClient NewClient(
+        Func<Action<LeaseKeepAliveResponse>[], CancellationToken, Task> stream,
+        Func<Exception>? cancellationBecomes = null)
     {
         var client = new Mock<IEtcdClient>();
         client.Setup(c => c.LeaseKeepAlive(
@@ -197,8 +255,26 @@ public sealed class DefaultEtcdClientAdapterTests
                 It.IsAny<Metadata>(),
                 It.IsAny<DateTime?>()))
             .Returns((LeaseKeepAliveRequest[] _, Action<LeaseKeepAliveResponse>[] methods, CancellationToken ct, Metadata _, DateTime? _)
-                => stream(methods, ct));
+                => Run(stream, methods, cancellationBecomes, ct));
         return client.Object;
+    }
+
+    // Lets a test choose how the underlying stream REPORTS cancellation. Grpc.Core does not settle on one
+    // shape, so the adapter must not either.
+    private static async Task Run(
+        Func<Action<LeaseKeepAliveResponse>[], CancellationToken, Task> stream,
+        Action<LeaseKeepAliveResponse>[] methods,
+        Func<Exception>? cancellationBecomes,
+        CancellationToken ct)
+    {
+        try
+        {
+            await stream(methods, ct).ConfigureAwait(false);
+        }
+        catch (OperationCanceledException) when (cancellationBecomes is not null)
+        {
+            throw cancellationBecomes();
+        }
     }
 
     private static void Respond(Action<LeaseKeepAliveResponse>[] methods, long ttl)
