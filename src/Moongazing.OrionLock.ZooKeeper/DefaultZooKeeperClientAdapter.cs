@@ -152,10 +152,20 @@ public sealed class DefaultZooKeeperClientAdapter : IZooKeeperClientAdapter
 
     /// <summary>
     /// Resolves its completion source the first time ZooKeeper says the watched node is gone, or
-    /// that the session can no longer tell us - a watch that will never fire must not look like one
-    /// that simply has not fired yet.
+    /// that the session is EXPIRED - a watch that will never fire must not look like one that
+    /// simply has not fired yet.
     /// </summary>
-    private sealed class NodeDeletedWatcher : Watcher
+    /// <remarks>
+    /// <c>Disconnected</c> is deliberately NOT terminal. It does not expire the session: the
+    /// client is reconnecting, the waiter's own ephemeral node is still in the queue, and the
+    /// ZooKeeper client re-registers outstanding watches on reconnect, so the watch will still
+    /// fire. Treating it as terminal made the provider give up and best-effort-delete its node -
+    /// a delete that is itself very likely to fail WHILE disconnected, and is swallowed when it
+    /// does. The node was then orphaned for the life of the session, every later retry created a
+    /// newer node behind it, and the key was blocked for this waiter and every one after it until
+    /// the process died. A blip is not a reason to leave a tombstone at the head of the queue.
+    /// </remarks>
+    internal sealed class NodeDeletedWatcher : Watcher
     {
         private readonly TaskCompletionSource<bool> deleted;
 
@@ -167,8 +177,10 @@ public sealed class DefaultZooKeeperClientAdapter : IZooKeeperClientAdapter
             {
                 deleted.TrySetResult(true);
             }
-            else if (@event.getState() is Event.KeeperState.Expired or Event.KeeperState.Disconnected)
+            else if (@event.getState() == Event.KeeperState.Expired)
             {
+                // The session is gone, so our ephemeral node is gone with it and no watch of ours
+                // will ever fire again. This one really is terminal.
                 deleted.TrySetResult(false);
             }
             return Task.CompletedTask;

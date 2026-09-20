@@ -26,17 +26,38 @@ public sealed class ZooKeeperPredecessorWatchTests
         // recipe exists to avoid. Each waiter watches only the one directly in front of it.
         IReadOnlyList<string> children = ["lock-0000000001", "lock-0000000002", "lock-0000000003"];
 
-        Assert.Equal("lock-0000000002", ZooKeeperLockProvider.PredecessorOf(children, "lock-0000000003"));
-        Assert.Equal("lock-0000000001", ZooKeeperLockProvider.PredecessorOf(children, "lock-0000000002"));
+        Assert.True(ZooKeeperLockProvider.TryGetPredecessor(children, "lock-0000000003", out var third));
+        Assert.Equal("lock-0000000002", third);
+        Assert.True(ZooKeeperLockProvider.TryGetPredecessor(children, "lock-0000000002", out var second));
+        Assert.Equal("lock-0000000001", second);
     }
 
     [Fact]
-    public void Nothing_ahead_of_us_means_we_hold_the_lock()
+    public void Being_in_the_list_with_nothing_ahead_of_us_means_we_hold_the_lock()
     {
         IReadOnlyList<string> children = ["lock-0000000001", "lock-0000000002"];
 
-        Assert.Null(ZooKeeperLockProvider.PredecessorOf(children, "lock-0000000001"));
-        Assert.Null(ZooKeeperLockProvider.PredecessorOf([], "lock-0000000001"));
+        Assert.True(ZooKeeperLockProvider.TryGetPredecessor(children, "lock-0000000001", out var predecessor));
+        Assert.Null(predecessor);
+    }
+
+    [Fact]
+    public void A_node_that_is_not_in_the_list_is_not_ownership()
+    {
+        // "Nothing sorts before us" and "we are not there" are the same answer to the narrower
+        // question, so a helper that returns only a predecessor reports a vanished node as
+        // ownership. An empty list, and a list holding only LATER children, both used to look like
+        // "we are first" - and the caller entered its critical section holding no lock at all.
+        Assert.False(ZooKeeperLockProvider.TryGetPredecessor([], "lock-0000000001", out var fromEmpty));
+        Assert.Null(fromEmpty);
+
+        IReadOnlyList<string> onlyLater = ["lock-0000000005", "lock-0000000006"];
+        Assert.False(ZooKeeperLockProvider.TryGetPredecessor(onlyLater, "lock-0000000002", out var fromLater));
+        Assert.Null(fromLater);
+
+        IReadOnlyList<string> earlierAndLater = ["lock-0000000001", "lock-0000000005"];
+        Assert.False(ZooKeeperLockProvider.TryGetPredecessor(earlierAndLater, "lock-0000000002", out var fromGap));
+        Assert.Null(fromGap);
     }
 
     [Fact]
@@ -170,6 +191,66 @@ public sealed class ZooKeeperPredecessorWatchTests
     }
 
     [Fact]
+    public async Task A_waiter_whose_own_node_vanished_does_not_claim_the_lock()
+    {
+        // Our node was removed by something other than us - an operator, another client - while we
+        // could still list the parent. Every child left sorts AFTER ours, so "no predecessor" is
+        // true and used to be read as ownership: the caller went into its critical section with no
+        // ZooKeeper lock behind it. Handing the wait back is the only safe answer.
+        var zk = new CountingZooKeeperClient
+        {
+            CreatedPath = Parent + "/lock-0000000002",
+            ChildListings = [["lock-0000000005"]],
+        };
+        var sut = new ZooKeeperLockProvider(zk);
+
+        var acquired = await sut.WaitForAcquireAsync(
+            Key, "owner-1", Lease, TimeSpan.FromSeconds(30), LockWaitPolicy.Default, default);
+
+        Assert.False(acquired);
+
+        // And nothing was registered, so a later release cannot delete a node we never held.
+        await sut.ReleaseAsync(Key, "owner-1", default);
+        Assert.Equal(0, zk.DeleteCalls);
+    }
+
+    [Fact]
+    public async Task An_empty_parent_is_not_ownership_either()
+    {
+        var zk = new CountingZooKeeperClient
+        {
+            CreatedPath = Parent + "/lock-0000000002",
+            ChildListings = [[]],
+        };
+        var sut = new ZooKeeperLockProvider(zk);
+
+        Assert.False(await sut.WaitForAcquireAsync(
+            Key, "owner-1", Lease, TimeSpan.FromSeconds(30), LockWaitPolicy.Default, default));
+    }
+
+    [Fact]
+    public async Task A_cleanup_delete_that_fails_once_is_retried_rather_than_orphaning_the_node()
+    {
+        // A node left at the head of the queue blocks this waiter and every later one until the
+        // session ends, and the delete most likely to fail is the one issued during the blip that
+        // caused the give-up in the first place. One attempt was too few.
+        var zk = new CountingZooKeeperClient
+        {
+            CreatedPath = Parent + "/lock-0000000002",
+            ChildListings = [["lock-0000000001", "lock-0000000002"]],
+            WatchAnswers = [false],
+            DeleteFailures = 1,
+        };
+        var sut = new ZooKeeperLockProvider(zk);
+
+        Assert.False(await sut.WaitForAcquireAsync(
+            Key, "owner-1", Lease, TimeSpan.FromSeconds(30), LockWaitPolicy.Default, default));
+
+        Assert.Equal(2, zk.DeleteCalls);
+        Assert.True(zk.NodeDeleted, "the waiter's node was orphaned at the head of the queue");
+    }
+
+    [Fact]
     public async Task A_won_wait_registers_the_node_so_the_release_deletes_the_right_one()
     {
         var zk = new CountingZooKeeperClient
@@ -249,10 +330,21 @@ public sealed class ZooKeeperPredecessorWatchTests
             return Task.FromResult(listing);
         }
 
+        /// <summary>How many delete attempts fail before one succeeds - a connection blip.</summary>
+        public int DeleteFailures { get; init; }
+
+        /// <summary>True once a delete actually landed, as opposed to merely being attempted.</summary>
+        public bool NodeDeleted { get; private set; }
+
         public Task DeleteAsync(string path, CancellationToken cancellationToken)
         {
             DeleteCalls++;
+            if (DeleteCalls <= DeleteFailures)
+            {
+                throw new InvalidOperationException("ZooKeeper is reconnecting.");
+            }
             DeletedPath = path;
+            NodeDeleted = true;
             return Task.CompletedTask;
         }
 

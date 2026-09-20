@@ -188,13 +188,23 @@ public sealed class ZooKeeperLockProvider : IDistributedLockProvider
                 cancellationToken.ThrowIfCancellationRequested();
 
                 var children = await zk.GetChildrenAsync(parent, cancellationToken).ConfigureAwait(false);
-                var predecessor = PredecessorOf(children, ourName);
+                if (!TryGetPredecessor(children, ourName, out var predecessor))
+                {
+                    // Our own node is not in the list. It was removed by something other than us -
+                    // an operator, another client, a session that dropped and came back - so we are
+                    // not in the queue at all and we hold nothing. Reporting ownership here would
+                    // send the caller into its critical section with no ZooKeeper lock behind it,
+                    // which is the one outcome a lock must never produce. Hand the wait back and
+                    // let the core start a fresh attempt.
+                    return LockAcquisition.NotAcquired;
+                }
+
                 if (predecessor is null)
                 {
-                    // Nothing ahead of us: we hold the lowest sequence number, so we hold the
-                    // lock. Unfenced, exactly as the single-shot acquire is: the child's sequence
-                    // number is per-parent and restarts when the parent is pruned, so it is NOT a
-                    // fencing token however much it looks like one.
+                    // We are in the list AND nothing is ahead of us: we hold the lowest sequence
+                    // number, so we hold the lock. Unfenced, exactly as the single-shot acquire is:
+                    // the child's sequence number is per-parent and restarts when the parent is
+                    // pruned, so it is NOT a fencing token however much it looks like one.
                     ownerKeyToNode[(ownerToken, key)] = created;
                     return LockAcquisition.Unfenced;
                 }
@@ -231,23 +241,47 @@ public sealed class ZooKeeperLockProvider : IDistributedLockProvider
     }
 
     /// <summary>
-    /// The child immediately ahead of <paramref name="ourName"/> in the sorted sibling list, or
-    /// <see langword="null"/> when nothing is - which means we are the holder. Watching the
-    /// IMMEDIATE predecessor rather than the lowest child is what keeps a release from waking every
-    /// waiter at once (the herd effect the recipe exists to avoid).
+    /// Answers two questions at once, because answering only the second one is a way to claim a
+    /// lock nobody holds: are we still IN the queue, and if so which child is immediately ahead of
+    /// us. Returns <see langword="false"/> when <paramref name="ourName"/> is not among
+    /// <paramref name="sortedChildren"/> at all; otherwise <see langword="true"/>, with
+    /// <paramref name="predecessor"/> set to the child directly in front of us or
+    /// <see langword="null"/> when we are first.
     /// </summary>
-    internal static string? PredecessorOf(IReadOnlyList<string> sortedChildren, string ourName)
+    /// <remarks>
+    /// Watching the IMMEDIATE predecessor rather than the lowest child is what keeps a release from
+    /// waking every waiter at once - the herd effect the recipe exists to avoid.
+    /// <para>
+    /// The membership check is not defensive padding. "No child sorts before us" and "we are not
+    /// there" are the same answer to the narrower question, so a helper that returns only the
+    /// predecessor reports a vanished node as ownership: an empty list, or a list holding only
+    /// LATER children, both look like "we are first".
+    /// </para>
+    /// </remarks>
+    internal static bool TryGetPredecessor(
+        IReadOnlyList<string> sortedChildren, string ourName, out string? predecessor)
     {
-        string? predecessor = null;
+        predecessor = null;
+        var present = false;
         foreach (var child in sortedChildren)
         {
-            if (string.CompareOrdinal(child, ourName) >= 0)
+            var order = string.CompareOrdinal(child, ourName);
+            if (order < 0)
             {
-                break;
+                predecessor = child;
+                continue;
             }
-            predecessor = child;
+            if (order == 0)
+            {
+                present = true;
+            }
+            break;
         }
-        return predecessor;
+        if (!present)
+        {
+            predecessor = null;
+        }
+        return present;
     }
 
     private Task<string> CreateChildAsync(string parent, string ownerToken, CancellationToken cancellationToken)
@@ -278,16 +312,37 @@ public sealed class ZooKeeperLockProvider : IDistributedLockProvider
         }
     }
 
+    // How many times a cleanup delete is attempted before the node is left to the session. One
+    // attempt is too few now that a waiter KEEPS its node for the whole wait: a delete that fails
+    // during a connection blip leaves a node at the head of the queue that blocks this waiter and
+    // every later one until the session ends. Retrying across a blip usually costs nothing and
+    // removes the common case. The ceiling is honest - a delete that fails for the whole window
+    // still leaves the node to session expiry, which is ZooKeeper's own guarantee and the only one
+    // available without a background reaper.
+    private const int CleanupDeleteAttempts = 3;
+
+    private static readonly TimeSpan CleanupDeleteRetryDelay = TimeSpan.FromMilliseconds(200);
+
     private async Task TryDeleteAsync(string node)
     {
-        try
+        for (var attempt = 1; ; attempt++)
         {
-            await zk.DeleteAsync(node, CancellationToken.None).ConfigureAwait(false);
-        }
-        catch
-        {
-            // Best-effort: the znode is ephemeral and will be cleaned up on session close
-            // even if delete fails. We never propagate a cleanup failure to the caller.
+            try
+            {
+                await zk.DeleteAsync(node, CancellationToken.None).ConfigureAwait(false);
+                return;
+            }
+            catch when (attempt < CleanupDeleteAttempts)
+            {
+                // A blip, most likely. Give the client time to reconnect and try again.
+                await Task.Delay(CleanupDeleteRetryDelay).ConfigureAwait(false);
+            }
+            catch
+            {
+                // Out of attempts. The znode is ephemeral and goes with the session; we never
+                // propagate a cleanup failure to the caller.
+                return;
+            }
         }
     }
 
