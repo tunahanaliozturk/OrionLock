@@ -1,4 +1,4 @@
-# OrionLock Roadmap
+﻿# OrionLock Roadmap
 
 This document lists what is shipped, what is actively planned, and what we are deliberately
 *not* building. It is a planning artifact, not a contract — dates slip, priorities reshuffle.
@@ -74,7 +74,7 @@ The first release that goes beyond "minimum correct lock" into operational quali
 HealthChecks package and the telemetry pass ship here; FIFO waiter queueing and the Consul
 backend follow as v0.3.1 and v0.3.2 (see below) because each deserves its own design cycle.
 
-- **`Moongazing.OrionLock.HealthChecks`** package with `AddOrionLockHealthCheck(...)` on
+- **`OrionLock.HealthChecks`** package with `AddOrionLockHealthCheck(...)` on
   `IHealthChecksBuilder`. Probes the registered `IDistributedLockProvider` by acquiring a
   sentinel lock; returns `Healthy`, `Degraded` (contention or `LockAcquisitionTimeoutException`),
   or `Unhealthy` (`OrionLockBackendException` or other exception). Sized for container readiness

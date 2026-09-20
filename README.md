@@ -1,4 +1,4 @@
-<p align="center">
+﻿<p align="center">
   <img src="docs/logo.png" alt="OrionLock Logo" width="150" />
 </p>
 
@@ -382,11 +382,11 @@ Those five, plus the core `OrionLock` package, are the six that ship to nuget.or
 
 ### Not published: Consul, etcd, ZooKeeper, health checks
 
-`OrionLock.Consul`, `OrionLock.Etcd`, `OrionLock.ZooKeeper` and `Moongazing.OrionLock.HealthChecks` live in this repository, build in this solution and are documented throughout this README, but they are **not on nuget.org** and never have been. They sit at 0.7.0 while the published packages are at 3.0.0, and the release job does not pack them.
+`OrionLock.Consul`, `OrionLock.Etcd`, `OrionLock.ZooKeeper` and `OrionLock.HealthChecks` live in this repository, build in this solution and are documented throughout this README, but they are **not on nuget.org** and never have been. They sit at 0.7.0 while the published packages are at 3.0.0, and the release job does not pack them.
 
 The reason is test coverage, not readiness. **The three backends have no container test coverage at all** — their test projects carry no Testcontainers reference, no fixture and no CI service, so every test in them runs against a fake adapter. The etcd watch, the Consul blocking query, the ZooKeeper predecessor watch, the fencing verdicts, the round-trip counts: all of it is proven at fake level only, and none of those providers has ever executed against a real etcd cluster, Consul agent or ZooKeeper ensemble. A distributed lock is exactly the kind of component where the gap between "the fake agrees" and "the server agrees" is where the bugs live, so shipping one on that basis is not something to do quietly.
 
-`Moongazing.OrionLock.HealthChecks` holds no lock semantics of its own — it probes whichever backend is registered — but its suite has no Testcontainers reference either: it has only ever probed the in-memory provider and throwing fakes.
+`OrionLock.HealthChecks` holds no lock semantics of its own — it probes whichever backend is registered — but its suite has no Testcontainers reference either: it has only ever probed the in-memory provider and throwing fakes.
 
 Use them by project reference if you want them, with that caveat in mind. They will be published when a container suite exists for them.
 
@@ -417,7 +417,7 @@ For a Native AOT or aggressively trimmed application, reference the core and (in
 
 ## Health checks
 
-`Moongazing.OrionLock.HealthChecks` ([unpublished](#not-published-consul-etcd-zookeeper-health-checks)) ships an `IHealthCheck` that probes backend reachability by acquiring and releasing a sentinel lock. Register it via `services.AddHealthChecks().AddOrionLockHealthCheck(name: "orionlock", failureStatus: HealthStatus.Degraded, tags: ["ready", "infra"])`. The probe returns `Healthy` on success, `Degraded` when the sentinel is contended within `WaitTimeout`, and `Unhealthy` when the backend throws. Useful for failing fast in container readiness probes when Redis or the database is unreachable.
+`OrionLock.HealthChecks` ([unpublished](#not-published-consul-etcd-zookeeper-health-checks)) ships an `IHealthCheck` that probes backend reachability by acquiring and releasing a sentinel lock. Register it via `services.AddHealthChecks().AddOrionLockHealthCheck(name: "orionlock", failureStatus: HealthStatus.Degraded, tags: ["ready", "infra"])`. The probe returns `Healthy` on success, `Degraded` when the sentinel is contended within `WaitTimeout`, and `Unhealthy` when the backend throws. Useful for failing fast in container readiness probes when Redis or the database is unreachable.
 
 ## OpenTelemetry
 

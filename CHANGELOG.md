@@ -1,4 +1,4 @@
-<!-- markdownlint-disable MD024 -->
+﻿<!-- markdownlint-disable MD024 -->
 # Changelog
 
 All notable changes to OrionLock are documented in this file. The format is based on
@@ -7,12 +7,24 @@ All notable changes to OrionLock are documented in this file. The format is base
 
 ## [Unreleased]
 
+### Changed
+
+- **`Moongazing.OrionLock.HealthChecks` is now `OrionLock.HealthChecks`.** Every other package in
+  this repository publishes without the `Moongazing.` prefix - `OrionLock`, `OrionLock.Redis`,
+  `OrionLock.SqlServer` and the rest - and this one was the single holdout. **No consumer is
+  affected:** the package has never been on nuget.org under either id, so there is no stranded
+  listing and nothing to migrate. Only the `PackageId` changed; the project, assembly and
+  namespace stay `Moongazing.OrionLock.HealthChecks`, matching every sibling project whose
+  assembly carries the prefix while its package does not. Fixed now precisely because the package
+  is unpublished, which is the only moment the change is free.
+
+
 ## [3.0.0] - 2026-09-20
 
 Nine merged pull requests covering correctness, security, performance and two new
 capabilities (fencing tokens, and waiters that park on the store instead of polling it).
 The published packages move 2.0.0 -> 3.0.0. `OrionLock.Consul`, `OrionLock.Etcd`,
-`OrionLock.ZooKeeper` and `Moongazing.OrionLock.HealthChecks` move 0.6.0 -> 0.7.0 and
+`OrionLock.ZooKeeper` and `OrionLock.HealthChecks` move 0.6.0 -> 0.7.0 and
 remain unpublished - see the last entry under **Changed** for why.
 
 ### Breaking changes
@@ -422,7 +434,7 @@ sections below.
   requires an explicit image, so the Redis, PostgreSQL and SQL Server tags are now pinned in one place
   instead of taken from the library defaults.
 
-- **`OrionLock.Consul`, `OrionLock.Etcd`, `OrionLock.ZooKeeper` and `Moongazing.OrionLock.HealthChecks`
+- **`OrionLock.Consul`, `OrionLock.Etcd`, `OrionLock.ZooKeeper` and `OrionLock.HealthChecks`
   move 0.6.0 -> 0.7.0 and stay unpublished.** They are not on the release job's pack list and have never
   been released to nuget.org. The reason is worth stating rather than leaving to be inferred: **those
   three backends have no container test coverage at all.** Their test projects carry no Testcontainers
@@ -431,7 +443,7 @@ sections below.
   anywhere. Everything this release says about them — the etcd watch, the Consul blocking query, the
   ZooKeeper predecessor watch, the fencing verdicts, the round-trip counts — is proven at fake level
   only. Shipping a distributed lock backend on that basis is not something to do quietly, so they stay
-  off nuget.org until a container suite exists. `Moongazing.OrionLock.HealthChecks` holds no lock
+  off nuget.org until a container suite exists. `OrionLock.HealthChecks` holds no lock
   semantics of its own, but its suite has no Testcontainers reference either: it has only ever probed the
   in-memory provider and throwing fakes.
 

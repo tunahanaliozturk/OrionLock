@@ -1,6 +1,6 @@
-<Project Sdk="Microsoft.NET.Sdk">
+﻿<Project Sdk="Microsoft.NET.Sdk">
   <PropertyGroup>
-    <PackageId>Moongazing.OrionLock.HealthChecks</PackageId>
+    <PackageId>OrionLock.HealthChecks</PackageId>
     <!--
       Unpublished integration, held below 1.0 and overriding the repo-wide 3.0.0 in
       Directory.Build.props. It is not on the release job's pack list and has never been released to
