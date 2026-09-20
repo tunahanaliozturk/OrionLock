@@ -44,6 +44,22 @@ even on those paths half of OrionLock's default 10-second `WaitTimeout` stays us
 Set `LockDelay = TimeSpan.Zero` only if you accept that a partitioned holder and its successor can
 overlap.
 
+## Fencing tokens
+
+Off by default. With `ConsulLockOptions.FencingTokens = true`, `handle.FencingToken` returns the acquired
+key's `ModifyIndex` — the Raft log index, which is cluster-global, advances on every committed write and is
+never rewound, so it strictly increases per key across acquisitions and processes.
+
+It is opt-in because Consul's acquire returns a bare `true`/`false` with no index attached, so the provider
+reads the entry back: one extra GET per acquire, paid only by callers who asked for a token. If that read
+fails the acquire fails — the key is released and the session destroyed — rather than returning a hold
+whose token is quietly missing.
+
+**Not `LockIndex`,** which counts acquisitions of the key and reads exactly like a fencing token. It lives
+on the KV entry and dies with it: a `delete` session behaviour removes the key on expiry and the next
+acquisition starts counting from 1 again, reissuing a token an earlier holder already used — under exactly
+the crash-and-expire conditions fencing exists for.
+
 ## Lock keys are URI path data
 
 The lock key is concatenated into Consul's `/v1/kv/{key}` HTTP path. Keys are percent-encoded per path

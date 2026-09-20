@@ -112,6 +112,73 @@ if (bounded is null)
 
 Each acquired lock carries a lease (default 30s). A background watchdog renews the lease at `LeaseDuration / 3` while the handle is alive. If renewal fails, `handle.IsHeld` flips to false and `handle.LostToken` is cancelled — so the critical section can observe and abort safely instead of running without the lock. See [docs/lease-and-renewal.md](docs/lease-and-renewal.md).
 
+## Fencing tokens
+
+`LostToken` covers the case OrionLock *knows* about: renewal failed, so the lease is gone. It cannot cover the case nothing observes. Your process stops — a stop-the-world GC, a VM migration, a suspended container — for longer than the lease. Nobody's code runs, so nothing notices. The backend expires the key, another process acquires it legitimately, and then your process resumes mid-critical-section and writes. It is not confused: from inside, no time passed. Every lease-based lock has this hole, and the only known fix is a fencing token — a number that strictly increases with each acquisition, which the holder presents to the resource, and which the resource uses to refuse anyone it has already moved past. (Martin Kleppmann, ["How to do distributed locking"](https://martin.kleppmann.com/2016/02/08/how-to-do-distributed-locking.html).)
+
+`handle.FencingToken` is that number. It is `long?`: `null` means this backend has nothing it can make strictly monotonic, and OrionLock reports that honestly instead of inventing a counter you would then trust.
+
+| Backend | Token | Monotonic per key |
+| --- | --- | --- |
+| `OrionLock.Etcd` | mvcc revision of the acquiring transaction | Yes — always on, no extra round trip |
+| `OrionLock.Redis` | `INCR` on a per-key counter, in the same Lua call as the `SET NX PX` | Yes — opt-in (`FencingTokens`), leaves one permanent counter key per lock key |
+| `OrionLock.EntityFrameworkCore` | `FencingToken` column, bumped by the same `UPDATE` that takes the row | Yes — needs [a migration](docs/migrations/orionlock-locks-table.md) |
+| `OrionLock.Consul` | KV `ModifyIndex` (the Raft log index) | Yes — opt-in (`FencingTokens`), costs one extra GET per acquire |
+| `OrionLock.Testing` | in-process per-key counter | Yes, within one process — which is all this backend claims |
+| `OrionLock.ZooKeeper` | — | **No.** The sequence number and the parent's `cversion` both reset when the empty parent znode is pruned |
+| `OrionLock.SqlServer` | — | **No.** `sp_getapplock` keeps no per-key state to count |
+| `OrionLock.Postgres` | — | **No.** `pg_try_advisory_lock` keeps no per-key state to count |
+
+The full reasoning for each verdict — including why Consul's `LockIndex` looks right and is not — is in [docs/fencing-tokens.md](docs/fencing-tokens.md).
+
+### Worked example
+
+The token is worth nothing unless the resource checks it. Acquire, pass it down, and make the resource refuse anything it has already moved past:
+
+```csharp
+await using var handle = await locker.AcquireAsync($"order:{orderId}");
+
+// Throws if this backend mints no token, rather than letting a null reach the check below
+// and silently compare against nothing.
+var fence = handle.RequireFencingToken();
+
+await repository.UpdateStatusAsync(orderId, "shipped", fence);
+```
+
+And the part people get wrong — the check has to be **one statement with the write**, not a `SELECT` followed by an `UPDATE`. Two statements can be interleaved by exactly the stale writer you are trying to stop:
+
+```sql
+-- One statement: the comparison and the write commit together, or neither happens.
+UPDATE orders
+   SET status          = @status,
+       last_fence      = @fence
+ WHERE id              = @orderId
+   AND last_fence      < @fence;   -- strictly less: two acquisitions never share a token
+```
+
+```csharp
+var rows = await connection.ExecuteAsync(Sql, new { orderId, status, fence });
+if (rows == 0)
+{
+    // Someone with a higher token has already written. We are the paused holder; our lease is
+    // gone even though nothing told us. Abandon the work, do not retry.
+    throw new StaleFenceException(orderId, fence);
+}
+```
+
+`last_fence` starts at 0 (or `NOT NULL DEFAULT 0`) so the first write always passes. Use `<`, never `<=`: a token is never handed out twice, so a repeat means the caller is replaying an old one.
+
+For a resource that genuinely lives in this process, `FencingGuard` does the same bookkeeping in memory:
+
+```csharp
+var guard = new FencingGuard();                 // one per resource, long-lived
+guard.Accept($"order:{orderId}", fence);        // throws FencingTokenRegressedException if stale
+```
+
+It is not a substitute for the SQL above: two application instances would each keep their own idea of the highest token.
+
+The token is also passed to `ILockEventObserver.OnAcquired(key, durationMs, fencingToken)` and attached to the acquire span as `orionlock.fencing_token`. It is deliberately **not** a metric tag — it is unique per acquisition, so as a metric dimension it would mint a fresh time series on every acquire ([docs/lock-key-cardinality.md](docs/lock-key-cardinality.md)).
+
 ## Reentrancy
 
 A single `DistributedLock` instance (a DI singleton) re-acquiring a key it already holds returns a counted nested handle without touching the backend. The outermost dispose releases. Reentrancy collapses same-process re-acquisition only; it does not cross process boundaries.
