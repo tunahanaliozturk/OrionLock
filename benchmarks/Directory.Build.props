@@ -1,0 +1,22 @@
+<Project>
+  <!--
+    Keep every shared setting from the repo root (Nullable, LangVersion, analysis level, package
+    metadata). MSBuild stops at the FIRST Directory.Build.props it finds walking up, so this file
+    must import the root one explicitly or the benchmarks tree would silently lose all of it.
+  -->
+  <Import Project="$([MSBuild]::GetPathOfFileAbove('Directory.Build.props', '$(MSBuildThisFileDirectory)../'))" />
+
+  <PropertyGroup>
+    <!--
+      The root props sets TargetFrameworks (plural) for the shipped libraries. BenchmarkDotNet
+      generates a boilerplate csproj INSIDE this tree (bin/Release/<tfm>/<guid>/) for every job it
+      runs, and that generated project inherits this value while declaring its own single
+      TargetFramework. Plural wins over singular in the SDK, so the generated project asks to build
+      for net8.0/net9.0/net10.0 while its ProjectReference back to the benchmark host supports only
+      net10.0, and restore fails with NU1201 before a single measurement is taken. Clearing the
+      plural value here lets the generated project's own single TFM win, which is the whole point of
+      the same clearing the benchmark csproj already does for itself.
+    -->
+    <TargetFrameworks></TargetFrameworks>
+  </PropertyGroup>
+</Project>
