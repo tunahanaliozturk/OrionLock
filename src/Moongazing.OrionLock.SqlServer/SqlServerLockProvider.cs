@@ -108,7 +108,7 @@ public sealed class SqlServerLockProvider : IDistributedLockProvider, IDisposabl
             ? GetAppLockAsync(key, ownerToken, LockTimeoutMsFor(maxWait), maxWait, cancellationToken)
             : WaitWithinBudgetAsync(
                 maxWait,
-                waitPolicy,
+                waitPolicy.ToPollOptions(),
                 remaining => GetAppLockAsync(
                     key, ownerToken, LockTimeoutMsFor(remaining), remaining, cancellationToken),
                 cancellationToken);
@@ -128,20 +128,30 @@ public sealed class SqlServerLockProvider : IDistributedLockProvider, IDisposabl
     /// is not a wasted wait, it is a lock nobody is holding on purpose.
     /// </para>
     /// <para>
-    /// An attempt that comes back empty without consuming <see cref="LockWaitPolicy.RetryInterval"/>
-    /// sleeps the difference first: the caller's own poll floor, which is what this parameter is
-    /// for. Without it a server whose lock timer refused instantly would turn a long budget into a
-    /// hot loop against the database instead of the poll the wait is meant to degrade into.
+    /// An attempt that comes back empty without consuming the caller's backoff sleeps the
+    /// difference first. The figure comes from <paramref name="backoff"/> in full - the
+    /// exponential ceiling and the jitter, not only <see cref="LockWaitPolicy.RetryInterval"/> -
+    /// through the same <c>ComputeJitteredDelay</c> every other retry loop in the library uses.
+    /// Honouring only the floor would be worse here than anywhere else: this loop runs precisely
+    /// when a server is refusing early and repeatedly, which is precisely when N waiters retrying
+    /// on the same flat tick is a thundering herd. Without any delay at all, a server whose lock
+    /// timer refused instantly would turn a long budget into a hot loop against the database
+    /// instead of the poll the wait is meant to degrade into.
     /// </para>
     /// </remarks>
     internal static async Task<LockAcquisition> WaitWithinBudgetAsync(
         TimeSpan maxWait,
-        LockWaitPolicy waitPolicy,
+        WaitForAcquireOptions backoff,
         Func<TimeSpan, Task<LockAcquisition>> attemptAsync,
         CancellationToken cancellationToken)
     {
         var elapsed = Stopwatch.StartNew();
         var attempted = false;
+        // One generator for the whole wait, created once and never shared, exactly as
+        // PollUntilAcquiredAsync does it - a fresh one per round would re-draw from the same seed
+        // and flatten the jitter this exists to provide.
+        var rng = backoff.RandomFactory();
+        var rounds = 0;
         while (true)
         {
             var remaining = maxWait - elapsed.Elapsed;
@@ -166,10 +176,14 @@ public sealed class SqlServerLockProvider : IDistributedLockProvider, IDisposabl
                 return LockAcquisition.NotAcquired;
             }
 
-            var floor = waitPolicy.RetryInterval - (elapsed.Elapsed - roundStarted);
-            if (floor > TimeSpan.Zero)
+            // Time already burnt in the round counts towards the interval: the promise is at most
+            // one attempt per interval, not an interval of idling on top of every attempt.
+            var delay = DistributedLockProviderExtensions.ComputeJitteredDelay(backoff, rounds, rng)
+                - (elapsed.Elapsed - roundStarted);
+            rounds++;
+            if (delay > TimeSpan.Zero)
             {
-                await Task.Delay(floor < left ? floor : left, cancellationToken).ConfigureAwait(false);
+                await Task.Delay(delay < left ? delay : left, cancellationToken).ConfigureAwait(false);
             }
         }
     }

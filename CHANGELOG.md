@@ -293,7 +293,13 @@ All notable changes to OrionLock are documented in this file. The format is base
   normal case — this is still exactly one round trip, and `Timeout.InfiniteTimeSpan` is still the single
   blocking call it always was rather than something that could lose its place in the queue. A round that
   returns without consuming `LockWaitPolicy.RetryInterval` sleeps the difference first, so a server whose
-  timer refused instantly degrades into the poll the caller configured instead of a hot loop.
+  timer refused instantly degrades into the poll the caller configured instead of a hot loop — and that
+  retry delay is the caller's WHOLE `LockWaitPolicy`, `BackoffCeiling` and jitter included, taken from the
+  same `ComputeJitteredDelay` every other retry loop in the library uses rather than a second
+  implementation in a backend package. This provider ignored `LockWaitPolicy` outright before; honouring
+  only `RetryInterval` would have been the worse half-state, because the loop runs precisely when a server
+  is refusing early and repeatedly, which is precisely when every waiter retrying on the same flat tick is
+  a thundering herd.
   The deadline is checked before every retry, not only after one: a round issued once the budget was gone
   could still WIN, and a lock handed to a caller who has already stopped waiting — and who may by then
   have taken the other branch — is worse than giving up early. Early is a wasted wait; late is a lock

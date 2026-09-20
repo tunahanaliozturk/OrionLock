@@ -95,7 +95,7 @@ public sealed class SqlServerWaitBudgetTests
 
         var result = await SqlServerLockProvider.WaitWithinBudgetAsync(
             TimeSpan.FromMilliseconds(400),
-            new LockWaitPolicy(TimeSpan.FromMilliseconds(20)),
+            new LockWaitPolicy(TimeSpan.FromMilliseconds(20)).ToPollOptions(),
             remaining =>
             {
                 handed.Add(remaining);
@@ -119,12 +119,66 @@ public sealed class SqlServerWaitBudgetTests
 
         var result = await SqlServerLockProvider.WaitWithinBudgetAsync(
             TimeSpan.FromSeconds(30),
-            new LockWaitPolicy(TimeSpan.FromMilliseconds(1)),
+            new LockWaitPolicy(TimeSpan.FromMilliseconds(1)).ToPollOptions(),
             _ => Task.FromResult(++attempts == 2 ? LockAcquisition.Unfenced : LockAcquisition.NotAcquired),
             default);
 
         Assert.True(result.Acquired);
         Assert.Equal(2, attempts);
+    }
+
+    /// <summary>
+    /// A generator that always draws the top of the jitter window, so
+    /// <c>ComputeJitteredDelay</c> returns exactly the exponential ceiling for each round and the
+    /// whole sequence is a fixed, checkable series rather than something timed and hoped for.
+    /// </summary>
+    private sealed class TopOfTheJitterWindow : Random
+    {
+        public override double NextDouble() => 1.0;
+    }
+
+    [Fact]
+    public async Task The_retry_delay_follows_the_whole_policy_not_just_its_floor()
+    {
+        // This loop runs exactly when a server is refusing early and repeatedly - which is exactly
+        // when every waiter retrying on the same flat tick is a thundering herd. Reading only
+        // RetryInterval and ignoring BackoffCeiling gave callers who had configured exponential
+        // jitter a synchronised flat retry instead. LockWaitPolicy was ignored outright by this
+        // provider before the budget fix; honouring half of it is the state to avoid.
+        var backoff = new LockWaitPolicy(
+            TimeSpan.FromMilliseconds(20), BackoffCeiling: TimeSpan.FromMilliseconds(400)).ToPollOptions();
+        backoff.RandomFactory = () => new TopOfTheJitterWindow();
+
+        var at = new List<long>();
+        var clock = Stopwatch.StartNew();
+
+        await SqlServerLockProvider.WaitWithinBudgetAsync(
+            TimeSpan.FromMilliseconds(800),
+            backoff,
+            _ =>
+            {
+                at.Add(clock.ElapsedMilliseconds);
+                return Task.FromResult(LockAcquisition.NotAcquired);
+            },
+            default);
+        clock.Stop();
+
+        // Top of the window every time, so the delays are exactly 20, 40, 80, 160 - doubling to the
+        // 400 ms ceiling. A flat RetryInterval makes every one of these 20.
+        var expected = new[] { 20, 40, 80, 160 };
+        Assert.True(at.Count >= expected.Length + 1, $"only {at.Count} rounds in 800ms, expected at least {expected.Length + 1}");
+
+        for (var i = 0; i < expected.Length; i++)
+        {
+            var gap = at[i + 1] - at[i];
+            Assert.True(
+                gap >= expected[i] - 5,
+                $"gap {i} was {gap}ms but the policy asks for {expected[i]}ms: the delay is being taken from the retry interval alone, "
+                + $"so a configured BackoffCeiling buys nothing. Gaps: [{string.Join(", ", at.Zip(at.Skip(1), (a, b) => b - a))}]");
+            Assert.True(
+                gap < expected[i] + 200,
+                $"gap {i} was {gap}ms, far past the {expected[i]}ms the policy asks for. Gaps: [{string.Join(", ", at.Zip(at.Skip(1), (a, b) => b - a))}]");
+        }
     }
 
     [Fact]
@@ -142,7 +196,7 @@ public sealed class SqlServerWaitBudgetTests
 
         var result = await SqlServerLockProvider.WaitWithinBudgetAsync(
             budget,
-            new LockWaitPolicy(TimeSpan.FromMilliseconds(500)),
+            new LockWaitPolicy(TimeSpan.FromMilliseconds(500)).ToPollOptions(),
             _ =>
             {
                 if (clock.Elapsed >= budget)
@@ -173,7 +227,7 @@ public sealed class SqlServerWaitBudgetTests
 
         var result = await SqlServerLockProvider.WaitWithinBudgetAsync(
             TimeSpan.Zero,
-            LockWaitPolicy.Default,
+            LockWaitPolicy.Default.ToPollOptions(),
             _ => { attempts++; return Task.FromResult(LockAcquisition.NotAcquired); },
             default);
 
