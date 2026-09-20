@@ -203,6 +203,8 @@ public sealed class RedisLockProvider : IDistributedLockProvider
 
         var elapsed = System.Diagnostics.Stopwatch.StartNew();
         var infinite = maxWait == Timeout.InfiniteTimeSpan;
+        var pollFloor = waitPolicy.ToPollOptions().InitialDelay;
+        var missingTtlAlreadyRetried = false;
 
         using var released = new SemaphoreSlim(0, 1);
         var channel = ReleaseChannel(key);
@@ -255,6 +257,7 @@ public sealed class RedisLockProvider : IDistributedLockProvider
                 var ttl = await Db.KeyTimeToLiveAsync(Key(key)).ConfigureAwait(false);
                 if (ttl is { } holderTtl)
                 {
+                    missingTtlAlreadyRetried = false;
                     // One millisecond past the expiry, so the retry sees a lapsed lease rather than
                     // an expiring one.
                     var untilExpiry = holderTtl + TimeSpan.FromMilliseconds(1);
@@ -263,10 +266,25 @@ public sealed class RedisLockProvider : IDistributedLockProvider
                         wait = untilExpiry;
                     }
                 }
-                else if (infinite)
+                else if (!missingTtlAlreadyRetried)
                 {
-                    // The key vanished between the attempt and the TTL read; loop straight back.
+                    // No TTL came back. Overwhelmingly this means the key VANISHED between the
+                    // failed attempt and this read - the holder's lease lapsed - so the lock is free
+                    // right now and nothing will ever be published for it, because a TTL expiry
+                    // publishes nothing. Parking here is how a waiter sleeps through an already-free
+                    // lock and reports a timeout, so retry at once. This was previously done only
+                    // for an infinite wait, which is exactly backwards: the finite waiter is the one
+                    // with a budget to burn.
+                    missingTtlAlreadyRetried = true;
                     continue;
+                }
+                else
+                {
+                    // The retry also found no TTL, so this is the other thing a null means:
+                    // StackExchange.Redis reports "key has no expiry" and "key does not exist"
+                    // identically, and a key under our prefix with no expiry is not ours to wait
+                    // for. Fall back to the caller's poll floor rather than spinning on it.
+                    wait = infinite || pollFloor < wait ? pollFloor : wait;
                 }
 
                 await released.WaitAsync(wait, cancellationToken).ConfigureAwait(false);

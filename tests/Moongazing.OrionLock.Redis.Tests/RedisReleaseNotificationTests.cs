@@ -161,6 +161,64 @@ public sealed class RedisReleaseNotificationTests
     }
 
     [Fact]
+    public async Task A_finite_waiter_does_not_sleep_through_a_lock_that_is_already_free()
+    {
+        // The lease lapsed between the failed SET NX and the TTL read, so Redis reports no TTL and
+        // nothing is ever going to be published for it - a TTL expiry publishes nothing. Parking on
+        // the channel here burns the caller's whole budget with the key free the entire time.
+        // Before the fix this retried at once ONLY for an infinite wait, which is backwards: the
+        // finite waiter is the one with a budget to lose.
+        var db = new Mock<IDatabase>();
+        var attempts = 0;
+        db.Setup(d => d.StringSetAsync(
+                It.IsAny<RedisKey>(), It.IsAny<RedisValue>(), It.IsAny<TimeSpan?>(),
+                It.IsAny<bool>(), It.IsAny<When>(), It.IsAny<CommandFlags>()))
+            .ReturnsAsync(() => Interlocked.Increment(ref attempts) > 1);
+        db.Setup(d => d.KeyTimeToLiveAsync(It.IsAny<RedisKey>(), It.IsAny<CommandFlags>()))
+            .ReturnsAsync((TimeSpan?)null);
+
+        var (sub, _) = SubscriberCapturingItsHandler();
+        var sut = new RedisLockProvider(Multiplexer(db.Object, sub), new RedisLockOptions());
+
+        var sw = Stopwatch.StartNew();
+        var acquired = await sut.WaitForAcquireAsync(
+            "k", "owner-1", Lease, TimeSpan.FromSeconds(10), LockWaitPolicy.Default, default);
+        sw.Stop();
+
+        Assert.True(acquired);
+        Assert.Equal(2, Volatile.Read(ref attempts));
+        // The old code slept the full ten-second budget here.
+        Assert.True(sw.ElapsedMilliseconds < 1000, $"the waiter parked for {sw.ElapsedMilliseconds}ms on a free lock");
+    }
+
+    [Fact]
+    public async Task A_key_that_never_reports_a_TTL_is_not_spun_on()
+    {
+        // The other thing a null TTL means: StackExchange.Redis cannot tell "no key" from "key with
+        // no expiry". A foreign persistent key under our prefix would otherwise be retried in a
+        // tight loop for the whole budget, at full CPU.
+        var db = new Mock<IDatabase>();
+        var attempts = 0;
+        db.Setup(d => d.StringSetAsync(
+                It.IsAny<RedisKey>(), It.IsAny<RedisValue>(), It.IsAny<TimeSpan?>(),
+                It.IsAny<bool>(), It.IsAny<When>(), It.IsAny<CommandFlags>()))
+            .ReturnsAsync(() => { Interlocked.Increment(ref attempts); return false; });
+        db.Setup(d => d.KeyTimeToLiveAsync(It.IsAny<RedisKey>(), It.IsAny<CommandFlags>()))
+            .ReturnsAsync((TimeSpan?)null);
+
+        var (sub, _) = SubscriberCapturingItsHandler();
+        var sut = new RedisLockProvider(Multiplexer(db.Object, sub), new RedisLockOptions());
+
+        var acquired = await sut.WaitForAcquireAsync(
+            "k", "owner-1", Lease, TimeSpan.FromMilliseconds(300),
+            new LockWaitPolicy(TimeSpan.FromMilliseconds(50)), default);
+
+        Assert.False(acquired);
+        // One immediate retry, then the poll floor: roughly 300 / 50 attempts, nowhere near a spin.
+        Assert.InRange(Volatile.Read(ref attempts), 2, 20);
+    }
+
+    [Fact]
     public async Task Turning_notifications_off_restores_the_poll_loop_exactly()
     {
         // The escape hatch for a deployment where pub/sub is unavailable: no subscribe at all, and
