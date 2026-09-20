@@ -44,6 +44,12 @@ public sealed class RedisLockProvider : IDistributedLockProvider
     private readonly IConnectionMultiplexer multiplexer;
     private readonly RedisLockOptions options;
 
+    /// <summary>
+    /// The shortest wait a parked waiter can actually take. <see cref="SemaphoreSlim.WaitAsync(TimeSpan, CancellationToken)"/>
+    /// truncates its timeout to whole milliseconds, so anything below this sleeps for nothing.
+    /// </summary>
+    internal static readonly TimeSpan ShortestSleep = TimeSpan.FromMilliseconds(1);
+
     /// <summary>Creates the provider over an existing Redis connection.</summary>
     public RedisLockProvider(IConnectionMultiplexer multiplexer, RedisLockOptions options)
     {
@@ -184,6 +190,10 @@ public sealed class RedisLockProvider : IDistributedLockProvider
     /// A cancelled or timed-out waiter unsubscribes in a <c>finally</c>, so no subscription is left
     /// parked on the multiplexer.
     /// </para>
+    /// <para>
+    /// The budget is treated as spent once less than <see cref="ShortestSleep"/> of it is left,
+    /// because that is the shortest wait the park below can actually take.
+    /// </para>
     /// </remarks>
     public async Task<LockAcquisition> WaitForAcquireAsync(
         string key, string ownerToken, TimeSpan leaseDuration, TimeSpan maxWait,
@@ -248,7 +258,12 @@ public sealed class RedisLockProvider : IDistributedLockProvider
                 }
 
                 var remaining = maxWait - elapsed.Elapsed;
-                if (!infinite && remaining <= TimeSpan.Zero)
+                // The floor is one millisecond, not zero. SemaphoreSlim.WaitAsync truncates its
+                // timeout to whole milliseconds, so a sub-millisecond sliver of budget is a wait
+                // for nothing: the call returns at once and sends the loop straight back to the
+                // store, over and over, until the clock finally crosses the deadline. A budget
+                // that cannot be slept on any more is a budget that is over.
+                if (!infinite && remaining < ShortestSleep)
                 {
                     return LockAcquisition.NotAcquired;
                 }

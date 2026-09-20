@@ -255,6 +255,28 @@ All notable changes to OrionLock are documented in this file. The format is base
 
 ### Fixed
 
+- **A Redis waiter no longer spins on the store for the last millisecond of its budget.** The wait parks
+  on a `SemaphoreSlim`, and `WaitAsync` truncates its timeout to whole milliseconds. The loop only
+  stopped once the remaining budget reached zero, so the sub-millisecond sliver before that asked for a
+  wait that rounded to none: the park returned instantly and the loop went straight back to the store,
+  over and over, until the clock crossed the deadline. **Used to happen:** every timed-out Redis wait -
+  not only the no-TTL path - ended in a burst of `SET NX` + `PTTL` round trips issued as fast as the CPU
+  allowed. Instrumented in CI on a four-core runner, a single 300 ms wait made up to **154** attempts,
+  147 of them inside the same millisecond, after a textbook 50 ms cadence for the rest of the budget. On
+  a fast idle machine the sliver closes within one iteration and nothing is visible, which is why this
+  survived: it is a burst, not a hang, and it scales with how contended the host is. **Happens now:** a
+  budget with less than a millisecond left is a budget that is over, because that is the shortest wait
+  the park can actually take, and the waiter returns instead of asking again.
+
+- **`A_key_that_never_reports_a_TTL_is_not_spun_on` now asserts the property it is named after.** It
+  bounded the attempt COUNT - `InRange(attempts, 2, 20)` - which is a bound against the budget, and the
+  budget is not what limits the loop; the poll floor is. So it failed on loaded CI runners for reasons
+  that had nothing to do with spinning (observed at 21, 26 and 49), and it would have passed a real spin
+  for as long as the spin stayed under twenty iterations - which is exactly what it was doing. It now
+  asserts the RATE: at most one attempt per poll floor of time that actually elapsed, plus the two that
+  arrive back to back by design. A slow machine stretches the elapsed time and the allowance with it, so
+  the test can no longer fail for being slow - only for spinning.
+
 - **A cancelled SQL Server waiter is told it was cancelled, not that the backend failed.** Cancelling
   a command blocked inside `sp_getapplock` tears the command down, and `Microsoft.Data.SqlClient`
   reports the teardown - *"A severe error occurred on the current command"* - as a `SqlException`.
