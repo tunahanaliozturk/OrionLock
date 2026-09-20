@@ -1,4 +1,4 @@
-﻿<!-- markdownlint-disable MD024 -->
+<!-- markdownlint-disable MD024 -->
 # Changelog
 
 All notable changes to OrionLock are documented in this file. The format is based on
@@ -325,8 +325,10 @@ sections below.
 - **SQL Server no longer throws away SQL Server's lock queue.** `sp_getapplock` takes a
   `@LockTimeout` and the provider passed `0`, which asks the lock manager for an answer now and
   discards the queue behind it. A contended wait now passes the caller's remaining budget, so it is
-  one `sp_getapplock` command that returns the moment the lock frees - and it inherits the FIFO
-  ordering, which polling discarded. The command timeout is raised by the wait budget for that call
+  normally one `sp_getapplock` command that returns the moment the lock frees - and it inherits the FIFO
+  ordering, which polling discarded. "Normally" because the provider re-issues the command when SQL
+  Server's own lock timer gives up short of the budget; see *A SQL Server wait now lasts as long as the
+  caller asked for* under **Fixed**. The command timeout is raised by the wait budget for that call
   only, or `Microsoft.Data.SqlClient` would abort a legitimate queued wait as though the link had
   hung. Single-shot `TryAcquireAsync` is unchanged.
 
@@ -436,60 +438,78 @@ sections below.
 ### Fixed
 
 - **A Redis waiter no longer spins on the store for the last millisecond of its budget.** The wait parks
-  on a `SemaphoreSlim`, and `WaitAsync` truncates its timeout to whole milliseconds. The loop only
-  stopped once the remaining budget reached zero, so the sub-millisecond sliver before that asked for a
-  wait that rounded to none: the park returned instantly and the loop went straight back to the store,
-  over and over, until the clock crossed the deadline. **Used to happen:** every timed-out Redis wait -
-  not only the no-TTL path - ended in a burst of `SET NX` + `PTTL` round trips issued as fast as the CPU
-  allowed. Instrumented in CI on a four-core runner, a single 300 ms wait made up to **154** attempts,
-  147 of them inside the same millisecond, after a textbook 50 ms cadence for the rest of the budget. On
-  a fast idle machine the sliver closes within one iteration and nothing is visible, which is why this
-  survived: it is a burst, not a hang, and it scales with how contended the host is. **Happens now:** a
-  budget with less than a millisecond left is a budget that is over, because that is the shortest wait
-  the park can actually take, and the waiter returns instead of asking again.
+  on a `SemaphoreSlim`, and `WaitAsync` truncates its timeout to whole milliseconds. The loop only gave
+  up once the remaining budget reached zero, so the sub-millisecond sliver before that asked for a wait
+  that rounded to none: the park returned at once and the loop went straight back to the store, over and
+  over, until the clock crossed the deadline.
 
-- **`A_key_that_never_reports_a_TTL_is_not_spun_on` now asserts the property it is named after.** It
-  bounded the attempt COUNT - `InRange(attempts, 2, 20)` - which is a bound against the budget, and the
-  budget is not what limits the loop; the poll floor is. So it failed on loaded CI runners for reasons
-  that had nothing to do with spinning (observed at 21, 26 and 49), and it would have passed a real spin
-  for as long as the spin stayed under twenty iterations - which is exactly what it was doing. It now
-  asserts the RATE: at most one attempt per poll floor of time that actually elapsed, plus the two that
-  arrive back to back by design. A slow machine stretches the elapsed time and the allowance with it, so
-  the test can no longer fail for being slow - only for spinning.
+  **Used to happen:** every timed-out Redis wait — not only the no-TTL path — ended in a burst of
+  `SET NX` + `PTTL` round trips issued as fast as the CPU allowed. Instrumented on a four-core CI runner,
+  one 300 ms wait made **154** attempts, 147 of them inside the same millisecond, after a textbook 50 ms
+  cadence for the rest of the budget. On a fast idle machine the sliver closes inside a single iteration
+  and nothing is visible, which is why it survived: it is a burst rather than a hang, and it grows with
+  how contended the host is. It also hid behind its own test, which bounded the attempt COUNT
+  (`InRange(attempts, 2, 20)`) — a bound against the budget, when the poll floor is what limits the loop.
+  That assertion failed on loaded runners for reasons unrelated to spinning, and passed a real spin for
+  as long as the spin stayed under twenty iterations, which is exactly what it was doing. It now asserts
+  the rate: at most one attempt per poll floor of time that actually elapsed.
+
+  **Happens now:** a budget with less than a millisecond left is a budget that is over, because that is
+  the shortest wait the park can take, and the waiter returns instead of asking again.
+
+  The park itself is new in this release, so this was introduced and fixed inside the same development
+  cycle: no published version of `OrionLock.Redis` ever carried it. It is recorded here because the
+  behaviour is worth knowing if you are reading the wait path, not because an upgrade fixes it for you.
+
 - **A SQL Server wait now lasts as long as the caller asked for, not as long as SQL Server's lock timer
   feels like.** `sp_getapplock`'s `@LockTimeout` is enforced against SQL Server's own lock-wait
-  accounting, and that accounting is not wall clock. On a CPU-saturated host it runs far ahead of it, so
-  the timer expires while most of the caller's budget is still unspent. **Used to happen:**
-  `WaitForAcquireAsync(..., maxWait: 700ms, ...)` handed the whole 700 ms to `@LockTimeout` and reported
-  whatever came back, so a contended waiter could be told "not acquired" after 195 ms — under a third of
-  the budget it had sized deliberately — and a caller sizing a wait against an SLO got a number that
-  meant nothing under exactly the load that makes waits matter. CI measured it directly: with the runner
-  saturated, 42 of 180 waits on a 700 ms budget returned in under 500 ms, the shortest after 213 ms,
-  while `sys.dm_exec_session_wait_stats` credited those same waits with 3.5 seconds of `LCK` wait time.
-  The other backends were never affected — PostgreSQL's `statement_timeout` and the Redis, etcd, Consul
-  and ZooKeeper subscriptions are all timed on the client's clock. **Happens now:** the provider keeps
-  the budget on its own monotonic clock and re-issues `sp_getapplock` with what is left when a round
-  gives up early, so a 700 ms budget really does last 700 ms. When the server's timer is honest — the
-  normal case — this is still exactly one round trip, and `Timeout.InfiniteTimeSpan` is still the single
-  blocking call it always was rather than something that could lose its place in the queue. A round that
-  returns without consuming `LockWaitPolicy.RetryInterval` sleeps the difference first, so a server whose
-  timer refused instantly degrades into the poll the caller configured instead of a hot loop — and that
-  retry delay is the caller's WHOLE `LockWaitPolicy`, `BackoffCeiling` and jitter included, taken from the
-  same `ComputeJitteredDelay` every other retry loop in the library uses rather than a second
-  implementation in a backend package. This provider ignored `LockWaitPolicy` outright before; honouring
-  only `RetryInterval` would have been the worse half-state, because the loop runs precisely when a server
-  is refusing early and repeatedly, which is precisely when every waiter retrying on the same flat tick is
-  a thundering herd.
-  The retry gate is one millisecond of remaining budget rather than zero, for the reason the Redis waiter
-  carries the same constant: `Task.Delay` truncates to whole milliseconds, so a sub-millisecond sliver
-  sleeps for nothing and the loop comes straight back round — measured here at 828 rounds inside half a
-  millisecond, each one a connection and an `sp_getapplock` in the real provider. A sliver too small to
-  sleep on is the budget ending.
-  The deadline is checked before every retry, not only after one: a round issued once the budget was gone
-  could still WIN, and a lock handed to a caller who has already stopped waiting — and who may by then
-  have taken the other branch — is worse than giving up early. Early is a wasted wait; late is a lock
+  accounting, and that accounting is not wall clock: on a CPU-contended host it runs far ahead of it, so
+  the timer expires while most of the caller's budget is still unspent. SQL Server documents
+  `@LockTimeout` as a ceiling and nowhere promises it is also a floor.
+
+  **Used to happen:** `WaitForAcquireAsync(..., maxWait: 700ms, ...)` handed the whole 700 ms to
+  `@LockTimeout` and reported whatever came back, so a contended waiter could be told "not acquired"
+  after 195 ms — under a third of the budget it had sized deliberately. Anyone sizing a wait against an
+  SLO got a figure that meant nothing under exactly the load that makes waits matter. Measured on a
+  saturated CI runner: 42 of 180 waits on a 700 ms budget came back in under 500 ms, the shortest after
+  213 ms, while `sys.dm_exec_session_wait_stats` credited those same waits with 3.5 seconds of `LCK` wait
+  time. No other backend was affected — PostgreSQL's `statement_timeout` and the Redis, etcd, Consul and
+  ZooKeeper subscriptions are all timed on the client's clock.
+
+  **Happens now:** the provider keeps the budget on its own monotonic clock and re-issues `sp_getapplock`
+  with what is left when a round gives up early, so a 700 ms budget really does last 700 ms. When the
+  server's timer is honest — the normal case — that is still exactly one round trip, and
+  `Timeout.InfiniteTimeSpan` is still the single blocking call it always was rather than something that
+  could lose the place in the queue it already holds.
+
+  **The deadline is now checked before every retry, not only after one.** A round issued once the budget
+  was gone could still WIN, and a lock handed to a caller who has already stopped waiting — and who may by
+  then have taken the other branch — is worse than giving up early: early is a wasted wait, late is a lock
   nobody is holding on purpose. The first attempt stays unconditional, so a zero budget is still the
   single-shot try it always was.
+
+  **The retry delay is the caller's whole `LockWaitPolicy`,** `BackoffCeiling` and jitter included, and is
+  computed by the same helper every other retry loop in the library uses rather than by a second
+  implementation inside a backend package. This provider ignored `LockWaitPolicy` altogether before 3.0.0;
+  honouring only `RetryInterval` would have been the worse half-state, because this loop runs precisely
+  when a server is refusing early and repeatedly — which is precisely when every waiter retrying on the
+  same flat tick is a thundering herd.
+
+  Handing the budget to `@LockTimeout` is itself new in this release, so this too was introduced and
+  fixed inside the same development cycle and no published version of `OrionLock.SqlServer` carries it.
+  Before 3.0.0 the budget was spent by the core's poll loop, which timed it on the client all along.
+  What is new for an upgrader is the blocking wait; what is recorded here is that it is timed honestly.
+
+- **The SQL Server retry loop stops once the budget is too small to sleep on.** The loop introduced by the
+  entry above gave up only when the remaining budget reached zero, and `Task.Delay` truncates its delay to
+  whole milliseconds — so a sub-millisecond sliver slept for nothing and the loop came straight back round
+  with the budget still technically positive. **Used to happen:** a wait whose last round left a fraction
+  of a millisecond ended in a burst of retries, each one a fresh `SqlConnection` and an `sp_getapplock`
+  against the server; instrumented at **828** rounds inside half a millisecond. It is the same hazard as
+  the Redis waiter's above, and like both entries above it lived entirely inside this release's
+  development - it was introduced by the retry loop the previous entry describes and fixed before any of
+  it shipped. **Happens now:** a budget with less than a millisecond left is spent, because a millisecond
+  is the shortest wait the loop can take.
 
 - **A cancelled SQL Server waiter is told it was cancelled, not that the backend failed.** Cancelling
   a command blocked inside `sp_getapplock` tears the command down, and `Microsoft.Data.SqlClient`
