@@ -83,7 +83,7 @@ public sealed class DefaultConsulClientAdapter : IConsulClientAdapter, IConsulFe
     /// </remarks>
     public async Task<long?> KvModifyIndexAsync(string key, CancellationToken cancellationToken)
     {
-        var result = await client.KV.Get(ConsulKvPath.Encode(key, nameof(key)), cancellationToken)
+        var result = await client.KV.Get(ConsulKvPath.Encode(key), cancellationToken)
             .ConfigureAwait(false);
         // ModifyIndex is a ulong on the wire; Consul's Raft index will not reach the point where this
         // stops fitting in a long before the cluster has other problems.
