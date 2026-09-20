@@ -1,4 +1,3 @@
-﻿using Moongazing.OrionLock.Diagnostics;
 using Moongazing.OrionLock.Providers;
 
 namespace Moongazing.OrionLock.Internal;
@@ -10,76 +9,56 @@ namespace Moongazing.OrionLock.Internal;
 /// on renewal failure it flips <see cref="IsHeld"/> and trips <see cref="LostToken"/>. Disposing
 /// stops the watchdog and releases the hold in its <see cref="LockMode"/>.
 /// </summary>
+/// <remarks>
+/// The mirroring is now literal: both handles drive the same <see cref="LeaseWatchdog"/>, so the
+/// lease, renewal, release, diagnostics and observer semantics are the same code rather than the same
+/// intention written twice. All this type still owns is how to renew and release in its mode.
+/// </remarks>
 internal sealed class SharedExclusiveLockHandle : IDistributedLockHandle
 {
-    private readonly ISharedExclusiveLockProvider provider;
-    private readonly string ownerToken;
     private readonly LockMode mode;
-    private readonly TimeSpan leaseDuration;
-    private readonly TimeSpan renewalGrace;
-    private readonly CancellationTokenSource lostCts = new();
-    // Captured at construction: CancellationTokenSource.Token throws ObjectDisposedException once the
-    // source is disposed, so reading LostToken from a finally / logging path after `await using` used to
-    // throw. The token struct itself stays readable after its source is gone.
-    private readonly CancellationToken lostToken;
-    private readonly CancellationTokenSource? watchdogCts;
-    private readonly Task? watchdog;
-    // Armed only when there is no watchdog and the backend treats LeaseDuration as a wall-clock TTL.
-    private readonly Timer? expiryTimer;
-    private readonly Func<DateTime> nowUtc;
-    private DateTime lastSuccessfulRenewalUtc;
-    private int disposed;
-    private volatile bool isHeld = true;
-    // Single-decrement guard for the orionlock.leases.held_concurrent gauge: both DisposeAsync and
-    // the watchdog loss path call DecrementOnceIfHeld; Interlocked ensures exactly-once.
-    private int decremented;
-    private readonly long acquireTimestamp = System.Diagnostics.Stopwatch.GetTimestamp();
+    private readonly LeaseWatchdog lease;
 
     /// <summary>Creates a handle and, when <see cref="DistributedLockOptions.AutoRenew"/> is set, starts the watchdog.</summary>
     public SharedExclusiveLockHandle(
         ISharedExclusiveLockProvider provider, string key, string ownerToken, LockMode mode,
         DistributedLockOptions options)
-        : this(provider, key, ownerToken, mode, options, nowUtc: null)
+        : this(provider, key, ownerToken, mode, options, nowUtc: null, eventObserver: null)
+    {
+    }
+
+    /// <summary>
+    /// Overload that wires the optional <see cref="ILockEventObserver"/> so a reader-writer hold
+    /// fires <c>OnLeaseLost</c> / <c>OnReleased</c> exactly as an exclusive one does.
+    /// </summary>
+    public SharedExclusiveLockHandle(
+        ISharedExclusiveLockProvider provider, string key, string ownerToken, LockMode mode,
+        DistributedLockOptions options, ILockEventObserver? eventObserver)
+        : this(provider, key, ownerToken, mode, options, nowUtc: null, eventObserver)
     {
     }
 
     /// <summary>
     /// Test-only ctor exposing a clock hook so the fairness watchdog grace period can be driven
-    /// deterministically. Production code uses the public overload which binds the clock to
+    /// deterministically. Production code uses the public overloads which bind the clock to
     /// <see cref="DateTime.UtcNow"/>.
     /// </summary>
     internal SharedExclusiveLockHandle(
         ISharedExclusiveLockProvider provider, string key, string ownerToken, LockMode mode,
-        DistributedLockOptions options, Func<DateTime>? nowUtc)
+        DistributedLockOptions options, Func<DateTime>? nowUtc, ILockEventObserver? eventObserver = null)
     {
         ArgumentNullException.ThrowIfNull(provider);
         ArgumentNullException.ThrowIfNull(options);
-        this.provider = provider;
         Key = key;
-        this.ownerToken = ownerToken;
         this.mode = mode;
-        leaseDuration = options.LeaseDuration;
-        renewalGrace = options.RenewalFailureGracePeriod ?? options.LeaseDuration;
-        this.nowUtc = nowUtc ?? (() => DateTime.UtcNow);
-        lostToken = lostCts.Token;
-        lastSuccessfulRenewalUtc = this.nowUtc();
-
-        if (options.AutoRenew)
-        {
-            watchdogCts = new CancellationTokenSource();
-            watchdog = RenewLoopAsync(watchdogCts.Token);
-        }
-        else if (provider.LeaseDurationIsTtl)
-        {
-            // Without a watchdog nothing observes the lease running out, so IsHeld would stay true
-            // forever on a TTL backend that has long since expired the hold. Run the SAME surrender
-            // the watchdog runs on a confirmed loss (gauge, counter, LostToken), not a bare token
-            // cancel; session-scoped backends are excluded because the hold really does outlive
-            // LeaseDuration there.
-            expiryTimer = new Timer(
-                static state => ((SharedExclusiveLockHandle)state!).SurrenderOnExpiry(),
-                this, leaseDuration, Timeout.InfiniteTimeSpan);
-        }
+        lease = new LeaseWatchdog(
+            key,
+            (leaseDuration, ct) => provider.TryRenewAsync(key, ownerToken, mode, leaseDuration, ct),
+            () => provider.ReleaseAsync(key, ownerToken, mode, CancellationToken.None),
+            provider.LeaseDurationIsTtl,
+            options,
+            nowUtc,
+            eventObserver);
     }
 
     /// <inheritdoc />
@@ -89,144 +68,11 @@ internal sealed class SharedExclusiveLockHandle : IDistributedLockHandle
     public LockMode Mode => mode;
 
     /// <inheritdoc />
-    public bool IsHeld => isHeld && !lostToken.IsCancellationRequested;
+    public bool IsHeld => lease.IsHeld;
 
     /// <inheritdoc />
-    public CancellationToken LostToken => lostToken;
-
-    private async Task RenewLoopAsync(CancellationToken ct)
-    {
-        var interval = TimeSpan.FromTicks(Math.Max(leaseDuration.Ticks / 3, TimeSpan.FromMilliseconds(10).Ticks));
-        try
-        {
-            while (!ct.IsCancellationRequested)
-            {
-                await Task.Delay(interval, ct).ConfigureAwait(false);
-
-                bool renewed;
-                try
-                {
-                    renewed = await provider.TryRenewAsync(Key, ownerToken, mode, leaseDuration, ct).ConfigureAwait(false);
-                }
-                // Only OUR watchdog token cancelling is terminal (Dispose stopped the loop). An OCE
-                // raised for any other reason - a provider that surfaces an unrelated cancellation -
-                // must be handled as a transient renew failure, not silently stop renewals while
-                // IsHeld stays true and LostToken never trips.
-                catch (OperationCanceledException) when (ct.IsCancellationRequested)
-                {
-                    return;
-                }
-#pragma warning disable CA1031 // intentional: transient backend faults are recoverable
-                catch
-#pragma warning restore CA1031
-                {
-                    // Transient renewal failure. Same fairness-watchdog grace semantics as the
-                    // exclusive handle: surrender once the grace period since the last successful
-                    // renewal elapses so a stuck backend cannot perpetually deny new waiters. Gated on
-                    // a TTL backend - on a session-scoped one the hold is still provably ours however
-                    // long renew has been failing, so surrendering would create a second holder.
-                    if (provider.LeaseDurationIsTtl && nowUtc() - lastSuccessfulRenewalUtc > renewalGrace)
-                    {
-                        Surrender();
-                        return;
-                    }
-                    continue;
-                }
-
-                if (!renewed)
-                {
-                    Surrender();
-                    return;
-                }
-                lastSuccessfulRenewalUtc = nowUtc();
-            }
-        }
-        catch (OperationCanceledException)
-        {
-            // watchdog stopped by Dispose
-        }
-    }
-
-    private void Surrender()
-    {
-        isHeld = false;
-        OrionLockDiagnostics.RecordLeaseLost();
-        DecrementOnceIfHeld();
-        SafeCancelLost();
-    }
-
-    /// <summary>
-    /// The no-watchdog TTL deadline fired: the hold is gone the same way a backend-confirmed
-    /// non-renewal means it is gone, plus the expired-before-release signal that the dispose path can
-    /// no longer emit for this handle (Surrender clears isHeld, which that check requires).
-    /// </summary>
-    private void SurrenderOnExpiry()
-    {
-        if (!isHeld)
-        {
-            return;
-        }
-
-        OrionLockDiagnostics.RecordLeaseExpiredBeforeRelease();
-        Surrender();
-    }
-
-    private void SafeCancelLost()
-    {
-        try { lostCts.Cancel(); }
-        catch (ObjectDisposedException) { }
-    }
+    public CancellationToken LostToken => lease.LostToken;
 
     /// <inheritdoc />
-    public async ValueTask DisposeAsync()
-    {
-        if (Interlocked.Exchange(ref disposed, 1) != 0)
-        {
-            return;
-        }
-
-        if (isHeld
-            && provider.LeaseDurationIsTtl
-            && nowUtc() - lastSuccessfulRenewalUtc > leaseDuration)
-        {
-            OrionLockDiagnostics.RecordLeaseExpiredBeforeRelease();
-        }
-
-        isHeld = false;
-        DecrementOnceIfHeld();
-        // Stop the TTL deadline before it can fire against a handle we are already tearing down.
-        expiryTimer?.Dispose();
-
-        if (watchdogCts is not null)
-        {
-            await watchdogCts.CancelAsync().ConfigureAwait(false);
-            if (watchdog is not null)
-            {
-                try { await watchdog.ConfigureAwait(false); }
-                catch { /* watchdog faults are not actionable on dispose */ }
-            }
-            watchdogCts.Dispose();
-        }
-
-        try
-        {
-            await provider.ReleaseAsync(Key, ownerToken, mode, CancellationToken.None).ConfigureAwait(false);
-        }
-        catch
-        {
-            // best-effort release; the lease expires on its own if this fails
-        }
-
-        lostCts.Dispose();
-    }
-
-    private void DecrementOnceIfHeld()
-    {
-        if (Interlocked.Exchange(ref decremented, 1) == 0)
-        {
-            OrionLockDiagnostics.DecrementLeasesHeld();
-            var elapsed = System.Diagnostics.Stopwatch.GetElapsedTime(acquireTimestamp);
-            OrionLockDiagnostics.RecordHandleHoldingDuration(elapsed.TotalMilliseconds);
-        }
-    }
+    public ValueTask DisposeAsync() => lease.DisposeAsync();
 }

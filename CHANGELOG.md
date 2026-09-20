@@ -161,6 +161,24 @@ All notable changes to OrionLock are documented in this file. The format is base
   clock before taking the per-key lock, so a thread that waited stamped expiries against a stale instant.
   The clock is now read under the lock.
 
+- **A reader-writer hold now emits the signals the exclusive one always did.** The README promised the
+  reader-writer surface's lease, renewal, release and diagnostics semantics mirror the exclusive
+  `IDistributedLock`. They did not. A `Shared` or `Exclusive` hold taken through `ISharedExclusiveLock`
+  never emitted `orion.lock.lease.renewal_failures_consecutive`,
+  `orion.lock.lease.grace_period_exhausted`, `orion.lock.handle.renewals_per_hold` or
+  `orion.lock.acquire.attempt_count`, and — worst of the set — never invoked a registered
+  `ILockEventObserver` at all: `OnAcquired`, `OnAcquireTimedOut`, `OnLeaseLost` and `OnReleased` were
+  all silent for every reader-writer hold, so a consumer registering an observer for an audit trail got
+  a complete blank with nothing in the API to suggest it. Both handles now drive one internal
+  `LeaseWatchdog`, so the two paths emit the same instruments in the same order by construction rather
+  than by intention, and a new `SharedExclusiveLock(provider, eventObserver)` overload threads the
+  observer through. Nothing on the exclusive path changed, and no signal changed its ordering or
+  timing. If you alert on these instruments, expect reader-writer traffic to start appearing in them.
+  **Note:** the shipped backend packages still construct `SharedExclusiveLock` without an observer, so
+  `ISharedExclusiveLock` resolved from `UseRedis` / `UsePostgres` / `UseEntityFrameworkCore` /
+  `UseInMemory` now passes the DI-registered observer through as well, so a reader-writer hold reports
+  to it exactly as an exclusive one does.
+
 ### Changed
 
 - **CI runs with least privilege and pinned actions.** The workflow declares

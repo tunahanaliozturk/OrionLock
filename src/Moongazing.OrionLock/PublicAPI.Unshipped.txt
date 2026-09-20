@@ -1,1 +1,2 @@
 #nullable enable
+Moongazing.OrionLock.SharedExclusiveLock.SharedExclusiveLock(Moongazing.OrionLock.Providers.ISharedExclusiveLockProvider! provider, Moongazing.OrionLock.ILockEventObserver? eventObserver) -> void
