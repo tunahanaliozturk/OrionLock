@@ -136,7 +136,7 @@ jobs:
           set -e
           echo "$output"
           if [ $code -ne 0 ]; then
-            dup_markers=$(echo "$output" | grep -iE 'already exists|already been pushed' || true)
+            dup_markers=$(echo "$output" | grep -iE 'already exists|already been pushed|409 \(Conflict\)' || true)
             other_errors=$(echo "$output" | grep -iE 'error|fail' | grep -ivE 'already exists|already been pushed|conflict' || true)
             if [ -n "$dup_markers" ] && [ -z "$other_errors" ]; then
               echo "GitHub Packages rejected only already-published versions; the mirror is up to date."
