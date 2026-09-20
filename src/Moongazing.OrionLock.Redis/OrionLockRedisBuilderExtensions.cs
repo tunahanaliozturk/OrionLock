@@ -1,9 +1,10 @@
-using Microsoft.Extensions.DependencyInjection;
+﻿using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.DependencyInjection.Extensions;
 using Moongazing.OrionLock.DependencyInjection;
 using Moongazing.OrionLock.Fairness;
 using Moongazing.OrionLock.Providers;
 using StackExchange.Redis;
+using Moongazing.OrionLock.Diagnostics;
 
 namespace Moongazing.OrionLock.Redis;
 
@@ -86,7 +87,11 @@ public static class OrionLockRedisBuilderExtensions
         builder.Services.TryAddSingleton<ISharedExclusiveLockProvider>(
             sp => new RedisSharedExclusiveLockProvider(sp.GetRequiredService<IConnectionMultiplexer>(), options));
         builder.Services.TryAddSingleton<ISharedExclusiveLock>(
-            sp => new SharedExclusiveLock(sp.GetRequiredService<ISharedExclusiveLockProvider>()));
+            sp => new SharedExclusiveLock(
+                sp.GetRequiredService<ISharedExclusiveLockProvider>(),
+                // Without this the reader-writer lock emits its metrics but reaches no registered
+                // observer, which is the gap that let the two surfaces drift apart in the first place.
+                sp.GetService<ILockEventObserver>()));
 
         return builder;
     }

@@ -176,7 +176,8 @@ All notable changes to OrionLock are documented in this file. The format is base
   timing. If you alert on these instruments, expect reader-writer traffic to start appearing in them.
   **Note:** the shipped backend packages still construct `SharedExclusiveLock` without an observer, so
   `ISharedExclusiveLock` resolved from `UseRedis` / `UsePostgres` / `UseEntityFrameworkCore` /
-  `UseInMemory` does not yet reach a DI-registered observer; the metrics above fire regardless.
+  `UseInMemory` now passes the DI-registered observer through as well, so a reader-writer hold reports
+  to it exactly as an exclusive one does.
 
 ### Changed
 
