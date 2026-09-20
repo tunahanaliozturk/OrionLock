@@ -1,3 +1,1 @@
 #nullable enable
-Moongazing.OrionLock.Testing.InMemoryLockProvider.TryAcquireFencedAsync(string! key, string! ownerToken, System.TimeSpan leaseDuration, System.Threading.CancellationToken cancellationToken) -> System.Threading.Tasks.Task<Moongazing.OrionLock.Providers.LockAcquisition>!
-Moongazing.OrionLock.Testing.InMemoryLockProvider.WaitForAcquireAsync(string! key, string! ownerToken, System.TimeSpan leaseDuration, System.TimeSpan maxWait, Moongazing.OrionLock.Providers.LockWaitPolicy waitPolicy, System.Threading.CancellationToken cancellationToken) -> System.Threading.Tasks.Task<Moongazing.OrionLock.Providers.LockAcquisition>!

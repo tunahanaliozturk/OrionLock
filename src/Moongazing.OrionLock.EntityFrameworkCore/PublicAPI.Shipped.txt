@@ -3,6 +3,7 @@ Moongazing.OrionLock.EntityFrameworkCore.EfCoreLockProvider
 Moongazing.OrionLock.EntityFrameworkCore.EfCoreLockProvider.EfCoreLockProvider(Microsoft.Extensions.DependencyInjection.IServiceScopeFactory! scopeFactory) -> void
 Moongazing.OrionLock.EntityFrameworkCore.EfCoreLockProvider.ReleaseAsync(string! key, string! ownerToken, System.Threading.CancellationToken cancellationToken) -> System.Threading.Tasks.Task!
 Moongazing.OrionLock.EntityFrameworkCore.EfCoreLockProvider.TryAcquireAsync(string! key, string! ownerToken, System.TimeSpan leaseDuration, System.Threading.CancellationToken cancellationToken) -> System.Threading.Tasks.Task<bool>!
+Moongazing.OrionLock.EntityFrameworkCore.EfCoreLockProvider.TryAcquireFencedAsync(string! key, string! ownerToken, System.TimeSpan leaseDuration, System.Threading.CancellationToken cancellationToken) -> System.Threading.Tasks.Task<Moongazing.OrionLock.Providers.LockAcquisition>!
 Moongazing.OrionLock.EntityFrameworkCore.EfCoreLockProvider.TryRenewAsync(string! key, string! ownerToken, System.TimeSpan leaseDuration, System.Threading.CancellationToken cancellationToken) -> System.Threading.Tasks.Task<bool>!
 Moongazing.OrionLock.EntityFrameworkCore.EfCoreSharedExclusiveLockOptions
 Moongazing.OrionLock.EntityFrameworkCore.EfCoreSharedExclusiveLockOptions.EfCoreSharedExclusiveLockOptions() -> void
@@ -22,6 +23,8 @@ Moongazing.OrionLock.EntityFrameworkCore.OrionLockEfCoreBuilderExtensions
 Moongazing.OrionLock.EntityFrameworkCore.OrionLockRow
 Moongazing.OrionLock.EntityFrameworkCore.OrionLockRow.ExpiresOnUtc.get -> System.DateTime
 Moongazing.OrionLock.EntityFrameworkCore.OrionLockRow.ExpiresOnUtc.set -> void
+Moongazing.OrionLock.EntityFrameworkCore.OrionLockRow.FencingToken.get -> long
+Moongazing.OrionLock.EntityFrameworkCore.OrionLockRow.FencingToken.set -> void
 Moongazing.OrionLock.EntityFrameworkCore.OrionLockRow.Key.get -> string!
 Moongazing.OrionLock.EntityFrameworkCore.OrionLockRow.Key.set -> void
 Moongazing.OrionLock.EntityFrameworkCore.OrionLockRow.OrionLockRow() -> void

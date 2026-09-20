@@ -1,5 +1,6 @@
 #nullable enable
 Moongazing.OrionLock.Redis.OrionLockRedisBuilderExtensions
+Moongazing.OrionLock.Redis.RedisFencingKeys
 Moongazing.OrionLock.Redis.RedisFifoWaiterCoordinator
 Moongazing.OrionLock.Redis.RedisFifoWaiterCoordinator.EnterAsync(string! key, System.Threading.CancellationToken cancellationToken) -> System.Threading.Tasks.Task<Moongazing.OrionLock.Fairness.IFifoWaiterTicket!>!
 Moongazing.OrionLock.Redis.RedisFifoWaiterCoordinator.LeaveAsync(Moongazing.OrionLock.Fairness.IFifoWaiterTicket! ticket, System.Threading.CancellationToken cancellationToken) -> System.Threading.Tasks.Task!
@@ -17,14 +18,23 @@ Moongazing.OrionLock.Redis.RedisFifoWaiterOptions.WaiterTtl.set -> void
 Moongazing.OrionLock.Redis.RedisLockOptions
 Moongazing.OrionLock.Redis.RedisLockOptions.Database.get -> int
 Moongazing.OrionLock.Redis.RedisLockOptions.Database.set -> void
+Moongazing.OrionLock.Redis.RedisLockOptions.FencingTokens.get -> bool
+Moongazing.OrionLock.Redis.RedisLockOptions.FencingTokens.set -> void
 Moongazing.OrionLock.Redis.RedisLockOptions.KeyPrefix.get -> string!
 Moongazing.OrionLock.Redis.RedisLockOptions.KeyPrefix.set -> void
 Moongazing.OrionLock.Redis.RedisLockOptions.RedisLockOptions() -> void
+Moongazing.OrionLock.Redis.RedisLockOptions.ReleaseChannelSuffix.get -> string!
+Moongazing.OrionLock.Redis.RedisLockOptions.ReleaseChannelSuffix.set -> void
+Moongazing.OrionLock.Redis.RedisLockOptions.UseReleaseNotifications.get -> bool
+Moongazing.OrionLock.Redis.RedisLockOptions.UseReleaseNotifications.set -> void
 Moongazing.OrionLock.Redis.RedisLockProvider
+Moongazing.OrionLock.Redis.RedisLockProvider.EffectiveLeaseDuration(System.TimeSpan requested) -> System.TimeSpan
 Moongazing.OrionLock.Redis.RedisLockProvider.RedisLockProvider(StackExchange.Redis.IConnectionMultiplexer! multiplexer, Moongazing.OrionLock.Redis.RedisLockOptions! options) -> void
 Moongazing.OrionLock.Redis.RedisLockProvider.ReleaseAsync(string! key, string! ownerToken, System.Threading.CancellationToken cancellationToken) -> System.Threading.Tasks.Task!
 Moongazing.OrionLock.Redis.RedisLockProvider.TryAcquireAsync(string! key, string! ownerToken, System.TimeSpan leaseDuration, System.Threading.CancellationToken cancellationToken) -> System.Threading.Tasks.Task<bool>!
+Moongazing.OrionLock.Redis.RedisLockProvider.TryAcquireFencedAsync(string! key, string! ownerToken, System.TimeSpan leaseDuration, System.Threading.CancellationToken cancellationToken) -> System.Threading.Tasks.Task<Moongazing.OrionLock.Providers.LockAcquisition>!
 Moongazing.OrionLock.Redis.RedisLockProvider.TryRenewAsync(string! key, string! ownerToken, System.TimeSpan leaseDuration, System.Threading.CancellationToken cancellationToken) -> System.Threading.Tasks.Task<bool>!
+Moongazing.OrionLock.Redis.RedisLockProvider.WaitForAcquireAsync(string! key, string! ownerToken, System.TimeSpan leaseDuration, System.TimeSpan maxWait, Moongazing.OrionLock.Providers.LockWaitPolicy waitPolicy, System.Threading.CancellationToken cancellationToken) -> System.Threading.Tasks.Task<Moongazing.OrionLock.Providers.LockAcquisition>!
 Moongazing.OrionLock.Redis.RedisSharedExclusiveLockOptions
 Moongazing.OrionLock.Redis.RedisSharedExclusiveLockOptions.Database.get -> int
 Moongazing.OrionLock.Redis.RedisSharedExclusiveLockOptions.Database.set -> void
@@ -32,11 +42,15 @@ Moongazing.OrionLock.Redis.RedisSharedExclusiveLockOptions.KeyPrefix.get -> stri
 Moongazing.OrionLock.Redis.RedisSharedExclusiveLockOptions.KeyPrefix.set -> void
 Moongazing.OrionLock.Redis.RedisSharedExclusiveLockOptions.RedisSharedExclusiveLockOptions() -> void
 Moongazing.OrionLock.Redis.RedisSharedExclusiveLockProvider
+Moongazing.OrionLock.Redis.RedisSharedExclusiveLockProvider.EffectiveLeaseDuration(System.TimeSpan requested) -> System.TimeSpan
 Moongazing.OrionLock.Redis.RedisSharedExclusiveLockProvider.RedisSharedExclusiveLockProvider(StackExchange.Redis.IConnectionMultiplexer! multiplexer, Moongazing.OrionLock.Redis.RedisSharedExclusiveLockOptions! options) -> void
 Moongazing.OrionLock.Redis.RedisSharedExclusiveLockProvider.ReleaseAsync(string! key, string! ownerToken, Moongazing.OrionLock.LockMode mode, System.Threading.CancellationToken cancellationToken) -> System.Threading.Tasks.Task!
 Moongazing.OrionLock.Redis.RedisSharedExclusiveLockProvider.TryAcquireAsync(string! key, string! ownerToken, Moongazing.OrionLock.LockMode mode, System.TimeSpan leaseDuration, System.Threading.CancellationToken cancellationToken) -> System.Threading.Tasks.Task<bool>!
 Moongazing.OrionLock.Redis.RedisSharedExclusiveLockProvider.TryRenewAsync(string! key, string! ownerToken, Moongazing.OrionLock.LockMode mode, System.TimeSpan leaseDuration, System.Threading.CancellationToken cancellationToken) -> System.Threading.Tasks.Task<bool>!
+const Moongazing.OrionLock.Redis.RedisFencingKeys.ReservedPrefix = "orionlock-fence:" -> string!
 static Moongazing.OrionLock.Redis.OrionLockRedisBuilderExtensions.UseRedis(this Moongazing.OrionLock.DependencyInjection.OrionLockBuilder! builder, System.Action<Moongazing.OrionLock.Redis.RedisLockOptions!>? configure = null) -> Moongazing.OrionLock.DependencyInjection.OrionLockBuilder!
 static Moongazing.OrionLock.Redis.OrionLockRedisBuilderExtensions.UseRedis(this Moongazing.OrionLock.DependencyInjection.OrionLockBuilder! builder, string! connectionString, System.Action<Moongazing.OrionLock.Redis.RedisLockOptions!>? configure = null) -> Moongazing.OrionLock.DependencyInjection.OrionLockBuilder!
 static Moongazing.OrionLock.Redis.OrionLockRedisBuilderExtensions.UseRedisFifoWaiterCoordinator(this Moongazing.OrionLock.DependencyInjection.OrionLockBuilder! builder, System.Action<Moongazing.OrionLock.Redis.RedisFifoWaiterOptions!>? configure = null) -> Moongazing.OrionLock.DependencyInjection.OrionLockBuilder!
 static Moongazing.OrionLock.Redis.OrionLockRedisBuilderExtensions.UseRedisSharedExclusive(this Moongazing.OrionLock.DependencyInjection.OrionLockBuilder! builder, System.Action<Moongazing.OrionLock.Redis.RedisSharedExclusiveLockOptions!>? configure = null) -> Moongazing.OrionLock.DependencyInjection.OrionLockBuilder!
+static Moongazing.OrionLock.Redis.RedisFencingKeys.CounterKey(string! physicalLockKey) -> string!
+static Moongazing.OrionLock.Redis.RedisFencingKeys.ThrowIfReserved(string! physicalLockKey, string! paramName) -> void
