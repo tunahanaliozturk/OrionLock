@@ -1,4 +1,4 @@
-using Moongazing.OrionLock.Etcd;
+﻿using Moongazing.OrionLock.Etcd;
 using Moq;
 
 namespace Moongazing.OrionLock.Etcd.Tests;
@@ -61,17 +61,22 @@ public sealed class EtcdLockProviderTests
     }
 
     [Fact]
-    public async Task TryAcquireAsync_clamps_lease_to_MinLeaseTtlSeconds()
+    public async Task TryAcquireAsync_roundsTheLeaseUpToWholeSeconds_andAdvertisesItsFloor()
     {
+        // The provider used to take max(ceil(requested), MinLeaseTtlSeconds) SILENTLY, so a caller who
+        // asked for 3 s got 15. The floor is now advertised as MinimumLeaseDuration and refused by the
+        // core; what remains is etcd's whole-second rounding, which the handle reports.
         var (adapter, sut) = NewProvider(new EtcdLockOptions { MinLeaseTtlSeconds = 15 });
         adapter.Setup(a => a.LeaseGrantAsync(It.IsAny<int>(), It.IsAny<CancellationToken>()))
             .ReturnsAsync(1L);
         adapter.Setup(a => a.KvPutIfAbsentAsync(It.IsAny<string>(), It.IsAny<string>(), It.IsAny<long>(), It.IsAny<CancellationToken>()))
             .ReturnsAsync(true);
 
-        await sut.TryAcquireAsync("k", "owner-1", TimeSpan.FromSeconds(3), CancellationToken.None);
+        await sut.TryAcquireAsync("k", "owner-1", TimeSpan.FromSeconds(20.5), CancellationToken.None);
 
-        adapter.Verify(a => a.LeaseGrantAsync(15, It.IsAny<CancellationToken>()), Times.Once);
+        adapter.Verify(a => a.LeaseGrantAsync(21, It.IsAny<CancellationToken>()), Times.Once);
+        Assert.Equal(TimeSpan.FromSeconds(15), sut.MinimumLeaseDuration);
+        Assert.Equal(TimeSpan.FromSeconds(21), sut.EffectiveLeaseDuration(TimeSpan.FromSeconds(20.5)));
     }
 
     [Fact]

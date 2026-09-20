@@ -127,6 +127,27 @@ All notable changes to OrionLock are documented in this file. The format is base
   opt-in to sharing. Note that an app pointing OrionLock at a *different* Redis than its cache now opens
   a second multiplexer, as it asked to.
 
+- **BREAKING: a lease the backend cannot honour is refused instead of silently raised, and the lease it
+  WILL honour is on the handle.** `LeaseDuration` meant three different things and said nothing about
+  which: Redis and EF Core treated it as a wall-clock TTL, PostgreSQL and SQL Server ignored it (the hold
+  is session-scoped), Consul silently raised it to 10 s, etcd silently raised it to 5 s and rounded up to
+  whole seconds, and ZooKeeper ignored it entirely. **Used to happen:** a caller who set 2 s and swapped
+  Redis for Consul got a five-times-longer takeover window after a crash, with nothing said — while the
+  README promised that "application code never changes when you switch; only the registration does".
+  **Happens now:** a backend advertises `IDistributedLockProvider.MinimumLeaseDuration`, and a
+  `LeaseDuration` below it throws `ArgumentOutOfRangeException` on the caller's own thread at acquire
+  time. Consul's floor is `ConsulLockOptions.MinSessionTtl` (10 s), etcd's is
+  `EtcdLockOptions.MinLeaseTtlSeconds` (5 s); every other backend has none. The new
+  `IDistributedLockHandle.EffectiveLeaseDuration` reports what the backend actually honours, so a caller
+  can assert on it: the requested lease on a TTL backend, that lease rounded up to a whole second on
+  etcd, and `Timeout.InfiniteTimeSpan` on the session-scoped backends (PostgreSQL, SQL Server,
+  ZooKeeper), where no wall clock bounds the hold at all. The README now says this instead of claiming
+  lease portability it never had. **What to do:** if an acquire starts throwing, either raise
+  `LeaseDuration` to the backend's floor or pick a backend with a finer lease — the old code was giving
+  you the floor anyway, just without telling you. Custom `IDistributedLockProvider` implementations need
+  no change (both new members have defaults); custom `IDistributedLockHandle` implementations must add
+  `EffectiveLeaseDuration`, which has no sensible default to infer.
+
 ### Fixed
 
 - **`DistributedLockOptions` is validated at every acquire entry point.** It never was, so a

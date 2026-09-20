@@ -1,4 +1,4 @@
-# OrionLock.SqlServer
+﻿# OrionLock.SqlServer
 
 SQL Server backend for [OrionLock](https://www.nuget.org/packages/OrionLock) using the
 native `sp_getapplock` application lock primitive. Session-scope lifetime: the lock is
@@ -21,5 +21,13 @@ services.AddOrionLock()
   default (enabled). The provider holds each session open for the lifetime of
   the lock and only returns it to the pool *after* calling
   `sp_releaseapplock`, so pool reset is harmless.
+
+## Lease durations
+
+`sp_getapplock` with `@LockOwner = 'Session'` is session-scoped: the hold lives until release or session
+end, and no wall clock bounds it. `LeaseDuration` therefore sets the renewal cadence and the watchdog's
+grace period but does not expire anything, so `handle.EffectiveLeaseDuration` reports
+`Timeout.InfiniteTimeSpan` rather than the value you asked for. That is also why a crashed process
+releases its locks immediately, without waiting out a TTL.
 
 Requires the `OrionLock` package. See https://github.com/tunahanaliozturk/OrionLock.

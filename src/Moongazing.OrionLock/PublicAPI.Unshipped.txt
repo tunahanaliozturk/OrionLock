@@ -36,3 +36,6 @@ Moongazing.OrionLock.LockKey
 const Moongazing.OrionLock.LockKey.MaxLength = 200 -> int
 static Moongazing.OrionLock.LockKey.Validate(string? key, string! paramName = "key") -> void
 Moongazing.OrionLock.DependencyInjection.OrionLockBuilder.UseBackend(string! backendName, System.Func<System.IServiceProvider!, Moongazing.OrionLock.Providers.IDistributedLockProvider!>! factory) -> Moongazing.OrionLock.DependencyInjection.OrionLockBuilder!
+Moongazing.OrionLock.IDistributedLockHandle.EffectiveLeaseDuration.get -> System.TimeSpan
+Moongazing.OrionLock.Providers.IDistributedLockProvider.MinimumLeaseDuration.get -> System.TimeSpan
+Moongazing.OrionLock.Providers.IDistributedLockProvider.EffectiveLeaseDuration(System.TimeSpan requested) -> System.TimeSpan

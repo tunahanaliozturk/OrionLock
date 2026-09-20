@@ -1,4 +1,4 @@
-# OrionLock.Consul
+﻿# OrionLock.Consul
 
 HashiCorp Consul backend for [OrionLock](https://www.nuget.org/packages/OrionLock). Each
 `(lockKey, ownerToken)` pair gets a Consul session whose TTL is the OrionLock lease duration; acquire is a
@@ -24,7 +24,7 @@ and *the old holder giving up the lock*. Those two are:
 
 | Event | When it happens |
 | --- | --- |
-| Consul invalidates the session | one session TTL — `max(LeaseDuration, MinSessionTtl)` — after the last successful renew |
+| Consul invalidates the session | one session TTL — the `LeaseDuration` you asked for — after the last successful renew |
 | The holder surrenders the lock | one `RenewalFailureGracePeriod` (default: `LeaseDuration`) after the last successful renew |
 
 With the shipped defaults (30 s lease, 10 s `MinSessionTtl`, grace period defaulted to the lease) both
@@ -33,8 +33,7 @@ does that with room to spare.
 
 So: **`LockDelay >= RenewalFailureGracePeriod − session TTL + jitter`.** If you raise
 `RenewalFailureGracePeriod` above the session TTL, raise `LockDelay` by at least the same amount, or the
-guarantee no longer holds. Likewise if you lower `LeaseDuration` far enough that the session TTL floors
-at `MinSessionTtl` (10 s) while the grace period does not.
+guarantee no longer holds.
 
 **It does not slow down a normal release.** `ReleaseAsync` releases the KV entry *before* destroying the
 session, so the session holds no lock when it is invalidated and Consul never applies the delay. The cost
@@ -59,6 +58,14 @@ whose token is quietly missing.
 on the KV entry and dies with it: a `delete` session behaviour removes the key on expiry and the next
 acquisition starts counting from 1 again, reissuing a token an earlier holder already used — under exactly
 the crash-and-expire conditions fencing exists for.
+## Lease durations
+
+Consul refuses a session TTL below 10 seconds, so this backend cannot honour a shorter lease. A
+`LeaseDuration` below `ConsulLockOptions.MinSessionTtl` (default 10 s) is now **refused** with
+`ArgumentOutOfRangeException` at acquire time. It used to be raised to the floor silently, so a caller
+who set 2 s and swapped Redis for Consul got a five-times-longer takeover window after a crash with no
+warning. A lease at or above the floor is honoured exactly and reported on
+`handle.EffectiveLeaseDuration`.
 
 ## Lock keys are URI path data
 

@@ -1,4 +1,4 @@
-namespace Moongazing.OrionLock.Etcd;
+﻿namespace Moongazing.OrionLock.Etcd;
 
 using System.Collections.Concurrent;
 using Moongazing.OrionLock.Providers;
@@ -37,13 +37,26 @@ public sealed class EtcdLockProvider : IDistributedLockProvider
         this.options.ValidateAndNormalise();
     }
 
+    /// <inheritdoc />
+    /// <remarks>
+    /// etcd enforces a whole-second TTL with a documented floor, so this provider cannot honour a lease
+    /// below <see cref="EtcdLockOptions.MinLeaseTtlSeconds"/>. It used to raise one silently.
+    /// </remarks>
+    public TimeSpan MinimumLeaseDuration => TimeSpan.FromSeconds(options.MinLeaseTtlSeconds);
+
+    /// <inheritdoc />
+    /// <remarks>
+    /// etcd TTLs are whole seconds, so a 2.5 s lease really is a 3 s one. Rounding up rather than down
+    /// keeps the hold at least as long as asked for; reporting it here means the caller can see it.
+    /// </remarks>
+    public TimeSpan EffectiveLeaseDuration(TimeSpan requested)
+        => TimeSpan.FromSeconds(LeaseTtlSeconds(requested));
+
     private string FullKey(string lockKey) => options.KeyPrefix + lockKey;
 
-    private int LeaseTtlSeconds(TimeSpan requestedLease)
-    {
-        var requested = (int)Math.Ceiling(requestedLease.TotalSeconds);
-        return requested > options.MinLeaseTtlSeconds ? requested : options.MinLeaseTtlSeconds;
-    }
+    // The core refuses anything below MinimumLeaseDuration, so this only rounds.
+    private static int LeaseTtlSeconds(TimeSpan requestedLease)
+        => (int)Math.Ceiling(requestedLease.TotalSeconds);
 
     /// <inheritdoc />
     public async Task<bool> TryAcquireAsync(

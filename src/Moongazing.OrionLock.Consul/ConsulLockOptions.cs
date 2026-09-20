@@ -1,4 +1,4 @@
-namespace Moongazing.OrionLock.Consul;
+﻿namespace Moongazing.OrionLock.Consul;
 
 /// <summary>
 /// Configuration for the Consul-backed <see cref="ConsulLockProvider"/>.
@@ -21,12 +21,17 @@ public sealed class ConsulLockOptions
     public string SessionBehavior { get; set; } = "release";
 
     /// <summary>
-    /// Consul session TTL refresh window above the OrionLock lease duration. Consul rejects
-    /// session TTLs shorter than 10 seconds, so the provider takes <c>max(LeaseDuration,
-    /// MinSessionTtl)</c> as the actual session TTL and renews on
-    /// <c>IDistributedLockProvider.TryRenewAsync</c>. Default 10 seconds, the Consul-enforced
-    /// floor.
+    /// The shortest lease this backend can honour. Consul rejects session TTLs shorter than 10
+    /// seconds, so the provider advertises this as its
+    /// <c>IDistributedLockProvider.MinimumLeaseDuration</c> and the core refuses a shorter
+    /// <c>LeaseDuration</c> with <see cref="ArgumentOutOfRangeException"/> at acquire time. A lease at
+    /// or above it becomes the session TTL verbatim and is renewed on
+    /// <c>IDistributedLockProvider.TryRenewAsync</c>. Default 10 seconds, the Consul-enforced floor.
     /// </summary>
+    /// <remarks>
+    /// The provider used to take <c>max(LeaseDuration, MinSessionTtl)</c> silently, so a caller who
+    /// asked for 2 seconds got 10 - a five-times-longer takeover window after a crash - with no warning.
+    /// </remarks>
     public TimeSpan MinSessionTtl { get; set; } = TimeSpan.FromSeconds(10);
 
     /// <summary>
@@ -44,8 +49,8 @@ public sealed class ConsulLockOptions
     /// <para>
     /// <b>It is only long enough if it outlasts that window.</b> With OrionLock's defaults the holder
     /// surrenders when <c>RenewalFailureGracePeriod</c> (default = <c>LeaseDuration</c>, 30s) elapses
-    /// without a successful renewal, and Consul invalidates the session when its TTL
-    /// (<c>max(LeaseDuration, MinSessionTtl)</c>, also 30s) elapses - the two coincide, so the delay only
+    /// without a successful renewal, and Consul invalidates the session when its TTL (the requested
+    /// <c>LeaseDuration</c>, also 30s) elapses - the two coincide, so the delay only
     /// has to cover scheduling and clock jitter, which 5 seconds does comfortably. Raise
     /// <c>RenewalFailureGracePeriod</c> above the session TTL and you MUST raise this by the same amount,
     /// or the guarantee is gone.

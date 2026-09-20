@@ -1,4 +1,4 @@
-using System.Diagnostics;
+﻿using System.Diagnostics;
 using Moongazing.OrionLock.Diagnostics;
 using Moongazing.OrionLock.Providers;
 
@@ -38,6 +38,12 @@ internal sealed class MeasuringLockProvider : IDistributedLockProvider
     /// directly.
     /// </summary>
     public bool LeaseDurationIsTtl => inner.LeaseDurationIsTtl;
+
+    /// <summary>Forwards the inner provider's lease floor, for the same reason.</summary>
+    public TimeSpan MinimumLeaseDuration => inner.MinimumLeaseDuration;
+
+    /// <summary>Forwards the inner provider's effective lease, for the same reason.</summary>
+    public TimeSpan EffectiveLeaseDuration(TimeSpan requested) => inner.EffectiveLeaseDuration(requested);
 
     public async Task<bool> TryAcquireAsync(string key, string ownerToken, TimeSpan leaseDuration, CancellationToken cancellationToken)
         => (await TryAcquireFencedAsync(key, ownerToken, leaseDuration, cancellationToken).ConfigureAwait(false)).Acquired;

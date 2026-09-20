@@ -1,4 +1,4 @@
-namespace Moongazing.OrionLock;
+﻿namespace Moongazing.OrionLock;
 
 /// <summary>
 /// A held distributed lock. Dispose to release. While alive, a background watchdog renews the
@@ -38,4 +38,19 @@ public interface IDistributedLockHandle : IAsyncDisposable
     /// </para>
     /// </remarks>
     long? FencingToken => null;
+
+    /// <summary>
+    /// The lease the backend is actually honouring for this hold, which is not always the
+    /// <see cref="DistributedLockOptions.LeaseDuration"/> that was asked for.
+    /// </summary>
+    /// <remarks>
+    /// <see cref="Timeout.InfiniteTimeSpan"/> means the hold is not bounded by a wall clock at all: it
+    /// lives for the backend session (PostgreSQL advisory locks, SQL Server <c>sp_getapplock</c>,
+    /// ZooKeeper ephemeral znodes), so it survives until release or session loss however long that is.
+    /// Otherwise it is the wall-clock TTL after which the backend reclaims the key if renewal stops -
+    /// on etcd, rounded up to a whole second. This is the value that decides how long another process
+    /// waits to take over after this one crashes, so it is exposed rather than left to be inferred from
+    /// the backend's documentation.
+    /// </remarks>
+    TimeSpan EffectiveLeaseDuration { get; }
 }

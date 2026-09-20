@@ -55,8 +55,12 @@ public sealed class ConsulLockProviderTests
     }
 
     [Fact]
-    public async Task TryAcquireAsync_uses_MinSessionTtl_when_lease_below_floor()
+    public async Task TryAcquireAsync_usesTheRequestedLeaseAsTheSessionTtl_withoutRaisingIt()
     {
+        // The provider used to take max(requested, MinSessionTtl) SILENTLY, so a caller who asked for
+        // 5 s got 15 and a three-times-longer takeover window after a crash without being told. The
+        // floor is now advertised as MinimumLeaseDuration and the core refuses anything below it, so
+        // whatever reaches here is honoured as asked.
         var (adapter, sut) = NewProvider(new ConsulLockOptions { MinSessionTtl = TimeSpan.FromSeconds(15) });
         adapter.Setup(a => a.CreateSessionAsync(
                 It.IsAny<TimeSpan>(), It.IsAny<string>(), It.IsAny<TimeSpan>(), It.IsAny<CancellationToken>()))
@@ -65,9 +69,10 @@ public sealed class ConsulLockProviderTests
                 It.IsAny<string>(), It.IsAny<string>(), It.IsAny<string>(), It.IsAny<CancellationToken>()))
             .ReturnsAsync(true);
 
-        await sut.TryAcquireAsync("k", "owner-1", TimeSpan.FromSeconds(5), CancellationToken.None);
+        await sut.TryAcquireAsync("k", "owner-1", TimeSpan.FromSeconds(20), CancellationToken.None);
 
-        adapter.Verify(a => a.CreateSessionAsync(TimeSpan.FromSeconds(15), "release", DefaultLockDelay, It.IsAny<CancellationToken>()), Times.Once);
+        adapter.Verify(a => a.CreateSessionAsync(TimeSpan.FromSeconds(20), "release", DefaultLockDelay, It.IsAny<CancellationToken>()), Times.Once);
+        Assert.Equal(TimeSpan.FromSeconds(15), sut.MinimumLeaseDuration);
     }
 
     [Fact]

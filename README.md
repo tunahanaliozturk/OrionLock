@@ -258,7 +258,24 @@ Every distributed reader-writer provider keeps a writer marker, a per-reader rec
 
 ## Choosing a backend
 
-All backends implement the same `IDistributedLock`, so application code never changes when you switch; only the registration does. Pick the in-memory backend for tests, then a distributed backend for production.
+All backends implement the same `IDistributedLock`, so application code compiles unchanged when you switch; only the registration does. Pick the in-memory backend for tests, then a distributed backend for production.
+
+**`LeaseDuration` is where the backends genuinely differ, so it is not portable in the way the rest of the API is.** It decides how long another process waits to take over after this one crashes, and each backend can honour a different range of it. Rather than raising a lease it cannot honour behind your back, a backend now advertises a floor and the core throws `ArgumentOutOfRangeException` at acquire time; what the backend *will* honour is on the handle as `EffectiveLeaseDuration`.
+
+| Backend | Shortest lease it can honour | `handle.EffectiveLeaseDuration` |
+| --- | --- | --- |
+| Redis, EF Core, in-memory | 1 ms (Redis rounds up to whole milliseconds) | the lease you asked for |
+| Consul | `ConsulLockOptions.MinSessionTtl`, default **10 s** (Consul's own floor) | the lease you asked for |
+| etcd | `EtcdLockOptions.MinLeaseTtlSeconds`, default **5 s** | rounded **up** to a whole second |
+| PostgreSQL, SQL Server, ZooKeeper | any — the hold is session-scoped, not leased | `Timeout.InfiniteTimeSpan`: no wall clock bounds the hold; it lives until release or session loss |
+
+```csharp
+await using var handle = await locker.AcquireAsync(
+    "order:42", new DistributedLockOptions { LeaseDuration = TimeSpan.FromSeconds(2) });
+
+// Assert on what you actually got, rather than on what you asked for.
+Assert.Equal(TimeSpan.FromSeconds(2), handle.EffectiveLeaseDuration);
+```
 
 ```csharp
 using Microsoft.Extensions.DependencyInjection;

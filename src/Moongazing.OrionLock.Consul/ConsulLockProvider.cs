@@ -1,4 +1,4 @@
-namespace Moongazing.OrionLock.Consul;
+﻿namespace Moongazing.OrionLock.Consul;
 
 using System.Collections.Concurrent;
 using Moongazing.OrionLock.Providers;
@@ -37,10 +37,15 @@ public sealed class ConsulLockProvider : IDistributedLockProvider
         this.options = options ?? new ConsulLockOptions();
     }
 
-    private string FullKey(string lockKey) => options.KeyPrefix + lockKey;
+    /// <inheritdoc />
+    /// <remarks>
+    /// Consul refuses a session TTL below 10 seconds, so this provider cannot honour a shorter lease.
+    /// It used to raise one silently, which meant a caller who asked for 2 s and swapped Redis for
+    /// Consul got a five-times-longer takeover window after a crash without being told.
+    /// </remarks>
+    public TimeSpan MinimumLeaseDuration => options.MinSessionTtl;
 
-    private TimeSpan SessionTtl(TimeSpan requestedLease)
-        => requestedLease > options.MinSessionTtl ? requestedLease : options.MinSessionTtl;
+    private string FullKey(string lockKey) => options.KeyPrefix + lockKey;
 
     /// <inheritdoc />
     public async Task<bool> TryAcquireAsync(
@@ -60,8 +65,9 @@ public sealed class ConsulLockProvider : IDistributedLockProvider
         ArgumentException.ThrowIfNullOrWhiteSpace(key);
         ArgumentException.ThrowIfNullOrWhiteSpace(ownerToken);
 
-        var ttl = SessionTtl(leaseDuration);
-        var sessionId = await consul.CreateSessionAsync(ttl, options.SessionBehavior, options.LockDelay, cancellationToken)
+        // The core refuses anything below MinimumLeaseDuration, so the requested lease IS the TTL.
+        var sessionId = await consul.CreateSessionAsync(
+                leaseDuration, options.SessionBehavior, options.LockDelay, cancellationToken)
             .ConfigureAwait(false);
 
         bool acquired;
