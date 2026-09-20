@@ -94,4 +94,34 @@ internal sealed class MeasuringLockProvider : IDistributedLockProvider
 
     public Task ReleaseAsync(string key, string ownerToken, CancellationToken cancellationToken)
         => inner.ReleaseAsync(key, ownerToken, cancellationToken);
+
+    /// <summary>
+    /// Forwards the inner provider's event-driven wait. Exactly the same trap as
+    /// <see cref="LeaseDurationIsTtl"/> and <see cref="TryAcquireFencedAsync"/>: this decorator
+    /// wraps EVERY provider <c>AddOrionLock</c> registers, so without this line the interface
+    /// default (the poll loop) would run for every backend and every server-side block, watch and
+    /// subscription below would be unreachable in production while still passing the tests that
+    /// construct the provider directly. Three default members on this interface now, three lines
+    /// here; a fourth that is not forwarded is a silent outage.
+    /// </summary>
+    /// <remarks>
+    /// The whole wait is timed as ONE acquire latency sample. That is the honest reading: the wait
+    /// is now a single backend interaction, not N of them, and recording it per internal retry
+    /// would need the inner provider to report retries it no longer performs.
+    /// </remarks>
+    public async Task<LockAcquisition> WaitForAcquireAsync(
+        string key, string ownerToken, TimeSpan leaseDuration, TimeSpan maxWait,
+        LockWaitPolicy waitPolicy, CancellationToken cancellationToken)
+    {
+        var sw = Stopwatch.StartNew();
+        try
+        {
+            return await inner.WaitForAcquireAsync(key, ownerToken, leaseDuration, maxWait, waitPolicy, cancellationToken)
+                .ConfigureAwait(false);
+        }
+        finally
+        {
+            OrionLockDiagnostics.RecordAcquireLatency(sw.Elapsed.TotalMilliseconds, backendName);
+        }
+    }
 }

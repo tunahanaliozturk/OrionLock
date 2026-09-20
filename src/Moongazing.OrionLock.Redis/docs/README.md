@@ -53,6 +53,27 @@ of zero or less is rejected with `ArgumentOutOfRangeException` rather than accep
 does not mean "expire immediately" in Redis, it DELETES the key, which would drop the lock at its first
 renewal.
 
+## Waiting subscribes, it does not poll
+
+A contended waiter subscribes to a per-key release channel and parks instead of issuing a `SET NX` every
+`RetryInterval`. A release publishes to that channel fire-and-forget, so waking every waiter on the key
+costs the releasing caller no extra round trip, and a notification that cannot be delivered can never
+fail a release.
+
+**A dedicated channel, not keyspace notifications.** Keyspace notifications would need
+`notify-keyspace-events` enabled on the server: it is off by default, a client library cannot turn it on,
+and on a managed Redis it may not be configurable at all - a lock that silently never notified would be
+worse than one that polls. The channel OrionLock publishes to itself works on any Redis, through a
+replica or a proxy. **There is no server-side configuration to do.** The channel is
+`{KeyPrefix}{key}{ReleaseChannelSuffix}`, default suffix `:released`.
+
+What a channel cannot cover is a lock freed by TTL: a crashed holder publishes nothing. A waiter
+therefore also bounds its wait by the holder's remaining TTL, read once per wait rather than once per
+retry interval, so an expiry is still noticed promptly.
+
+Set `RedisLockOptions.UseReleaseNotifications = false` on a deployment where pub/sub is unavailable or
+undesirable; waiters then fall back to exactly the poll loop earlier releases used.
+
 ## FIFO waiter fairness
 
 `RedisFifoWaiterCoordinator` orders waiters by arrival millisecond, with a per-process sequence breaking

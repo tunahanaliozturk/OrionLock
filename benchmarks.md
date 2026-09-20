@@ -115,6 +115,34 @@ The retry interval is scaled down from the 250 ms default purely to keep wall ti
 call count is interval-independent, because each poll round still hands the key to exactly one
 waiter.
 
+Since v2.1 the class runs the same race twice, under `EventDrivenWait`. False is the old waiter: a
+provider that does not override `WaitForAcquireAsync`, so the core polls it. True is a provider that
+does override it and parks the waiter until the lock frees, the way SQL Server's lock queue, a Redis
+release channel, an etcd watch and a ZooKeeper predecessor watch now do. Both are in one table so
+the before and the after cannot drift apart.
+
+The counting decorator takes `forwardWait` for the same reason the measuring decorator in the core
+had to learn to forward the member: a decorator that forwards the wait to a provider which then
+polls ITSELF counts one call per waiter for a loop that made dozens. In the polling mode the poll is
+therefore run at the decorator's own level, where every retry is visible.
+
+Measured on one machine, 32-core Windows, a single drain per configuration rather than a
+BenchmarkDotNet average:
+
+| Waiters | Polling: TryAcquire/waiter | Event-driven: TryAcquire/waiter | Polling drain | Event-driven drain |
+| ------- | -------------------------- | ------------------------------- | ------------- | ------------------ |
+| 2       | 3.5                        | 1.00                            | 30 ms         | 0.7 ms             |
+| 8       | 3.6 - 4.0                  | 1.00                            | 35 - 51 ms    | 0.5 - 0.9 ms       |
+| 64      | 7.3 - 8.2                  | 1.00                            | 214 - 294 ms  | 0.6 - 1.5 ms       |
+| 256     | 10.6                       | 1.00                            | 341 ms        | 1.5 ms             |
+
+The event-driven column is exactly 1.00 per waiter in every run and at every waiter count: each
+waiter makes one refused attempt, parks, and is handed the lock. The polling column is what it is -
+scheduling-dependent, and worse the more waiters there are, which is the shape the retry loop has
+always had; the ranges above are four runs on one machine, not a confidence interval. That spread is
+the point rather than a defect of the measurement: a poll's cost depends on how the thread pool
+happens to land, and the parked waiter's does not.
+
 ### RenewalScaleBenchmarks
 
 Holds 1, 100 and 1000 auto-renewing handles for a fixed window, and reports allocations, renewals

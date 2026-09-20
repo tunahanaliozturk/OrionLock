@@ -167,6 +167,14 @@ public sealed class SharedExclusiveLock : ISharedExclusiveLock
             var ownerToken = Guid.NewGuid().ToString("N");
             var deadline = Stopwatch.StartNew();
             var contended = false;
+            // v2.1: jittered backoff instead of a flat interval. With no RetryBackoffCeiling the
+            // jitter window collapses onto RetryInterval, so the default is byte-for-byte the old
+            // behaviour; a ceiling breaks the lockstep that keeps N waiters waking together.
+            var pollOptions = options.ToWaitPolicy().ToPollOptions();
+            var rng = pollOptions.RandomFactory();
+            // One counter for two jobs: the attempt_count metric and the backoff exponent. It is
+            // incremented at the TOP of the loop, so the metric reports 1 for an uncontended
+            // acquire; the backoff therefore takes attempts - 1 to start its curve at exponent 0.
             int attempts = 0;
             while (true)
             {
@@ -204,7 +212,9 @@ public sealed class SharedExclusiveLock : ISharedExclusiveLock
 
                 // Clamp the poll delay to the time left until WaitTimeout so a full RetryInterval
                 // near the deadline cannot overshoot the caller's wait budget by up to one interval.
-                var delay = options.RetryInterval < remaining ? options.RetryInterval : remaining;
+                var backoff = Providers.DistributedLockProviderExtensions.ComputeJitteredDelay(
+                    pollOptions, attempts - 1, rng);
+                var delay = backoff < remaining ? backoff : remaining;
                 await Task.Delay(delay, cancellationToken).ConfigureAwait(false);
             }
         }

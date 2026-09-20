@@ -187,6 +187,119 @@ public sealed class DefaultEtcdClientAdapter : IEtcdClientAdapter, IEtcdFencingA
     }
 
     /// <inheritdoc />
+    /// <remarks>
+    /// <para>
+    /// The key is READ before the watch goes up, and the watch is anchored to one past the revision
+    /// that read observed. Without this the watch begins at whatever revision it happens to be
+    /// created at, which is AFTER the caller's failed acquire - so a holder that releases in
+    /// between is never seen, and the waiter parks for its whole budget with the key sitting free.
+    /// Since the read tells us both that the key was still there and exactly when, a watch from the
+    /// next revision cannot miss the delete that follows. If the read finds the key already gone,
+    /// the answer is yes without opening a watch at all.
+    /// </para>
+    /// <para>
+    /// The read costs one extra round trip per WAIT - not per retry interval, which is what it
+    /// replaces. It is the price of the guarantee, and it is paid once however long the wait is.
+    /// </para>
+    /// <para>
+    /// One watch stream for the whole wait, torn down on every exit path by cancelling the linked
+    /// source the stream runs under - so a caller that gives up leaves no watcher registered on the
+    /// cluster. A DELETE event is the only thing that resolves it; etcd emits one both for an
+    /// explicit delete and for a key removed because its lease lapsed, which is exactly the two
+    /// ways a lock becomes free.
+    /// </para>
+    /// </remarks>
+    public async Task<bool> WaitForKeyDeletedAsync(string key, TimeSpan maxWait, CancellationToken cancellationToken)
+    {
+        var snapshot = await client.GetAsync(
+            new RangeRequest { Key = Google.Protobuf.ByteString.CopyFromUtf8(key) },
+            null, default, cancellationToken).ConfigureAwait(false);
+
+        if (snapshot.Count == 0)
+        {
+            // Already gone - the holder released between the caller's failed acquire and this read.
+            // Nothing would ever arrive on a watch for an event that has already happened.
+            return true;
+        }
+
+        // The key existed at this revision, so any delete is strictly later than it. Watching from
+        // the next revision makes etcd replay that delete even if it lands before the stream is up.
+        var startRevision = (snapshot.Header?.Revision ?? 0L) + 1L;
+
+        var tcs = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
+        using var stop = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+        if (maxWait != Timeout.InfiniteTimeSpan)
+        {
+            // Bound the stream itself rather than abandoning it: a watch nobody is waiting on is
+            // still a watch the cluster is maintaining.
+            stop.CancelAfter(maxWait < TimeSpan.Zero ? TimeSpan.Zero : maxWait);
+        }
+
+        void OnEvents(global::dotnet_etcd.WatchEvent[] events)
+        {
+            foreach (var watchEvent in events)
+            {
+                if (watchEvent.Type != Mvccpb.Event.Types.EventType.Delete)
+                {
+                    continue;
+                }
+                if (tcs.TrySetResult(true))
+                {
+                    StopStream(stop);
+                }
+                return;
+            }
+        }
+
+        var request = new WatchRequest
+        {
+            CreateRequest = new WatchCreateRequest
+            {
+                Key = Google.Protobuf.ByteString.CopyFromUtf8(key),
+                StartRevision = startRevision,
+            },
+        };
+
+        try
+        {
+            await client.WatchAsync(request, (Action<global::dotnet_etcd.WatchEvent[]>)OnEvents, null, default, stop.Token)
+                .ConfigureAwait(false);
+        }
+        catch (Grpc.Core.RpcException)
+        {
+            // A watch that could not be established or was dropped is not a lock failure: the
+            // caller falls back to polling, which is the behaviour it had before watches existed.
+            return false;
+        }
+        catch (Exception ex) when (IsCancellation(ex))
+        {
+            // Our own stop, the caller's cancellation, or the budget running out. Which one it was
+            // is decided below, exactly as in the keep-alive above.
+        }
+
+        if (tcs.Task.IsCompletedSuccessfully)
+        {
+            return tcs.Task.Result;
+        }
+
+        cancellationToken.ThrowIfCancellationRequested();
+        return false;
+    }
+
+    private static void StopStream(CancellationTokenSource stop)
+    {
+        try
+        {
+            stop.Cancel();
+        }
+        catch (ObjectDisposedException)
+        {
+            // The call already returned and the linked source is gone; the answer is recorded,
+            // which is all that matters.
+        }
+    }
+
+    /// <inheritdoc />
     public async Task<bool> KvDeleteIfMatchAsync(string key, string expectedValue, CancellationToken cancellationToken)
     {
         var txn = new TxnRequest();

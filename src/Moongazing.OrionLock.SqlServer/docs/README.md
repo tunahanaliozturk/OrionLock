@@ -1,4 +1,4 @@
-﻿# OrionLock.SqlServer
+# OrionLock.SqlServer
 
 SQL Server backend for [OrionLock](https://www.nuget.org/packages/OrionLock) using the
 native `sp_getapplock` application lock primitive. Session-scope lifetime: the lock is
@@ -29,5 +29,31 @@ end, and no wall clock bounds it. `LeaseDuration` therefore sets the renewal cad
 grace period but does not expire anything, so `handle.EffectiveLeaseDuration` reports
 `Timeout.InfiniteTimeSpan` rather than the value you asked for. That is also why a crashed process
 releases its locks immediately, without waiting out a TTL.
+
+## Waiting is SQL Server's job now
+
+A contended `AcquireAsync` no longer asks SQL Server again every `RetryInterval`. It passes the caller's
+remaining wait budget as `sp_getapplock @LockTimeout`, so the request sits in SQL Server's own
+application-lock queue and returns the instant the lock frees - one `sp_getapplock` command for the
+whole wait, however long it is. The single-shot `TryAcquireAsync` still passes `@LockTimeout = 0` and is unchanged.
+
+Two consequences worth knowing:
+
+- **Waiters are FIFO.** SQL Server's lock manager serves its application-lock queue in arrival order, so
+  a waiter can no longer be overtaken indefinitely by a luckier poller. This is the lock manager's
+  behaviour, not something OrionLock imposes on top of it.
+- **The command timeout is raised for the wait.** `SqlServerLockOptions.CommandTimeout` bounds the
+  network round trip; the wait budget is added on top of it for the blocking call only. Left as it was,
+  `Microsoft.Data.SqlClient` would abort a legitimate queued wait as though the link had hung.
+
+Nothing has to be configured on the server. A cancelled caller's command is cancelled and its connection
+disposed, so no session is left holding a place in the queue.
+
+One thing SqlClient does not do for you: cancelling a command that is blocked inside `sp_getapplock`
+tears the command down, and the driver reports the teardown - *"A severe error occurred on the current
+command"* - as a `SqlException`, not a cancellation. The provider translates that back, so a cancelled
+`AcquireAsync` raises `OperationCanceledException` as the contract says. Without the translation the
+`BackendFaultGuard` would wrap it as `OrionLockBackendException` and tell the caller the backend failed
+for something they asked for.
 
 Requires the `OrionLock` package. See https://github.com/tunahanaliozturk/OrionLock.

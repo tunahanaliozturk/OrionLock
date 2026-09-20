@@ -1,4 +1,4 @@
-﻿<p align="center">
+<p align="center">
   <img src="docs/logo.png" alt="OrionLock Logo" width="150" />
 </p>
 
@@ -87,9 +87,9 @@ await using var handle = await locker.AcquireAsync(
 
 ## Acquire vs TryAcquire
 
-- `AcquireAsync` blocks up to `WaitTimeout` (default 10s), retrying every `RetryInterval` (default 250 ms). Throws `LockAcquisitionTimeoutException` if it cannot acquire.
+- `AcquireAsync` blocks up to `WaitTimeout` (default 10s). Throws `LockAcquisitionTimeoutException` if it cannot acquire.
 - `TryAcquireAsync(key)` is a single attempt. Returns `null` immediately if the lock is held.
-- `TryAcquireAsync(key, deadline)` polls until the deadline and returns `null` on expiry instead of throwing. The poll delay is clamped to the time left so it cannot overshoot by a full retry interval.
+- `TryAcquireAsync(key, deadline)` waits until the deadline and returns `null` on expiry instead of throwing. The wait is clamped to the time left so it cannot overshoot by a full retry interval.
 
 ```csharp
 // Single attempt: null if already held.
@@ -111,6 +111,30 @@ if (bounded is null)
 ## Option validation
 
 `DistributedLockOptions` is validated at every acquire entry point, on your own thread, where the value was set — a non-positive `LeaseDuration`, a negative `WaitTimeout`, a non-positive `RetryInterval` or a non-positive `RenewalFailureGracePeriod` throws `ArgumentOutOfRangeException` instead of surfacing later as a driver error or not at all. A `RetryInterval` longer than `WaitTimeout` is fine: the acquire loop clamps each poll to the remaining budget.
+
+## How a waiter waits
+
+A blocking acquire makes one attempt, and if the lock is held it hands the rest of the wait to the backend through `IDistributedLockProvider.WaitForAcquireAsync`, with the caller's REMAINING budget. What that costs depends on what the store can do:
+
+| Backend | While waiting | Server-side requirement |
+| ------- | ------------- | ----------------------- |
+| SQL Server | Blocks in SQL Server's own application-lock queue (`sp_getapplock @LockTimeout`), FIFO | none |
+| PostgreSQL | Blocks on `pg_advisory_lock`, bounded by `statement_timeout` | none |
+| Redis | Subscribes to a per-key release channel the provider publishes to | none; pub/sub only, NOT keyspace notifications |
+| etcd | Watches the key for a delete | none |
+| Consul | Blocking query on the key's modify index | none |
+| ZooKeeper | Watches its immediate predecessor znode, FIFO | none |
+| EF Core, in-memory, any third-party provider | Polls, exactly as before | none |
+
+`OrionLock.Etcd` and `OrionLock.ZooKeeper` ship no package README of their own, so their notes are here. **etcd** watches the lock key and retries when the cluster reports it deleted, which covers both a release and a lease that lapsed under a crashed holder; a failed attempt costs three round trips there, so the watch replaces three per waiter per tick with three once. **ZooKeeper** now runs the real recipe: the ephemeral sequential child is created ONCE and kept, and when it is not the lowest the waiter watches its immediate predecessor. Each position gained costs one children listing plus one watched `exists` - two round trips, against four per tick for the whole wait before - and because the child's sequence number is stable for the whole wait, arrival order is honoured again. The old loop re-created the child every tick, minting a new sequence number each time, which threw the queue away. Neither needs anything configured on the server, and both delete or tear down what they registered on every path that does not win.
+
+`RetryInterval` (default 250 ms) is now the FLOOR of the wait, not the whole of it. A backend that can block or subscribe returns the instant the lock frees and never sleeps an interval at all; the interval still bounds the poll a backend falls back to when it has no better option, or when its subscription drops.
+
+`WaitTimeout`, cancellation and the deadline overloads behave exactly as they always did. A wait that ends early without a grant is not a timeout: the core re-checks the budget, sleeps the retry floor and asks again, so a dropped subscription degrades to polling rather than failing the caller.
+
+`RetryBackoffCeiling` is off by default, which keeps the flat `RetryInterval` every release before v2.1 used. Set it and each fallback poll sleeps a random duration in `[RetryInterval, min(RetryInterval * 2^attempts, ceiling)]` - the randomness is the point, because a flat interval keeps N waiters that arrived together waking on the same tick for the whole queue drain.
+
+**Writing a backend?** `WaitForAcquireAsync` is a default interface method whose default body is that poll loop, so an existing provider needs no change at all. Override it when your store can say "the lock is free now", and report a `LockAcquisition` - a lock taken by waiting carries its fencing token exactly as one taken on the first attempt does, and a wait that drops the token would leave fencing working on an idle key and dark under contention. If you decorate a provider, forward the member: a decorator that does not forward it makes every override below it unreachable. And because it is a default method, a signature that drifts out of step with the contract still compiles and silently stops overriding anything, so a backend is worth one test that asserts it really implements the member.
 
 ## Lease and renewal
 

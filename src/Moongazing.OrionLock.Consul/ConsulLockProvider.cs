@@ -138,6 +138,67 @@ public sealed class ConsulLockProvider : IDistributedLockProvider
         return modifyIndex is { } index ? LockAcquisition.Fenced(index) : LockAcquisition.Unfenced;
     }
 
+    /// <summary>
+    /// Waits on a Consul blocking query instead of re-attempting the acquire every retry interval.
+    /// A failed attempt costs three round trips here - create session, KV acquire, destroy session -
+    /// so the poll loop was paying three per waiter per tick; the blocking query pays them once and
+    /// then lets Consul hold the request open until the key changes.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// Consul's <c>release</c> session behaviour clears the session from the KV entry when a
+    /// holder's session expires, so the blocking query covers a crashed holder as well as an
+    /// explicit release.
+    /// </para>
+    /// <para>
+    /// The query is a hint, never the authority: every wake re-attempts the acquire, because
+    /// several waiters see the same change and only one of them can win. An adapter that does not
+    /// implement blocking queries answers <see langword="false"/> immediately, and the core turns
+    /// that back into the poll loop this replaced.
+    /// </para>
+    /// </remarks>
+    public async Task<LockAcquisition> WaitForAcquireAsync(
+        string key, string ownerToken, TimeSpan leaseDuration, TimeSpan maxWait,
+        LockWaitPolicy waitPolicy, CancellationToken cancellationToken)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(key);
+        ArgumentException.ThrowIfNullOrWhiteSpace(ownerToken);
+
+        var elapsed = System.Diagnostics.Stopwatch.StartNew();
+        var infinite = maxWait == Timeout.InfiniteTimeSpan;
+
+        while (true)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+
+            // The FENCED attempt, so a lock taken by WAITING carries the same token a lock taken on
+            // the first attempt would have - otherwise fencing would work on an idle key and go
+            // dark under exactly the contention it exists to protect against.
+            var acquisition = await TryAcquireFencedAsync(key, ownerToken, leaseDuration, cancellationToken)
+                .ConfigureAwait(false);
+            if (acquisition.Acquired)
+            {
+                return acquisition;
+            }
+
+            var remaining = maxWait - elapsed.Elapsed;
+            if (!infinite && remaining <= TimeSpan.Zero)
+            {
+                return LockAcquisition.NotAcquired;
+            }
+
+            if (!await consul.WaitForKeyFreeAsync(
+                    FullKey(key), infinite ? Timeout.InfiniteTimeSpan : remaining, cancellationToken)
+                .ConfigureAwait(false))
+            {
+                // Budget spent, no blocking query available, or the query returned with the key
+                // still held. Hand the wait back: the core sleeps the caller's retry floor and asks
+                // again, which is the poll loop, reached only when the query is not doing its job.
+                return LockAcquisition.NotAcquired;
+            }
+        }
+    }
+
     /// <inheritdoc />
     public async Task<bool> TryRenewAsync(
         string key, string ownerToken, TimeSpan leaseDuration, CancellationToken cancellationToken)

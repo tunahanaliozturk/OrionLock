@@ -41,4 +41,37 @@ public sealed class RedisLockOptions
     /// </para>
     /// </remarks>
     public bool FencingTokens { get; set; }
+
+    /// <summary>
+    /// When <see langword="true"/> (the default) a waiter subscribes to a per-key release channel
+    /// instead of re-asking Redis every retry interval, and a release publishes to that channel.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// This is a DEDICATED channel OrionLock publishes to itself, not Redis keyspace notifications.
+    /// Keyspace notifications would need <c>notify-keyspace-events</c> enabled on the server, which
+    /// is off by default and is not something a client library can turn on - on a managed Redis it
+    /// may not be configurable at all. A channel the provider publishes to works on any Redis, on a
+    /// replica, and through a proxy, and costs one PUBLISH per release, sent fire-and-forget so it
+    /// adds no latency to the release itself.
+    /// </para>
+    /// <para>
+    /// What it does NOT cover: a lock that frees because its TTL lapsed (the holder crashed, or
+    /// released through some other client) publishes nothing. A waiter therefore also bounds its
+    /// wait by the holder's remaining TTL, so an expiry is noticed once - not once per retry
+    /// interval.
+    /// </para>
+    /// <para>
+    /// Set it to <see langword="false"/> on a deployment where pub/sub is unavailable or
+    /// undesirable; waiters then fall back to the poll loop every release before v2.1 used.
+    /// </para>
+    /// </remarks>
+    public bool UseReleaseNotifications { get; set; } = true;
+
+    /// <summary>
+    /// Suffix appended to the prefixed lock key to form its release channel. Default
+    /// <c>:released</c>. Change it only if the derived name collides with a channel your
+    /// application already publishes on.
+    /// </summary>
+    public string ReleaseChannelSuffix { get; set; } = ":released";
 }

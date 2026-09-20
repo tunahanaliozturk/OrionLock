@@ -67,6 +67,21 @@ who set 2 s and swapped Redis for Consul got a five-times-longer takeover window
 warning. A lease at or above the floor is honoured exactly and reported on
 `handle.EffectiveLeaseDuration`.
 
+## Waiting is a blocking query, not a poll
+
+A failed acquire costs three round trips here - create session, KV acquire, destroy session - so a
+polling waiter paid three per retry interval for as long as it waited. A contended waiter now attempts
+once and then parks on a Consul blocking query against the key's modify index, retrying only when Consul
+reports the entry changed and free.
+
+A KV entry with no session on it is free whether the holder released it or its session expired and Consul
+applied the `release` behaviour, so the query covers a crashed holder too. The wait time is Consul's own,
+so the server releases the request rather than the client abandoning it; Consul caps it at 10 minutes and
+a longer budget simply loops. **There is no server-side configuration to do.**
+
+A custom `IConsulClientAdapter` that does not implement `WaitForKeyFreeAsync` keeps working and keeps
+polling: the member is a default interface method that answers "no blocking query available".
+
 ## Lock keys are URI path data
 
 The lock key is concatenated into Consul's `/v1/kv/{key}` HTTP path. The core rejects any key containing

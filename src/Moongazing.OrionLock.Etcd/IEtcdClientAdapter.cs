@@ -31,6 +31,21 @@ public interface IEtcdClientAdapter
     /// expiry race.
     /// </summary>
     Task<bool> KvDeleteIfMatchAsync(string key, string expectedValue, CancellationToken cancellationToken);
+
+    /// <summary>
+    /// Watches <paramref name="key"/> and returns <see langword="true"/> as soon as etcd reports it
+    /// deleted - which covers both an explicit release and a lease that lapsed under a crashed
+    /// holder. Returns <see langword="false"/> when <paramref name="maxWait"/> elapses first or the
+    /// watch stream ends without a delete; the caller then re-checks its budget and retries.
+    /// </summary>
+    /// <remarks>
+    /// A default interface method so an existing third-party adapter keeps compiling and simply
+    /// keeps polling: the default answers <see langword="false"/> at once, which
+    /// <see cref="EtcdLockProvider"/> reads as "no watch available" and falls back to the poll loop.
+    /// An implementation MUST tear the watch down before returning, on every path.
+    /// </remarks>
+    Task<bool> WaitForKeyDeletedAsync(string key, TimeSpan maxWait, CancellationToken cancellationToken)
+        => Task.FromResult(false);
 }
 
 /// <summary>

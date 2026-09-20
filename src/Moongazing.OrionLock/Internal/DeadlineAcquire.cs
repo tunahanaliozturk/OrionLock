@@ -31,6 +31,12 @@ internal static class DeadlineAcquire
         options ??= new DistributedLockOptions();
 
         var elapsed = Stopwatch.StartNew();
+        // v2.1: the sleep is jittered rather than flat. With no RetryBackoffCeiling the window
+        // collapses onto RetryInterval, so this is the same flat interval as before; set a ceiling
+        // and waiters that arrived together stop waking on the same tick for the whole drain.
+        var pollOptions = options.ToWaitPolicy().ToPollOptions();
+        var rng = pollOptions.RandomFactory();
+        var attempts = 0;
         while (true)
         {
             cancellationToken.ThrowIfCancellationRequested();
@@ -47,8 +53,10 @@ internal static class DeadlineAcquire
                 return null;
             }
 
-            var delay = options.RetryInterval < remaining ? options.RetryInterval : remaining;
+            var backoff = Providers.DistributedLockProviderExtensions.ComputeJitteredDelay(pollOptions, attempts, rng);
+            var delay = backoff < remaining ? backoff : remaining;
             await Task.Delay(delay, cancellationToken).ConfigureAwait(false);
+            attempts++;
         }
     }
 }

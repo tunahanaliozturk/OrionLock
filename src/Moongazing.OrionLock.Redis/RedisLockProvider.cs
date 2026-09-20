@@ -75,6 +75,10 @@ public sealed class RedisLockProvider : IDistributedLockProvider
     // - see RedisFencingKeys for why decorating the lock key was not enough.
     private RedisKey FenceKey(string key) => RedisFencingKeys.CounterKey(options.KeyPrefix + key);
 
+    /// <summary>The per-key channel a release publishes to and a waiter subscribes to.</summary>
+    internal RedisChannel ReleaseChannel(string key)
+        => RedisChannel.Literal(options.KeyPrefix + key + options.ReleaseChannelSuffix);
+
     /// <inheritdoc />
     public async Task<bool> TryAcquireAsync(string key, string ownerToken, TimeSpan leaseDuration, CancellationToken cancellationToken)
         => (await TryAcquireFencedAsync(key, ownerToken, leaseDuration, cancellationToken).ConfigureAwait(false)).Acquired;
@@ -140,9 +144,155 @@ public sealed class RedisLockProvider : IDistributedLockProvider
         // Deliberately NOT cancellation-checked: dropping a release because the caller's token was
         // cancelled would strand the lock until its lease expires.
 
-        await Db.ScriptEvaluateAsync(
+        var result = await Db.ScriptEvaluateAsync(
             ReleaseScript,
             new RedisKey[] { Key(key) },
             new RedisValue[] { ownerToken }).ConfigureAwait(false);
+
+        if (!options.UseReleaseNotifications || (long)result != 1)
+        {
+            // Nothing was deleted - the lock had already lapsed or belonged to someone else - so
+            // there is no hand-off to announce.
+            return;
+        }
+
+        // Fire-and-forget: the PUBLISH rides along in the same pipeline, so waking every waiter on
+        // this key costs the releasing caller no extra round trip. A release must never fail
+        // because a notification could not be delivered, which is also why nothing is awaited here.
+        await multiplexer.GetSubscriber()
+            .PublishAsync(ReleaseChannel(key), ownerToken, CommandFlags.FireAndForget)
+            .ConfigureAwait(false);
+    }
+
+    /// <summary>
+    /// Subscribes to the key's release channel and parks until the holder publishes, the holder's
+    /// TTL lapses, or the budget runs out - instead of issuing a <c>SET NX</c> every retry interval.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// The subscription is taken BEFORE the attempt, so a release landing between the refusal and
+    /// the subscribe cannot be slept through. The signal is a counting semaphore rather than a
+    /// completion source, so a release that arrives while the waiter is between iterations is still
+    /// there when it looks.
+    /// </para>
+    /// <para>
+    /// The wait is additionally bounded by the holder's remaining TTL, because a lease that expires
+    /// publishes nothing: the holder crashed, or released through a client that does not know about
+    /// this channel. That costs one <c>PTTL</c> per wait - not one per retry interval.
+    /// </para>
+    /// <para>
+    /// A cancelled or timed-out waiter unsubscribes in a <c>finally</c>, so no subscription is left
+    /// parked on the multiplexer.
+    /// </para>
+    /// </remarks>
+    public async Task<LockAcquisition> WaitForAcquireAsync(
+        string key, string ownerToken, TimeSpan leaseDuration, TimeSpan maxWait,
+        LockWaitPolicy waitPolicy, CancellationToken cancellationToken)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(key);
+        ArgumentException.ThrowIfNullOrEmpty(ownerToken);
+
+        if (!options.UseReleaseNotifications)
+        {
+            // Pub/sub turned off: behave exactly as every release before v2.1 did. The shared poll
+            // loop attempts the FENCED overload, so a waiter that wins here still gets its token.
+            return await DistributedLockProviderExtensions.PollUntilAcquiredAsync(
+                this, key, ownerToken, leaseDuration, maxWait, waitPolicy.ToPollOptions(), cancellationToken)
+                .ConfigureAwait(false);
+        }
+
+        var elapsed = System.Diagnostics.Stopwatch.StartNew();
+        var infinite = maxWait == Timeout.InfiniteTimeSpan;
+        var pollFloor = waitPolicy.ToPollOptions().InitialDelay;
+        var missingTtlAlreadyRetried = false;
+
+        using var released = new SemaphoreSlim(0, 1);
+        var channel = ReleaseChannel(key);
+        var subscriber = multiplexer.GetSubscriber();
+
+        // The handler overload rather than a ChannelMessageQueue: the handler is all this needs,
+        // and it is a surface a test can substitute, so the parks-rather-than-spins fact below is
+        // provable without a Redis server anywhere near it.
+        void OnReleased(RedisChannel _, RedisValue __)
+        {
+            try
+            {
+                released.Release();
+            }
+            catch (SemaphoreFullException)
+            {
+                // A signal is already pending; one wake is all a waiter needs.
+            }
+            catch (ObjectDisposedException)
+            {
+                // The waiter has already given up and torn down its semaphore.
+            }
+        }
+
+        // Subscribe BEFORE the first attempt. The other order loses a release that lands between
+        // the refusal and the subscribe, and the waiter then sleeps through its chance.
+        await subscriber.SubscribeAsync(channel, OnReleased).ConfigureAwait(false);
+        try
+        {
+            while (true)
+            {
+                cancellationToken.ThrowIfCancellationRequested();
+
+                // The FENCED attempt: a lock taken by waiting carries the same token a lock taken
+                // on the first attempt would have, so fencing does not go dark under contention.
+                var acquisition = await TryAcquireFencedAsync(key, ownerToken, leaseDuration, cancellationToken)
+                    .ConfigureAwait(false);
+                if (acquisition.Acquired)
+                {
+                    return acquisition;
+                }
+
+                var remaining = maxWait - elapsed.Elapsed;
+                if (!infinite && remaining <= TimeSpan.Zero)
+                {
+                    return LockAcquisition.NotAcquired;
+                }
+
+                var wait = infinite ? Timeout.InfiniteTimeSpan : remaining;
+                var ttl = await Db.KeyTimeToLiveAsync(Key(key)).ConfigureAwait(false);
+                if (ttl is { } holderTtl)
+                {
+                    missingTtlAlreadyRetried = false;
+                    // One millisecond past the expiry, so the retry sees a lapsed lease rather than
+                    // an expiring one.
+                    var untilExpiry = holderTtl + TimeSpan.FromMilliseconds(1);
+                    if (infinite || untilExpiry < wait)
+                    {
+                        wait = untilExpiry;
+                    }
+                }
+                else if (!missingTtlAlreadyRetried)
+                {
+                    // No TTL came back. Overwhelmingly this means the key VANISHED between the
+                    // failed attempt and this read - the holder's lease lapsed - so the lock is free
+                    // right now and nothing will ever be published for it, because a TTL expiry
+                    // publishes nothing. Parking here is how a waiter sleeps through an already-free
+                    // lock and reports a timeout, so retry at once. This was previously done only
+                    // for an infinite wait, which is exactly backwards: the finite waiter is the one
+                    // with a budget to burn.
+                    missingTtlAlreadyRetried = true;
+                    continue;
+                }
+                else
+                {
+                    // The retry also found no TTL, so this is the other thing a null means:
+                    // StackExchange.Redis reports "key has no expiry" and "key does not exist"
+                    // identically, and a key under our prefix with no expiry is not ours to wait
+                    // for. Fall back to the caller's poll floor rather than spinning on it.
+                    wait = infinite || pollFloor < wait ? pollFloor : wait;
+                }
+
+                await released.WaitAsync(wait, cancellationToken).ConfigureAwait(false);
+            }
+        }
+        finally
+        {
+            await subscriber.UnsubscribeAsync(channel, OnReleased).ConfigureAwait(false);
+        }
     }
 }

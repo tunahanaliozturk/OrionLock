@@ -55,9 +55,56 @@ public sealed class SqlServerLockProvider : IDistributedLockProvider, IDisposabl
     /// count acquisitions in. Minting a token would mean a <c>SEQUENCE</c> or a counter table the caller
     /// must create and grant on - a schema requirement this provider exists precisely to avoid. Use the
     /// EF Core backend on SQL Server when you need fencing; its lock row carries a counter bumped by the
-    /// same UPDATE that takes it.
+    /// same UPDATE that takes it. The same is true of a lock taken by WAITING below: unfenced, because
+    /// there is nothing here to mint a token from, not because the wait path forgot to carry one.
     /// </remarks>
     public async Task<bool> TryAcquireAsync(string key, string ownerToken, TimeSpan leaseDuration, CancellationToken cancellationToken)
+        // @LockTimeout 0: ask once, never queue. This is the single-shot primitive.
+        => (await GetAppLockAsync(key, ownerToken, lockTimeoutMs: 0, waitBudget: TimeSpan.Zero, cancellationToken)
+            .ConfigureAwait(false)).Acquired;
+
+    /// <summary>
+    /// Waits in SQL Server's OWN lock queue rather than asking it again every retry interval.
+    /// <c>sp_getapplock</c> takes a <c>@LockTimeout</c>; passing the caller's remaining budget
+    /// instead of 0 turns the whole wait into one round trip that returns the instant the lock
+    /// frees - and inherits SQL Server's FIFO application-lock manager, so waiters are served in
+    /// arrival order instead of racing on a poll tick.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// The command timeout is raised to cover the wait: leaving it at
+    /// <see cref="SqlServerLockOptions.CommandTimeout"/> would have SqlClient abort a legitimate
+    /// queued wait as if the network had hung. It is the caller's budget PLUS the configured
+    /// allowance, so the configured value still bounds the network round trip on top of the wait.
+    /// </para>
+    /// <para>
+    /// A cancelled caller does not leave a connection parked in the queue: the command is
+    /// cancelled, the exception propagates through the <c>catch</c> below, and the connection - and
+    /// with it the session and its place in the queue - is disposed.
+    /// </para>
+    /// </remarks>
+    public Task<LockAcquisition> WaitForAcquireAsync(
+        string key, string ownerToken, TimeSpan leaseDuration, TimeSpan maxWait,
+        LockWaitPolicy waitPolicy, CancellationToken cancellationToken)
+    {
+        ValidateKey(key);
+        ArgumentException.ThrowIfNullOrWhiteSpace(ownerToken);
+
+        return GetAppLockAsync(key, ownerToken, LockTimeoutMsFor(maxWait), maxWait, cancellationToken);
+    }
+
+    /// <summary>
+    /// The caller's remaining budget as <c>sp_getapplock @LockTimeout</c> takes it: milliseconds in
+    /// an int, with -1 meaning "wait forever". Saturating rather than overflowing, because a
+    /// wrapped negative would silently turn a long wait into an infinite one.
+    /// </summary>
+    internal static int LockTimeoutMsFor(TimeSpan maxWait)
+        => maxWait == Timeout.InfiniteTimeSpan
+            ? -1
+            : (int)Math.Clamp(Math.Ceiling(maxWait.TotalMilliseconds), 0, int.MaxValue);
+
+    private async Task<LockAcquisition> GetAppLockAsync(
+        string key, string ownerToken, int lockTimeoutMs, TimeSpan waitBudget, CancellationToken cancellationToken)
     {
         ValidateKey(key);
         ArgumentException.ThrowIfNullOrWhiteSpace(ownerToken);
@@ -73,12 +120,12 @@ public sealed class SqlServerLockProvider : IDistributedLockProvider, IDisposabl
             {
                 cmd.CommandType = CommandType.StoredProcedure;
                 cmd.CommandText = "sp_getapplock";
-                cmd.CommandTimeout = (int)options.CommandTimeout.TotalSeconds;
+                cmd.CommandTimeout = CommandTimeoutSecondsFor(waitBudget, lockTimeoutMs);
 
                 cmd.Parameters.Add(new SqlParameter("@Resource",    SqlDbType.NVarChar, 255) { Value = resource });
                 cmd.Parameters.Add(new SqlParameter("@LockMode",    SqlDbType.VarChar,  32)  { Value = "Exclusive" });
                 cmd.Parameters.Add(new SqlParameter("@LockOwner",   SqlDbType.VarChar,  32)  { Value = "Session" });
-                cmd.Parameters.Add(new SqlParameter("@LockTimeout", SqlDbType.Int)           { Value = 0 });
+                cmd.Parameters.Add(new SqlParameter("@LockTimeout", SqlDbType.Int)           { Value = lockTimeoutMs });
                 cmd.Parameters.Add(new SqlParameter("@DbPrincipal", SqlDbType.NVarChar, 32)  { Value = "public" });
 
                 var rc = new SqlParameter
@@ -103,11 +150,13 @@ public sealed class SqlServerLockProvider : IDistributedLockProvider, IDisposabl
                         await conn.DisposeAsync().ConfigureAwait(false);
                         throw new InvalidOperationException($"ownerToken '{ownerToken}' already registered.");
                     }
-                    return true;
+                    // Unfenced: see the remarks on TryAcquireAsync - sp_getapplock has nothing
+                    // durable to count acquisitions in, and an invented number would be worse.
+                    return LockAcquisition.Unfenced;
 
                 case -1:
                     await conn.DisposeAsync().ConfigureAwait(false);
-                    return false;
+                    return LockAcquisition.NotAcquired;
 
                 case -2:
                     await conn.DisposeAsync().ConfigureAwait(false);
@@ -118,6 +167,25 @@ public sealed class SqlServerLockProvider : IDistributedLockProvider, IDisposabl
                     throw new OrionLockBackendException(
                         key, $"sp_getapplock returned {returnCode} (deadlock victim, validation error, or other backend failure).");
             }
+        }
+        catch (SqlException) when (cancellationToken.IsCancellationRequested)
+        {
+            // A caller who cancels while the command is blocked inside sp_getapplock does not get a
+            // cancellation from SqlClient: cancelling tears the command down and the driver reports
+            // the teardown - "A severe error occurred on the current command." - as a SqlException.
+            // The contract says a cancelled acquire raises OperationCanceledException, so the
+            // translation belongs here, at the only place that knows both the driver's dialect and
+            // the caller's token.
+            //
+            // It matters beyond the exception type: BackendFaultGuard wraps driver exceptions in
+            // OrionLockBackendException and deliberately does NOT wrap cancellation, so without this
+            // a cancelled caller would come out of DI holding a backend-fault exception for
+            // something that was not a fault at all.
+            //
+            // Disposing the connection is what returns the session - and its place in SQL Server's
+            // lock queue - so a cancelled waiter leaves nothing parked.
+            try { await conn.DisposeAsync().ConfigureAwait(false); } catch { /* already failing */ }
+            throw new OperationCanceledException(cancellationToken);
         }
         catch
         {
@@ -203,7 +271,24 @@ public sealed class SqlServerLockProvider : IDistributedLockProvider, IDisposabl
         }
     }
 
-    // Helper used by the collision branch in TryAcquireAsync and by ReleaseAsync.
+    /// <summary>
+    /// Command timeout for an <c>sp_getapplock</c> call, in seconds. The configured
+    /// <see cref="SqlServerLockOptions.CommandTimeout"/> bounds the NETWORK round trip; a queued
+    /// wait is expected to take as long as the caller's budget, so that budget is added on top.
+    /// An infinite lock timeout maps to 0, SqlClient's "no command timeout".
+    /// </summary>
+    internal int CommandTimeoutSecondsFor(TimeSpan waitBudget, int lockTimeoutMs)
+    {
+        if (lockTimeoutMs < 0)
+        {
+            return 0;
+        }
+        var allowance = options.CommandTimeout.TotalSeconds;
+        var total = Math.Ceiling(allowance + Math.Max(0d, waitBudget.TotalSeconds));
+        return (int)Math.Clamp(total, 1, int.MaxValue);
+    }
+
+    // Helper used by the collision branch in GetAppLockAsync and by ReleaseAsync.
     private async Task ReleaseInSession(SqlConnection conn, string resource, CancellationToken ct)
     {
         using var cmd = conn.CreateCommand();

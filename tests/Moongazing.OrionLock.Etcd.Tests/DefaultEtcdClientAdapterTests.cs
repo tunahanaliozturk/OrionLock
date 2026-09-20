@@ -1,3 +1,4 @@
+using dotnet_etcd;
 using dotnet_etcd.interfaces;
 using Etcdserverpb;
 using Grpc.Core;
@@ -216,6 +217,84 @@ public sealed class DefaultEtcdClientAdapterTests
         Assert.Equal(Compare.Types.CompareResult.Equal, compare.Result);
         Assert.Equal(0, compare.Version);
         Assert.Equal(LeaseId, Assert.Single(sent.Success).RequestPut.Lease);
+    }
+
+    [Fact]
+    public async Task WaitForKeyDeleted_ReportsTheKeyGone_WithoutOpeningAWatchAtAll()
+    {
+        // The holder released between the caller's failed acquire and this wait. A watch created
+        // now begins AFTER that delete and would never see it, so the waiter parked for its whole
+        // budget with the key sitting free. Reading the key first turns that into an instant yes.
+        var client = new Mock<IEtcdClient>();
+        client.Setup(c => c.GetAsync(
+                It.IsAny<RangeRequest>(), It.IsAny<Metadata>(), It.IsAny<DateTime?>(), It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new RangeResponse { Count = 0, Header = new ResponseHeader { Revision = 41 } });
+
+        var deleted = await new DefaultEtcdClientAdapter(client.Object)
+            .WaitForKeyDeletedAsync("orionlock/k", TimeSpan.FromSeconds(30), default)
+            .WaitAsync(TimeSpan.FromSeconds(10));
+
+        Assert.True(deleted);
+        client.Verify(c => c.WatchAsync(
+                It.IsAny<WatchRequest>(), It.IsAny<Action<WatchEvent[]>>(),
+                It.IsAny<Metadata>(), It.IsAny<DateTime?>(), It.IsAny<CancellationToken>()),
+            Times.Never);
+    }
+
+    [Fact]
+    public async Task WaitForKeyDeleted_AnchorsTheWatchToOnePastTheRevisionItSawTheKeyAt()
+    {
+        // The key was still there at revision 41, so any delete is strictly later. Starting the
+        // watch at 42 makes etcd replay a delete that lands before the stream is even up; starting
+        // it at "now" - which is what a watch with no start revision does - loses exactly that.
+        var client = new Mock<IEtcdClient>();
+        client.Setup(c => c.GetAsync(
+                It.IsAny<RangeRequest>(), It.IsAny<Metadata>(), It.IsAny<DateTime?>(), It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new RangeResponse { Count = 1, Header = new ResponseHeader { Revision = 41 } });
+
+        WatchRequest? sent = null;
+        client.Setup(c => c.WatchAsync(
+                It.IsAny<WatchRequest>(), It.IsAny<Action<WatchEvent[]>>(),
+                It.IsAny<Metadata>(), It.IsAny<DateTime?>(), It.IsAny<CancellationToken>()))
+            .Callback((WatchRequest r, Action<WatchEvent[]> onEvents, Metadata _, DateTime? _, CancellationToken _) =>
+            {
+                sent = r;
+                onEvents([new WatchEvent { Key = "orionlock/k", Type = Mvccpb.Event.Types.EventType.Delete }]);
+            })
+            .Returns(Task.CompletedTask);
+
+        var deleted = await new DefaultEtcdClientAdapter(client.Object)
+            .WaitForKeyDeletedAsync("orionlock/k", TimeSpan.FromSeconds(30), default)
+            .WaitAsync(TimeSpan.FromSeconds(10));
+
+        Assert.True(deleted);
+        Assert.Equal(42, sent!.CreateRequest.StartRevision);
+        Assert.Equal("orionlock/k", sent.CreateRequest.Key.ToStringUtf8());
+    }
+
+    [Fact]
+    public async Task WaitForKeyDeleted_IgnoresAPutAndKeepsWaiting()
+    {
+        // Only a DELETE frees the lock. A PUT on the key is another owner taking it, which is the
+        // opposite of what this waiter is waiting for.
+        var client = new Mock<IEtcdClient>();
+        client.Setup(c => c.GetAsync(
+                It.IsAny<RangeRequest>(), It.IsAny<Metadata>(), It.IsAny<DateTime?>(), It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new RangeResponse { Count = 1, Header = new ResponseHeader { Revision = 1 } });
+        client.Setup(c => c.WatchAsync(
+                It.IsAny<WatchRequest>(), It.IsAny<Action<WatchEvent[]>>(),
+                It.IsAny<Metadata>(), It.IsAny<DateTime?>(), It.IsAny<CancellationToken>()))
+            .Returns(async (WatchRequest _, Action<WatchEvent[]> onEvents, Metadata _, DateTime? _, CancellationToken ct) =>
+            {
+                onEvents([new WatchEvent { Key = "orionlock/k", Type = Mvccpb.Event.Types.EventType.Put }]);
+                await UntilCancelled(ct);
+            });
+
+        var deleted = await new DefaultEtcdClientAdapter(client.Object)
+            .WaitForKeyDeletedAsync("orionlock/k", TimeSpan.FromMilliseconds(300), default)
+            .WaitAsync(TimeSpan.FromSeconds(10));
+
+        Assert.False(deleted);
     }
 
     [Fact]
