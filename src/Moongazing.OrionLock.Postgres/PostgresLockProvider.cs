@@ -157,11 +157,23 @@ public sealed class PostgresLockProvider : IDistributedLockProvider, IDisposable
                 {
                     await cmd.ExecuteNonQueryAsync(cancellationToken).ConfigureAwait(false);
                 }
-                catch (PostgresException ex) when (ex.SqlState == PostgresErrorCodes.QueryCanceled)
+                catch (PostgresException ex) when (IsBudgetExpiry(ex.SqlState, cancellationToken))
                 {
                     // statement_timeout fired: the budget ran out and we do NOT hold the lock.
                     await conn.DisposeAsync().ConfigureAwait(false);
                     return LockAcquisition.NotAcquired;
+                }
+                catch (PostgresException ex)
+                    when (ex.SqlState == PostgresErrorCodes.QueryCanceled && cancellationToken.IsCancellationRequested)
+                {
+                    // SQLSTATE 57014 is the server saying "this query was cancelled" and says nothing
+                    // about WHO cancelled it. Npgsql normally converts a token-triggered cancellation
+                    // into OperationCanceledException itself, so this is the path for when it does not
+                    // - a cancellation racing the statement_timeout, or an older driver. Reading it as
+                    // a budget expiry would hand the caller a timeout for something they asked for,
+                    // which is the quieter and worse half of the SQL Server bug next door.
+                    try { await conn.DisposeAsync().ConfigureAwait(false); } catch { /* already failing */ }
+                    throw new OperationCanceledException(cancellationToken);
                 }
             }
 
@@ -197,6 +209,18 @@ public sealed class PostgresLockProvider : IDistributedLockProvider, IDisposable
             throw;
         }
     }
+
+    /// <summary>
+    /// Whether a cancelled statement is THIS provider's own <c>statement_timeout</c> firing - the
+    /// budget running out - rather than the caller cancelling.
+    /// </summary>
+    /// <remarks>
+    /// PostgreSQL reports both as SQLSTATE 57014, so the error code alone cannot tell them apart and
+    /// the caller's token has to break the tie. Getting it backwards means a cancelled caller is told
+    /// the lock was not free, which is a lie they cannot distinguish from a real timeout.
+    /// </remarks>
+    internal static bool IsBudgetExpiry(string? sqlState, CancellationToken cancellationToken)
+        => sqlState == PostgresErrorCodes.QueryCanceled && !cancellationToken.IsCancellationRequested;
 
     /// <summary>
     /// The caller's remaining budget as <c>statement_timeout</c> takes it: milliseconds, with 0

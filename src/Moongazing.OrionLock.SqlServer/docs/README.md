@@ -34,8 +34,8 @@ releases its locks immediately, without waiting out a TTL.
 
 A contended `AcquireAsync` no longer asks SQL Server again every `RetryInterval`. It passes the caller's
 remaining wait budget as `sp_getapplock @LockTimeout`, so the request sits in SQL Server's own
-application-lock queue and returns the instant the lock frees - one round trip for the whole wait,
-however long it is. The single-shot `TryAcquireAsync` still passes `@LockTimeout = 0` and is unchanged.
+application-lock queue and returns the instant the lock frees - one `sp_getapplock` command for the
+whole wait, however long it is. The single-shot `TryAcquireAsync` still passes `@LockTimeout = 0` and is unchanged.
 
 Two consequences worth knowing:
 
@@ -48,5 +48,12 @@ Two consequences worth knowing:
 
 Nothing has to be configured on the server. A cancelled caller's command is cancelled and its connection
 disposed, so no session is left holding a place in the queue.
+
+One thing SqlClient does not do for you: cancelling a command that is blocked inside `sp_getapplock`
+tears the command down, and the driver reports the teardown - *"A severe error occurred on the current
+command"* - as a `SqlException`, not a cancellation. The provider translates that back, so a cancelled
+`AcquireAsync` raises `OperationCanceledException` as the contract says. Without the translation the
+`BackendFaultGuard` would wrap it as `OrionLockBackendException` and tell the caller the backend failed
+for something they asked for.
 
 Requires the `OrionLock` package. See https://github.com/tunahanaliozturk/OrionLock.

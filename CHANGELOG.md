@@ -192,7 +192,7 @@ All notable changes to OrionLock are documented in this file. The format is base
 - **SQL Server no longer throws away SQL Server's lock queue.** `sp_getapplock` takes a
   `@LockTimeout` and the provider passed `0`, which asks the lock manager for an answer now and
   discards the queue behind it. A contended wait now passes the caller's remaining budget, so it is
-  one round trip that returns the moment the lock frees - and it inherits the lock manager's FIFO
+  one `sp_getapplock` command that returns the moment the lock frees - and it inherits the FIFO
   ordering, which polling discarded. The command timeout is raised by the wait budget for that call
   only, or `Microsoft.Data.SqlClient` would abort a legitimate queued wait as though the link had
   hung. Single-shot `TryAcquireAsync` is unchanged.
@@ -254,6 +254,18 @@ All notable changes to OrionLock are documented in this file. The format is base
   covers both members now.
 
 ### Fixed
+
+- **A cancelled SQL Server waiter is told it was cancelled, not that the backend failed.** Cancelling
+  a command blocked inside `sp_getapplock` tears the command down, and `Microsoft.Data.SqlClient`
+  reports the teardown - *"A severe error occurred on the current command"* - as a `SqlException`.
+  The documented contract is that a cancelled acquire raises `OperationCanceledException`, and
+  through DI it was worse than a wrong exception type: `BackendFaultGuard` wraps driver exceptions in
+  `OrionLockBackendException` and deliberately does not wrap cancellation, so the caller was told the
+  backend had failed for something they had asked for. The provider now translates it. PostgreSQL is
+  covered for the same hazard: SQLSTATE 57014 means "this statement was cancelled" and says nothing
+  about who cancelled it, so a caller's cancellation could be read as the `statement_timeout` budget
+  expiring and reported as an ordinary "not acquired" - the quieter half of the same bug. The
+  caller's token now breaks the tie.
 
 - **Driver exceptions no longer escape, and the exception contract is documented in full.**
   `IDistributedLock` documented only `LockAcquisitionTimeoutException` while a caller could also see

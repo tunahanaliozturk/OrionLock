@@ -67,6 +67,40 @@ public sealed class PostgresWaitBudgetTests
     }
 
     [Fact]
+    public void A_statement_cancelled_with_no_caller_cancellation_is_the_budget_running_out()
+    {
+        // 57014 is the server saying "this query was cancelled" and nothing about who cancelled it.
+        // With the caller's token untouched, the only thing that could have is our own
+        // statement_timeout - the budget.
+        Assert.True(PostgresLockProvider.IsBudgetExpiry(
+            Npgsql.PostgresErrorCodes.QueryCanceled, CancellationToken.None));
+    }
+
+    [Fact]
+    public async Task A_statement_cancelled_while_the_caller_is_cancelling_is_not_a_budget_expiry()
+    {
+        // The tie-break that matters. Reading a caller's cancellation as "not acquired" hands them a
+        // timeout for something they asked for - a lie they cannot tell apart from a real one,
+        // because both arrive as a null handle. Npgsql usually converts a token-triggered
+        // cancellation itself, so this guards the case where it does not.
+        using var cts = new CancellationTokenSource();
+        await cts.CancelAsync();
+
+        Assert.False(PostgresLockProvider.IsBudgetExpiry(
+            Npgsql.PostgresErrorCodes.QueryCanceled, cts.Token));
+    }
+
+    [Fact]
+    public void Any_other_sqlstate_is_never_a_budget_expiry()
+    {
+        // Only a cancelled statement can be the timeout; a deadlock or a lock-not-available is a
+        // fault and must keep propagating rather than being reported as a quiet "not acquired".
+        Assert.False(PostgresLockProvider.IsBudgetExpiry(
+            Npgsql.PostgresErrorCodes.DeadlockDetected, CancellationToken.None));
+        Assert.False(PostgresLockProvider.IsBudgetExpiry(null, CancellationToken.None));
+    }
+
+    [Fact]
     public async Task The_wait_validates_its_key_and_owner_exactly_as_the_single_shot_try_does()
     {
         var sut = NewProviderWithoutServer();
@@ -151,6 +185,33 @@ public sealed class PostgresBlockingWaitTests : IClassFixture<PostgresContainerF
         Assert.Equal("0", effective);
 
         await sut.ReleaseAsync(key, "owner", default);
+    }
+
+    [DockerFact]
+    public async Task A_cancelled_blocking_acquire_through_the_full_stack_still_reports_cancellation()
+    {
+        // The SQL Server sibling of this test caught a real defect - SqlClient reports a cancelled
+        // blocking command as a driver error - so the same path is pinned here. Npgsql is expected
+        // to convert a token-triggered cancellation itself; this says so out loud rather than
+        // assuming it, and covers BackendFaultGuard not re-dressing it as a backend fault.
+        using var sut = NewProvider();
+        var key = $"blocking-wait-{Guid.NewGuid():N}";
+        var holder = new DistributedLock(sut);
+        var waiter = new DistributedLock(sut);
+        var options = new DistributedLockOptions
+        {
+            LeaseDuration = Lease,
+            WaitTimeout = TimeSpan.FromSeconds(30),
+            RetryInterval = TimeSpan.FromMilliseconds(50),
+            AutoRenew = false,
+        };
+
+        await using var held = await holder.TryAcquireAsync(key, options);
+        Assert.NotNull(held);
+
+        using var cts = new CancellationTokenSource(400);
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(
+            () => waiter.AcquireAsync(key, options, cts.Token));
     }
 
     [DockerFact]

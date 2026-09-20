@@ -146,6 +146,56 @@ public sealed class SqlServerBlockingWaitTests : IClassFixture<SqlServerContaine
     }
 
     [DockerFact]
+    public async Task A_cancelled_waiter_is_told_it_was_cancelled_not_handed_a_driver_error()
+    {
+        // Cancelling a command blocked inside sp_getapplock tears the command down, and SqlClient
+        // reports the teardown - "A severe error occurred on the current command." - as a
+        // SqlException. The contract says a cancelled acquire raises OperationCanceledException, and
+        // through DI it is worse than a wrong type: BackendFaultGuard wraps driver exceptions in
+        // OrionLockBackendException and does not wrap cancellation, so the caller would be told the
+        // backend failed for something they asked for.
+        using var sut = NewProvider();
+        var key = $"blocking-wait-{Guid.NewGuid():N}";
+
+        Assert.True((await sut.TryAcquireAsync(key, "holder", Lease, default)));
+
+        using var cts = new CancellationTokenSource(400);
+        var thrown = await Assert.ThrowsAnyAsync<Exception>(() => sut.WaitForAcquireAsync(
+            key, "waiter", Lease, TimeSpan.FromSeconds(30), LockWaitPolicy.Default, cts.Token));
+
+        Assert.IsAssignableFrom<OperationCanceledException>(thrown);
+        Assert.IsNotType<Microsoft.Data.SqlClient.SqlException>(thrown);
+
+        await sut.ReleaseAsync(key, "holder", default);
+    }
+
+    [DockerFact]
+    public async Task A_cancelled_blocking_acquire_through_the_full_stack_still_reports_cancellation()
+    {
+        // The same fact where a consumer meets it: through DistributedLock, which wraps the provider
+        // in BackendFaultGuard. A driver exception escaping the provider would arrive here dressed
+        // as OrionLockBackendException.
+        using var sut = NewProvider();
+        var key = $"blocking-wait-{Guid.NewGuid():N}";
+        var holder = new DistributedLock(sut);
+        var waiter = new DistributedLock(sut);
+        var options = new DistributedLockOptions
+        {
+            LeaseDuration = Lease,
+            WaitTimeout = TimeSpan.FromSeconds(30),
+            RetryInterval = TimeSpan.FromMilliseconds(50),
+            AutoRenew = false,
+        };
+
+        await using var held = await holder.TryAcquireAsync(key, options);
+        Assert.NotNull(held);
+
+        using var cts = new CancellationTokenSource(400);
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(
+            () => waiter.AcquireAsync(key, options, cts.Token));
+    }
+
+    [DockerFact]
     public async Task A_cancelled_waiter_leaves_no_session_parked_in_the_queue()
     {
         using var sut = NewProvider();
@@ -167,7 +217,7 @@ public sealed class SqlServerBlockingWaitTests : IClassFixture<SqlServerContaine
     }
 
     [DockerFact]
-    public async Task The_whole_wait_is_one_round_trip_through_the_blocking_acquire()
+    public async Task The_whole_wait_is_one_command_through_the_blocking_acquire()
     {
         using var sut = NewProvider();
         var key = $"blocking-wait-{Guid.NewGuid():N}";
@@ -185,12 +235,28 @@ public sealed class SqlServerBlockingWaitTests : IClassFixture<SqlServerContaine
         var held = await holder.TryAcquireAsync(key, options);
         Assert.NotNull(held);
 
+        // Count the WAITER only. The gate acquire above goes through the same decorator, and
+        // counting it made this assert read 2 and look like the provider issuing a second command -
+        // which is exactly the misreading the number exists to prevent. The scaffolding does not get
+        // to be part of the measurement.
+        counting.Reset();
+
         var acquire = waiter.AcquireAsync(key, options);
         await Task.Delay(500);
         // 500 ms at a 50 ms retry interval is ten polls under the old behaviour. Under the new one
-        // it is still the single wait the first refusal started.
-        Assert.Equal(1, counting.WaitCalls);
-        Assert.Equal(1, counting.TryCalls);
+        // it is one refused attempt and the single wait that refusal started, still open.
+        //
+        // Both counts are reported together on failure. A bare Assert.Equal here says only
+        // "expected 1, actual 2" and leaves the reader unable to tell a second sp_getapplock command
+        // from a second attempt - which is exactly the ambiguity that made the first CI failure of
+        // this test look like a provider bug when it was the harness counting its own gate acquire.
+        Assert.True(
+            counting.WaitCalls == 1 && counting.TryCalls == 1,
+            $"the waiter should cost one refused attempt and one open wait, but made "
+            + $"{counting.TryCalls} TryAcquireAsync call(s) and {counting.WaitCalls} "
+            + $"WaitForAcquireAsync call(s). More than one wait means the blocking sp_getapplock "
+            + "returned early and the core asked again - if that is real, the documented "
+            + "one-command-per-wait figure is wrong and both it and this test have to change.");
 
         await held!.DisposeAsync();
         await using var won = await acquire;
@@ -205,6 +271,13 @@ public sealed class SqlServerBlockingWaitTests : IClassFixture<SqlServerContaine
 
         public int TryCalls => Volatile.Read(ref tryCalls);
         public int WaitCalls => Volatile.Read(ref waitCalls);
+
+        /// <summary>Zeroes the ledger so a test can exclude its own scaffolding from the count.</summary>
+        public void Reset()
+        {
+            Volatile.Write(ref tryCalls, 0);
+            Volatile.Write(ref waitCalls, 0);
+        }
 
         public Task<bool> TryAcquireAsync(string key, string ownerToken, TimeSpan leaseDuration, CancellationToken cancellationToken)
         {

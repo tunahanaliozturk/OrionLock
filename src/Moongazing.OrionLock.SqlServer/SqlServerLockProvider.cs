@@ -168,6 +168,25 @@ public sealed class SqlServerLockProvider : IDistributedLockProvider, IDisposabl
                         key, $"sp_getapplock returned {returnCode} (deadlock victim, validation error, or other backend failure).");
             }
         }
+        catch (SqlException) when (cancellationToken.IsCancellationRequested)
+        {
+            // A caller who cancels while the command is blocked inside sp_getapplock does not get a
+            // cancellation from SqlClient: cancelling tears the command down and the driver reports
+            // the teardown - "A severe error occurred on the current command." - as a SqlException.
+            // The contract says a cancelled acquire raises OperationCanceledException, so the
+            // translation belongs here, at the only place that knows both the driver's dialect and
+            // the caller's token.
+            //
+            // It matters beyond the exception type: BackendFaultGuard wraps driver exceptions in
+            // OrionLockBackendException and deliberately does NOT wrap cancellation, so without this
+            // a cancelled caller would come out of DI holding a backend-fault exception for
+            // something that was not a fault at all.
+            //
+            // Disposing the connection is what returns the session - and its place in SQL Server's
+            // lock queue - so a cancelled waiter leaves nothing parked.
+            try { await conn.DisposeAsync().ConfigureAwait(false); } catch { /* already failing */ }
+            throw new OperationCanceledException(cancellationToken);
+        }
         catch
         {
             try { await conn.DisposeAsync().ConfigureAwait(false); } catch { /* already failing */ }
