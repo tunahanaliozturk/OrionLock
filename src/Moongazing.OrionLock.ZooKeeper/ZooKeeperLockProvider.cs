@@ -1,4 +1,4 @@
-namespace Moongazing.OrionLock.ZooKeeper;
+﻿namespace Moongazing.OrionLock.ZooKeeper;
 
 using System.Collections.Concurrent;
 using System.Text;
@@ -50,7 +50,9 @@ public sealed class ZooKeeperLockProvider : IDistributedLockProvider
         this.options.ValidateAndNormalise();
     }
 
-    private string ParentPath(string lockKey) => $"{options.RootPath}/{lockKey}";
+    // The key becomes exactly ONE znode name: it is encoded rather than concatenated, so a key
+    // containing '/' can no longer expand into a chain of PERSISTENT znodes that nothing ever deletes.
+    private string ParentPath(string lockKey) => $"{options.RootPath}/{ZooKeeperKeyName.Encode(lockKey)}";
 
     /// <inheritdoc />
     public async Task<bool> TryAcquireAsync(
@@ -67,18 +69,17 @@ public sealed class ZooKeeperLockProvider : IDistributedLockProvider
         string created;
         try
         {
-            created = await zk.CreateEphemeralSequentialAsync(
-                parent,
-                childPrefix: "lock-",
-                data: Encoding.UTF8.GetBytes(ownerToken),
-                cancellationToken).ConfigureAwait(false);
+            created = await CreateChildAsync(parent, ownerToken, cancellationToken).ConfigureAwait(false);
         }
         catch
         {
-            // EnsurePath succeeded but the child create failed (network blip, session
-            // close). Nothing to clean up - the ephemeral child either was not created or
-            // will be auto-deleted on session expiry.
-            throw;
+            // A release running concurrently can prune an empty parent between our EnsurePath and our
+            // create, which would surface as a spurious acquire failure. Re-ensure the parent and try
+            // once more; a second failure is a real one (network blip, session close) and propagates.
+            // Nothing to clean up either way - the ephemeral child either was not created or will be
+            // auto-deleted on session expiry.
+            await zk.EnsurePathAsync(parent, cancellationToken).ConfigureAwait(false);
+            created = await CreateChildAsync(parent, ownerToken, cancellationToken).ConfigureAwait(false);
         }
 
         // ZooKeeper's lock recipe: we own the lock when our child znode has the lowest
@@ -107,6 +108,34 @@ public sealed class ZooKeeperLockProvider : IDistributedLockProvider
         {
             await TryDeleteAsync(created).ConfigureAwait(false);
             throw;
+        }
+    }
+
+    private Task<string> CreateChildAsync(string parent, string ownerToken, CancellationToken cancellationToken)
+        => zk.CreateEphemeralSequentialAsync(
+            parent,
+            childPrefix: "lock-",
+            data: Encoding.UTF8.GetBytes(ownerToken),
+            cancellationToken);
+
+    // Best-effort prune of a lock's parent znode once its last child is gone. The parent is PERSISTENT,
+    // so without this every key ever locked leaves a znode behind for the lifetime of the ensemble - and
+    // ZooKeeper holds its whole tree in memory. Failure is fine and expected: a concurrent acquirer may
+    // create a child between the check and the delete, and ZooKeeper then refuses to delete a non-empty
+    // znode. A parent left behind is exactly the old behaviour.
+    private async Task TryPruneParentAsync(string parent)
+    {
+        try
+        {
+            var children = await zk.GetChildrenAsync(parent, CancellationToken.None).ConfigureAwait(false);
+            if (children.Count == 0)
+            {
+                await zk.DeleteAsync(parent, CancellationToken.None).ConfigureAwait(false);
+            }
+        }
+        catch
+        {
+            // See above: losing this race is the no-op case, not an error worth surfacing.
         }
     }
 
@@ -161,6 +190,9 @@ public sealed class ZooKeeperLockProvider : IDistributedLockProvider
             // ZooKeeper auto-deletes the ephemeral on session close, so a delete failure
             // here is benign - the next acquirer sees a clean parent znode as soon as the
             // session expires.
+            return;
         }
+
+        await TryPruneParentAsync(ParentPath(key)).ConfigureAwait(false);
     }
 }

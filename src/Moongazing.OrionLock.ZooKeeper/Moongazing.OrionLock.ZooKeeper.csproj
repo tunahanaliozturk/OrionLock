@@ -1,4 +1,4 @@
-<Project Sdk="Microsoft.NET.Sdk">
+﻿<Project Sdk="Microsoft.NET.Sdk">
   <PropertyGroup>
     <PackageId>OrionLock.ZooKeeper</PackageId>
     <!-- Unpublished backend held below 1.0 (not on the published pack list, never released). Overrides the repo-wide 1.0.0 in Directory.Build.props. -->
@@ -9,6 +9,9 @@
   <ItemGroup>
     <PackageReference Include="ZooKeeperNetEx" Version="3.4.12.4" />
     <PackageReference Include="Microsoft.Extensions.DependencyInjection.Abstractions" Version="9.0.0" />
+  </ItemGroup>
+  <ItemGroup>
+    <InternalsVisibleTo Include="Moongazing.OrionLock.ZooKeeper.Tests" />
   </ItemGroup>
   <ItemGroup>
     <ProjectReference Include="..\Moongazing.OrionLock\Moongazing.OrionLock.csproj" />
