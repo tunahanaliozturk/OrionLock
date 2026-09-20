@@ -32,12 +32,27 @@ namespace Moongazing.OrionLock;
 public sealed class SharedExclusiveLock : ISharedExclusiveLock
 {
     private readonly ISharedExclusiveLockProvider provider;
+    // Optional consumer-registered lifecycle observer. Null and NullLockEventObserver are both
+    // treated as 'no observer', exactly as DistributedLock does.
+    private readonly ILockEventObserver? eventObserver;
 
     /// <summary>Creates a reader-writer lock over the given backend provider.</summary>
     public SharedExclusiveLock(ISharedExclusiveLockProvider provider)
+        : this(provider, eventObserver: null)
+    {
+    }
+
+    /// <summary>
+    /// Creates a reader-writer lock that also reports lifecycle events to the given
+    /// <see cref="ILockEventObserver"/>. The observer receives OnAcquired / OnAcquireTimedOut from
+    /// this class and OnLeaseLost / OnReleased from the handles it creates - the same contract
+    /// <see cref="DistributedLock"/> honours for exclusive holds.
+    /// </summary>
+    public SharedExclusiveLock(ISharedExclusiveLockProvider provider, ILockEventObserver? eventObserver)
     {
         ArgumentNullException.ThrowIfNull(provider);
         this.provider = provider;
+        this.eventObserver = eventObserver is NullLockEventObserver ? null : eventObserver;
     }
 
     /// <inheritdoc />
@@ -107,7 +122,8 @@ public sealed class SharedExclusiveLock : ISharedExclusiveLock
             return null;
         }
 
-        var handle = new SharedExclusiveLockHandle(provider, key, ownerToken, mode, options);
+        // Thread the lifecycle observer into the handle so it can fire OnLeaseLost / OnReleased.
+        var handle = new SharedExclusiveLockHandle(provider, key, ownerToken, mode, options, eventObserver);
         // Same held-concurrent gauge convention as the exclusive path: increment only when a real
         // backend hold is taken. The handle decrements exactly once on dispose / loss.
         OrionLockDiagnostics.IncrementLeasesHeld();
@@ -140,18 +156,25 @@ public sealed class SharedExclusiveLock : ISharedExclusiveLock
             var ownerToken = Guid.NewGuid().ToString("N");
             var deadline = Stopwatch.StartNew();
             var contended = false;
+            int attempts = 0;
             while (true)
             {
+                attempts++;
                 var handle = await TryAcquireAsync(key, ownerToken, mode, options, cancellationToken).ConfigureAwait(false);
                 if (handle is not null)
                 {
                     activity?.SetTag("orionlock.outcome", "acquired");
                     OrionLockDiagnostics.RecordAcquisition();
                     OrionLockDiagnostics.RecordAcquireDuration(deadline.Elapsed.TotalMilliseconds);
+                    // Per-acquire attempt count for retry-interval sizing, same emission point and
+                    // successful-acquires-only rule as the exclusive path.
+                    OrionLockDiagnostics.RecordAcquireAttemptCount(attempts);
                     if (contended)
                     {
                         OrionLockDiagnostics.RecordContentionDuration(deadline.Elapsed.TotalMilliseconds);
                     }
+                    // Safe-invoke swallows observer faults so audit-side outages cannot break acquires.
+                    eventObserver.SafeOnAcquired(key, deadline.Elapsed.TotalMilliseconds);
                     return handle;
                 }
 
@@ -163,6 +186,8 @@ public sealed class SharedExclusiveLock : ISharedExclusiveLock
                 {
                     activity?.SetTag("orionlock.outcome", "timeout");
                     OrionLockDiagnostics.RecordAcquireTimeout(key);
+                    // Notify the observer BEFORE the throw (mirrors the counter ordering above).
+                    eventObserver.SafeOnAcquireTimedOut(key, deadline.Elapsed.TotalMilliseconds);
                     throw new LockAcquisitionTimeoutException(key, deadline.Elapsed);
                 }
 
