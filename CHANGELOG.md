@@ -9,6 +9,33 @@ All notable changes to OrionLock are documented in this file. The format is base
 
 ### Fixed
 
+- **BREAKING (behaviour): reentrancy is now scoped to the flow that holds the lock, not to the key.**
+  Same-process reentrancy was keyed on the lock key alone, and `AddOrionLock` registers
+  `IDistributedLock` as a singleton — so two *unrelated* callers on the same instance (two concurrent
+  HTTP requests, say) asking for the same key both got a handle: the second was handed a nested handle
+  over the first one's lease, the backend was never consulted, and both ran inside the critical section
+  at once. This defeated mutual exclusion for every in-process caller of a shared `IDistributedLock`.
+  An acquire now establishes an owner identity in the calling flow (an `AsyncLocal` scope, like
+  `Activity.Current`); only a re-acquire from that same flow — including one made deeper in the call
+  stack, after any number of `await`s — collapses into a nested handle. Any other caller goes to the
+  backend and contends normally.
+
+  **What to check:** if you have in-process callers that were *silently* sharing a lease, they will now
+  block against each other and `AcquireAsync` can throw `LockAcquisitionTimeoutException` (or
+  `TryAcquireAsync` return `null`) where it previously returned immediately. That is the correct
+  behaviour and almost certainly what you wanted, but it can surface as new contention or new timeouts
+  under load. Deliberate reentrancy is unaffected as long as the nested acquire runs inside the flow
+  that took the outer one. Work forked off that flow (`Task.Run` inside the critical section) inherits
+  the scope and still re-enters; work started from an independent context does not.
+
+- **A nested handle is no longer handed out over a lease that has already been lost.** If the renewal
+  watchdog surrendered the lease (renewal failure past `RenewalFailureGracePeriod`, or a backend-
+  confirmed loss), a re-acquire from the same flow still got a nested handle over that dead lease —
+  non-null, with nothing holding the key at the backend. The registry now checks the real handle is
+  still held, and falls through to a genuine backend acquire when it is not. If you were relying on a
+  nested acquire always succeeding, check `IsHeld` / `LostToken` on the outer handle: it was already
+  telling you the lease was gone.
+
 - **A lock handle no longer stops renewing its lease in silence when the backend raises an unrelated
   cancellation.** The exclusive handle's renewal watchdog caught *every* `OperationCanceledException`
   from `TryRenewAsync` and returned. If a provider surfaced a cancellation that was not the handle's own

@@ -59,7 +59,10 @@ public sealed class DistributedLock : IDistributedLock
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(key);
         options ??= new DistributedLockOptions();
-        return TryAcquireAsync(key, Guid.NewGuid().ToString("N"), options, cancellationToken);
+        // Establish the reentrancy owner scope HERE, in the caller's synchronous frame, so it survives
+        // into the caller's critical section. See ReentrancyRegistry.EnsureOwnerScope.
+        var owner = ReentrancyRegistry.EnsureOwnerScope();
+        return TryAcquireAsync(key, Guid.NewGuid().ToString("N"), owner, options, cancellationToken);
     }
 
     /// <inheritdoc />
@@ -68,6 +71,7 @@ public sealed class DistributedLock : IDistributedLock
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(key);
         options ??= new DistributedLockOptions();
+        var owner = ReentrancyRegistry.EnsureOwnerScope();
 
         // Mint the owner token ONCE and reuse it across every deadline-retry attempt, exactly as the
         // blocking AcquireAsync loop does. A fresh token per attempt would make each retry a DIFFERENT
@@ -75,13 +79,13 @@ public sealed class DistributedLock : IDistributedLock
         // identity stable, matching the reader-writer deadline overloads.
         var ownerToken = Guid.NewGuid().ToString("N");
         return DeadlineAcquire.TryAcquireUntilDeadlineAsync(
-            (k, o, ct) => TryAcquireAsync(k, ownerToken, o!, ct), key, deadline, options, cancellationToken);
+            (k, o, ct) => TryAcquireAsync(k, ownerToken, owner, o!, ct), key, deadline, options, cancellationToken);
     }
 
     private async Task<IDistributedLockHandle?> TryAcquireAsync(
-        string key, string ownerToken, DistributedLockOptions options, CancellationToken cancellationToken)
+        string key, string ownerToken, object owner, DistributedLockOptions options, CancellationToken cancellationToken)
     {
-        var nested = reentrancy.TryEnter(key);
+        var nested = reentrancy.TryEnter(key, owner);
         if (nested is not null)
         {
             return nested;
@@ -104,16 +108,25 @@ public sealed class DistributedLock : IDistributedLock
         // returns (null) are excluded. The handle's DisposeAsync / watchdog-loss paths
         // decrement exactly once via DecrementOnceIfHeld.
         OrionLockDiagnostics.IncrementLeasesHeld();
-        return reentrancy.Register(key, real);
+        return reentrancy.Register(key, owner, real);
     }
 
     /// <inheritdoc />
-    public async Task<IDistributedLockHandle> AcquireAsync(
+    public Task<IDistributedLockHandle> AcquireAsync(
         string key, DistributedLockOptions? options = null, CancellationToken cancellationToken = default)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(key);
         options ??= new DistributedLockOptions();
+        // Deliberately NOT an async method: EnsureOwnerScope must run in the caller's own execution
+        // context (an async body's context changes are discarded when it returns), so the blocking
+        // acquire is a thin synchronous shim over the async core.
+        var owner = ReentrancyRegistry.EnsureOwnerScope();
+        return AcquireCoreAsync(key, owner, options, cancellationToken);
+    }
 
+    private async Task<IDistributedLockHandle> AcquireCoreAsync(
+        string key, object owner, DistributedLockOptions options, CancellationToken cancellationToken)
+    {
         // Hot path: only build the interpolated activity name when a listener is actually
         // subscribed. With no listener StartActivity returns null and the name is never
         // observed, so the per-acquire string allocation is pure waste. HasListeners() gates
@@ -145,7 +158,8 @@ public sealed class DistributedLock : IDistributedLock
             while (true)
             {
                 attempts++;
-                var handle = await TryAcquireAsync(key, options, cancellationToken).ConfigureAwait(false);
+                var handle = await TryAcquireAsync(
+                    key, Guid.NewGuid().ToString("N"), owner, options, cancellationToken).ConfigureAwait(false);
                 if (handle is not null)
                 {
                     activity?.SetTag("orionlock.outcome", "acquired");
