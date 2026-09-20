@@ -78,13 +78,22 @@ public sealed class FencingTokenTests
         // hold: this has to be a real race at the provider, not a registry hit.
         var provider = new InMemoryLockProvider();
         var seen = new List<long>();
+        // A tight retry and a generous wait keep eight contenders racing for real without letting an
+        // unlucky one time out on a loaded CI runner - a timeout here would be a flake, not a finding.
+        var options = new DistributedLockOptions
+        {
+            LeaseDuration = TimeSpan.FromSeconds(30),
+            AutoRenew = false,
+            RetryInterval = TimeSpan.FromMilliseconds(2),
+            WaitTimeout = TimeSpan.FromSeconds(60),
+        };
 
         async Task ContendAsync()
         {
             var sut = new DistributedLock(provider);
             for (var i = 0; i < 20; i++)
             {
-                var handle = await sut.AcquireAsync("fence-race", NoRenew);
+                var handle = await sut.AcquireAsync("fence-race", options);
                 var token = handle.RequireFencingToken();
                 lock (seen) { seen.Add(token); }
                 await handle.DisposeAsync();
@@ -138,28 +147,50 @@ public sealed class FencingTokenTests
         Assert.Equal(outer.FencingToken, inner.FencingToken);
     }
 
+    /// <summary>Remembers the owner token of the last acquire so a test can drive renewal by hand.</summary>
+    private sealed class OwnerCapturingProvider(IDistributedLockProvider inner) : IDistributedLockProvider
+    {
+        public string? LastOwnerToken { get; private set; }
+
+        public async Task<LockAcquisition> TryAcquireFencedAsync(
+            string key, string ownerToken, TimeSpan leaseDuration, CancellationToken ct)
+        {
+            var result = await inner.TryAcquireFencedAsync(key, ownerToken, leaseDuration, ct);
+            if (result.Acquired)
+            {
+                LastOwnerToken = ownerToken;
+            }
+            return result;
+        }
+
+        public async Task<bool> TryAcquireAsync(string key, string ownerToken, TimeSpan leaseDuration, CancellationToken ct)
+            => (await TryAcquireFencedAsync(key, ownerToken, leaseDuration, ct)).Acquired;
+
+        public Task<bool> TryRenewAsync(string key, string ownerToken, TimeSpan leaseDuration, CancellationToken ct)
+            => inner.TryRenewAsync(key, ownerToken, leaseDuration, ct);
+
+        public Task ReleaseAsync(string key, string ownerToken, CancellationToken ct)
+            => inner.ReleaseAsync(key, ownerToken, ct);
+    }
+
     [Fact]
     public async Task The_token_does_not_change_when_the_lease_is_renewed()
     {
-        var provider = new InMemoryLockProvider();
+        // Renewal is driven by hand rather than by waiting on the watchdog: the assertion is about the
+        // token surviving a renewal, and a timing-based version would fail on a loaded machine for a
+        // reason that has nothing to do with fencing.
+        var provider = new OwnerCapturingProvider(new InMemoryLockProvider());
         var sut = new DistributedLock(provider);
 
-        await using var handle = await sut.AcquireAsync(
-            "fence-renew",
-            new DistributedLockOptions
-            {
-                // A lease this short renews several times inside the delay below, so the assertion is
-                // about observed renewals rather than about a watchdog that might not have ticked.
-                LeaseDuration = TimeSpan.FromMilliseconds(150),
-                AutoRenew = true,
-            });
+        await using var handle = await sut.AcquireAsync("fence-renew", NoRenew);
         var atAcquire = handle.RequireFencingToken();
 
-        await Task.Delay(400);
+        Assert.True(await provider.TryRenewAsync(
+            "fence-renew", provider.LastOwnerToken!, TimeSpan.FromSeconds(30), default));
 
-        Assert.True(handle.IsHeld);
         // The token identifies the ACQUISITION. Advancing it on renewal would start failing our own
         // later writes against a resource that had already recorded the earlier number.
+        Assert.True(handle.IsHeld);
         Assert.Equal(atAcquire, handle.FencingToken);
     }
 
