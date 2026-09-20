@@ -60,7 +60,7 @@ public sealed class ZooKeeperPredecessorWatchTests
         var acquired = await sut.WaitForAcquireAsync(
             Key, "owner-1", Lease, TimeSpan.FromSeconds(30), LockWaitPolicy.Default, default);
 
-        Assert.True(acquired);
+        Assert.True(acquired.Acquired);
         Assert.Equal(1, zk.CreateCalls);
         Assert.Equal(0, zk.DeleteCalls);
         Assert.Equal(2, zk.GetChildrenCalls);
@@ -78,8 +78,8 @@ public sealed class ZooKeeperPredecessorWatchTests
         };
         var sut = new ZooKeeperLockProvider(zk);
 
-        Assert.True(await sut.WaitForAcquireAsync(
-            Key, "owner-1", Lease, TimeSpan.FromSeconds(30), LockWaitPolicy.Default, default));
+        Assert.True((await sut.WaitForAcquireAsync(
+            Key, "owner-1", Lease, TimeSpan.FromSeconds(30), LockWaitPolicy.Default, default)).Acquired);
 
         Assert.Equal(0, zk.WatchCalls);
         // Ensure path, create, list. Nothing else: the winning path is three calls, same as the
@@ -105,8 +105,8 @@ public sealed class ZooKeeperPredecessorWatchTests
         };
         var sut = new ZooKeeperLockProvider(zk);
 
-        Assert.True(await sut.WaitForAcquireAsync(
-            Key, "owner-1", Lease, TimeSpan.FromSeconds(30), LockWaitPolicy.Default, default));
+        Assert.True((await sut.WaitForAcquireAsync(
+            Key, "owner-1", Lease, TimeSpan.FromSeconds(30), LockWaitPolicy.Default, default)).Acquired);
 
         Assert.Equal(3, zk.GetChildrenCalls);
         Assert.Equal(2, zk.WatchCalls);
@@ -126,8 +126,8 @@ public sealed class ZooKeeperPredecessorWatchTests
         };
         var sut = new ZooKeeperLockProvider(zk);
 
-        Assert.False(await sut.WaitForAcquireAsync(
-            Key, "owner-1", Lease, TimeSpan.FromSeconds(30), LockWaitPolicy.Default, default));
+        Assert.False((await sut.WaitForAcquireAsync(
+            Key, "owner-1", Lease, TimeSpan.FromSeconds(30), LockWaitPolicy.Default, default)).Acquired);
 
         Assert.Equal(1, zk.DeleteCalls);
         Assert.Equal(Parent + "/lock-0000000002", zk.DeletedPath);
@@ -163,8 +163,8 @@ public sealed class ZooKeeperPredecessorWatchTests
         };
         var sut = new ZooKeeperLockProvider(zk);
 
-        Assert.False(await sut.WaitForAcquireAsync(
-            Key, "owner-1", Lease, TimeSpan.FromSeconds(30), LockWaitPolicy.Default, default));
+        Assert.False((await sut.WaitForAcquireAsync(
+            Key, "owner-1", Lease, TimeSpan.FromSeconds(30), LockWaitPolicy.Default, default)).Acquired);
 
         Assert.Equal(1, zk.DeleteCalls);
     }
@@ -179,8 +179,8 @@ public sealed class ZooKeeperPredecessorWatchTests
         };
         var sut = new ZooKeeperLockProvider(zk);
 
-        Assert.True(await sut.WaitForAcquireAsync(
-            Key, "owner-1", Lease, TimeSpan.FromSeconds(30), LockWaitPolicy.Default, default));
+        Assert.True((await sut.WaitForAcquireAsync(
+            Key, "owner-1", Lease, TimeSpan.FromSeconds(30), LockWaitPolicy.Default, default)).Acquired);
 
         await sut.ReleaseAsync(Key, "owner-1", default);
 

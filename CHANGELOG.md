@@ -1,4 +1,4 @@
-﻿<!-- markdownlint-disable MD024 -->
+<!-- markdownlint-disable MD024 -->
 # Changelog
 
 All notable changes to OrionLock are documented in this file. The format is based on
@@ -162,6 +162,93 @@ All notable changes to OrionLock are documented in this file. The format is base
   with a message naming `KeyPrefix` / `RootPath` instead of at the first acquire. Backends whose prefix
   is parameterised rather than concatenated into a path (Redis, etcd, SQL Server, PostgreSQL, EF Core —
   all of which pass it as a protocol field or a SQL parameter) are unaffected and unchanged.
+
+- **`IDistributedLockProvider.WaitForAcquireAsync`: a backend can now be told when the lock is free
+  instead of being asked.** Every waiter polled. `AcquireAsync`, the deadline overloads and the
+  reader-writer acquire all waited by sleeping a flat `RetryInterval`, so 256 waiters on one key cost
+  1044 provider calls to hand the lock around, and a hand-off could not beat one Windows timer tick
+  however the interval was configured. The new member is a **default interface method whose default
+  body is exactly that poll loop**, so every existing and third-party provider keeps behaving as it
+  did without a line of change; a backend that can block server-side or subscribe to a release
+  notification overrides it and returns the instant the lock frees. The core hands it the caller's
+  REMAINING budget, and `WaitTimeout`, cancellation and the deadline overloads are unchanged. A wait
+  that ends early without a grant - a dropped subscription - is reported as `false`, and the core
+  degrades to polling rather than failing the caller.
+
+- **`DistributedLockOptions.RetryBackoffCeiling`.** Null by default, which keeps the flat
+  `RetryInterval` every earlier release used. Set it and each fallback poll sleeps a random duration
+  in `[RetryInterval, min(RetryInterval * 2^attempts, ceiling)]`, so N waiters that arrived together
+  stop waking on the same tick for the whole queue drain. `RetryInterval` remains the floor.
+
+- **`LockWaitPolicy`**, the wait shape handed to a provider, and **`LockWaitPolicy.ToPollOptions()`**,
+  so a backend's poll fallback uses the shipped backoff rather than each package rebuilding it.
+
+- **`RedisLockOptions.UseReleaseNotifications` and `ReleaseChannelSuffix`**, and
+  **`InMemoryLockProvider.WaitForAcquireAsync`** - the reference implementation of an event-driven
+  wait, and the way a test proves a waiter parks rather than spins without needing a container.
+
+### Changed
+
+- **SQL Server no longer throws away SQL Server's lock queue.** `sp_getapplock` takes a
+  `@LockTimeout` and the provider passed `0`, which asks the lock manager for an answer now and
+  discards the queue behind it. A contended wait now passes the caller's remaining budget, so it is
+  one round trip that returns the moment the lock frees - and it inherits the lock manager's FIFO
+  ordering, which polling discarded. The command timeout is raised by the wait budget for that call
+  only, or `Microsoft.Data.SqlClient` would abort a legitimate queued wait as though the link had
+  hung. Single-shot `TryAcquireAsync` is unchanged.
+
+- **PostgreSQL blocks on `pg_advisory_lock` instead of re-asking `pg_try_advisory_lock`.** The wait
+  is bounded by `statement_timeout`, set from the caller's remaining budget in the same round trip;
+  PostgreSQL cancels its own blocked statement when the budget lapses and reports SQLSTATE 57014,
+  read as "not acquired" rather than as a fault. `statement_timeout` is `RESET` on success so the
+  renewal probe and the release that share the connection do not inherit the wait's budget.
+
+- **Redis wakes waiters on a per-key release channel instead of re-issuing `SET NX`.** The release
+  publishes to it fire-and-forget, so the notification costs the releasing caller no round trip and
+  can never fail a release. This is a DEDICATED channel, not keyspace notifications:
+  `notify-keyspace-events` is off by default and a client library cannot turn it on, so a lock that
+  silently never notified would be worse than one that polls. **No server-side configuration is
+  required.** A lock freed by TTL publishes nothing, so the wait is also bounded by the holder's
+  remaining TTL - read once per wait, not once per retry interval. Set
+  `UseReleaseNotifications = false` to restore the old poll loop exactly.
+
+- **etcd watches the lock key** and retries when the cluster reports it deleted, which covers a
+  release and a lease that lapsed under a crashed holder alike. A failed etcd attempt costs three
+  round trips (lease grant, transactional put, lease revoke), so this replaces three per waiter per
+  tick with three once.
+
+- **Consul parks on a blocking query** against the key's modify index rather than re-attempting.
+  A failed Consul attempt also costs three round trips (create session, KV acquire, destroy
+  session). A KV entry with no session on it is free whether the holder released it or its session
+  expired under the `release` behaviour, so the query covers a crashed holder too.
+
+- **ZooKeeper now runs the actual sequential-znode recipe.** The poll loop created an ephemeral
+  sequential child, listed the siblings, deleted the child and slept - four round trips per tick,
+  and a NEW sequence number every tick. Sequence numbers ARE the queue, so re-minting one every tick
+  threw FIFO ordering away entirely and a waiter could be overtaken indefinitely. The child is now
+  created once and kept, and when it is not the lowest the waiter watches its IMMEDIATE predecessor -
+  not the holder, so a hand-off wakes one waiter rather than all of them. Each position gained costs
+  one children listing and one watched `exists`: two round trips, against four per tick for as long
+  as the old loop waited. Arrival order is honoured again. The child is deleted on every path that
+  does not win, since an abandoned one blocks every waiter behind it until the session expires.
+
+- **`IEtcdClientAdapter.WaitForKeyDeletedAsync`, `IConsulClientAdapter.WaitForKeyFreeAsync` and
+  `IZooKeeperClientAdapter.WaitForNodeDeletedAsync`** are new default interface methods answering
+  `false`, so a custom adapter written before this keeps compiling and simply keeps polling.
+
+- **Every retry loop in the library now goes through the jittered backoff** that already existed in
+  `DistributedLockProviderExtensions.ComputeJitteredDelay` and was called only by tests. With
+  `RetryBackoffCeiling` left null the jitter window collapses onto `RetryInterval`, so the default is
+  the same flat interval as before.
+
+- **`orion.lock.acquire.attempt_count` now counts the attempts the CORE issued**, which for a backend
+  that blocks or subscribes collapses towards 2 per acquire - the wait is one backend interaction
+  rather than N. The reduction is the win, stated in the metric rather than hidden by it.
+
+- **`MeasuringLockProvider` forwards the new member.** It decorates every provider `AddOrionLock`
+  registers, so without that every backend override above would be unreachable in production while
+  still passing its own tests - exactly the trap `LeaseDurationIsTtl` fell into. The regression test
+  covers both members now.
 
 ### Fixed
 

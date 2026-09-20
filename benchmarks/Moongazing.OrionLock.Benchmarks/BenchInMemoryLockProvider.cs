@@ -79,14 +79,14 @@ public sealed class BenchInMemoryLockProvider : IDistributedLockProvider
         return Task.CompletedTask;
     }
 
-    public async Task<bool> WaitForAcquireAsync(
+    public async Task<LockAcquisition> WaitForAcquireAsync(
         string key, string ownerToken, TimeSpan leaseDuration, TimeSpan maxWait,
         LockWaitPolicy waitPolicy, CancellationToken cancellationToken)
     {
         if (!eventDriven)
         {
             // The pre-v2.1 shape: the interface default, which is the poll loop.
-            return await DistributedLockProviderExtensions.WaitForAcquireAsync(
+            return await DistributedLockProviderExtensions.PollUntilAcquiredAsync(
                 this, key, ownerToken, leaseDuration, maxWait, waitPolicy.ToPollOptions(), cancellationToken)
                 .ConfigureAwait(false);
         }
@@ -100,15 +100,17 @@ public sealed class BenchInMemoryLockProvider : IDistributedLockProvider
             var signal = releaseSignals.GetOrAdd(
                 key, static _ => new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously));
 
+            // This bench provider mints no fencing tokens, so an unfenced grant is the honest
+            // answer - not a token invented to satisfy the type.
             if (await TryAcquireAsync(key, ownerToken, leaseDuration, cancellationToken).ConfigureAwait(false))
             {
-                return true;
+                return LockAcquisition.Unfenced;
             }
 
             var remaining = maxWait - elapsed.Elapsed;
             if (remaining <= TimeSpan.Zero)
             {
-                return false;
+                return LockAcquisition.NotAcquired;
             }
 
             try
@@ -117,7 +119,7 @@ public sealed class BenchInMemoryLockProvider : IDistributedLockProvider
             }
             catch (TimeoutException)
             {
-                return false;
+                return LockAcquisition.NotAcquired;
             }
         }
     }

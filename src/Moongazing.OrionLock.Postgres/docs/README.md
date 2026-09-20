@@ -19,6 +19,22 @@ services.AddOrionLock()
 - **Session-scoped, no clock expiry.** A crashed process releases its locks the moment the database session terminates. There is no lease timer in Postgres itself; OrionLock's renewal watchdog only probes the connection liveness.
 - **Connection pooling.** The provider holds each dedicated `NpgsqlConnection` open for the lifetime of the lock and disposes it on release, returning it to the Npgsql pool only after `pg_advisory_unlock` has run.
 
+## Waiting blocks in PostgreSQL, it does not poll
+
+A contended `AcquireAsync` no longer re-issues `pg_try_advisory_lock` every `RetryInterval`. It blocks on
+`pg_advisory_lock`, which returns the instant the lock frees, and bounds that block with
+`statement_timeout` set from the caller's remaining budget in the same round trip. PostgreSQL cancels its
+own blocked statement when the budget lapses and reports SQLSTATE 57014, which the provider reads as "not
+acquired" rather than as a fault. The single-shot `TryAcquireAsync` still uses `pg_try_advisory_lock`.
+
+- **`CommandTimeout` covers the wait.** It still bounds the network round trip, with the wait budget
+  added on top for the blocking call only - otherwise Npgsql would abort a legitimate wait.
+- **The session is left as it was found.** `statement_timeout` is `RESET` once the lock is granted, so
+  the renewal probe and the release that run on that connection for the rest of the lease do not inherit
+  the wait's budget.
+- **Nothing to configure on the server.** A cancelled caller's statement is cancelled, the connection is
+  best-effort unlocked and then disposed, so no backend is left parked in the wait queue.
+
 ## Reader-writer (shared/exclusive) lock
 
 ```csharp

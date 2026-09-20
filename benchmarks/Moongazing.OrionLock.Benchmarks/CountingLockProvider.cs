@@ -75,14 +75,14 @@ public sealed class CountingLockProvider : IDistributedLockProvider
     /// the interface default and the inner provider's own wait becomes unreachable; that omission
     /// is a bug this codebase has already shipped once, in <c>MeasuringLockProvider</c>.
     /// </summary>
-    public Task<bool> WaitForAcquireAsync(
+    public Task<LockAcquisition> WaitForAcquireAsync(
         string key, string ownerToken, TimeSpan leaseDuration, TimeSpan maxWait,
         LockWaitPolicy waitPolicy, CancellationToken cancellationToken)
     {
         Interlocked.Increment(ref waitCalls);
         return forwardWait
             ? inner.WaitForAcquireAsync(key, ownerToken, leaseDuration, maxWait, waitPolicy, cancellationToken)
-            : DistributedLockProviderExtensions.WaitForAcquireAsync(
+            : DistributedLockProviderExtensions.PollUntilAcquiredAsync(
                 this, key, ownerToken, leaseDuration, maxWait, waitPolicy.ToPollOptions(), cancellationToken);
     }
 

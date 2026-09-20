@@ -1,4 +1,4 @@
-﻿namespace Moongazing.OrionLock.ZooKeeper;
+namespace Moongazing.OrionLock.ZooKeeper;
 
 using System.Collections.Concurrent;
 using System.Text;
@@ -154,7 +154,7 @@ public sealed class ZooKeeperLockProvider : IDistributedLockProvider
     /// removed and the wait handed back, so the core falls back to the poll loop.
     /// </para>
     /// </remarks>
-    public async Task<bool> WaitForAcquireAsync(
+    public async Task<LockAcquisition> WaitForAcquireAsync(
         string key, string ownerToken, TimeSpan leaseDuration, TimeSpan maxWait,
         LockWaitPolicy waitPolicy, CancellationToken cancellationToken)
     {
@@ -191,16 +191,19 @@ public sealed class ZooKeeperLockProvider : IDistributedLockProvider
                 var predecessor = PredecessorOf(children, ourName);
                 if (predecessor is null)
                 {
-                    // Nothing ahead of us: we hold the lowest sequence number, so we hold the lock.
+                    // Nothing ahead of us: we hold the lowest sequence number, so we hold the
+                    // lock. Unfenced, exactly as the single-shot acquire is: the child's sequence
+                    // number is per-parent and restarts when the parent is pruned, so it is NOT a
+                    // fencing token however much it looks like one.
                     ownerKeyToNode[(ownerToken, key)] = created;
-                    return true;
+                    return LockAcquisition.Unfenced;
                 }
 
                 var remaining = maxWait - elapsed.Elapsed;
                 if (!infinite && remaining <= TimeSpan.Zero)
                 {
                     await TryDeleteAsync(created).ConfigureAwait(false);
-                    return false;
+                    return LockAcquisition.NotAcquired;
                 }
 
                 if (!await zk.WaitForNodeDeletedAsync(
@@ -210,7 +213,7 @@ public sealed class ZooKeeperLockProvider : IDistributedLockProvider
                 {
                     // Budget spent, no watch support, or a session that can no longer tell us.
                     await TryDeleteAsync(created).ConfigureAwait(false);
-                    return false;
+                    return LockAcquisition.NotAcquired;
                 }
 
                 // The predecessor is gone. Re-list rather than assume we are now first: the
