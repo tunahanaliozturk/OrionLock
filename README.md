@@ -118,27 +118,39 @@ A blocking acquire makes one attempt, and if the lock is held it hands the rest 
 
 | Backend | While waiting | Server-side requirement |
 | ------- | ------------- | ----------------------- |
-| SQL Server | Blocks in SQL Server's own application-lock queue (`sp_getapplock @LockTimeout`), FIFO | none |
+| SQL Server | Blocks in SQL Server's own application-lock queue (`sp_getapplock @LockTimeout`), FIFO; re-issued if the server's lock timer gives up short of the budget | none |
 | PostgreSQL | Blocks on `pg_advisory_lock`, bounded by `statement_timeout` | none |
 | Redis | Subscribes to a per-key release channel the provider publishes to | none; pub/sub only, NOT keyspace notifications |
 | etcd | Watches the key for a delete | none |
 | Consul | Blocking query on the key's modify index | none |
 | ZooKeeper | Watches its immediate predecessor znode, FIFO | none |
-| EF Core, in-memory, any third-party provider | Polls, exactly as before | none |
+| in-memory (`OrionLock.Testing`) | Parks on an in-process release signal | none |
+| EF Core, any third-party provider that does not override the member | Polls, exactly as before | none |
+
+This is the **exclusive** `IDistributedLock` path only. `ISharedExclusiveLockProvider` has no
+`WaitForAcquireAsync`, so a reader-writer acquire still polls on every backend — see **Shared /
+exclusive locks** below.
 
 `OrionLock.Etcd` and `OrionLock.ZooKeeper` ship no package README of their own, so their notes are here. **etcd** watches the lock key and retries when the cluster reports it deleted, which covers both a release and a lease that lapsed under a crashed holder; a failed attempt costs three round trips there, so the watch replaces three per waiter per tick with three once. **ZooKeeper** now runs the real recipe: the ephemeral sequential child is created ONCE and kept, and when it is not the lowest the waiter watches its immediate predecessor. Each position gained costs one children listing plus one watched `exists` - two round trips, against four per tick for the whole wait before - and because the child's sequence number is stable for the whole wait, arrival order is honoured again. The old loop re-created the child every tick, minting a new sequence number each time, which threw the queue away. Neither needs anything configured on the server, and both delete or tear down what they registered on every path that does not win.
 
 `RetryInterval` (default 250 ms) is now the FLOOR of the wait, not the whole of it. A backend that can block or subscribe returns the instant the lock frees and never sleeps an interval at all; the interval still bounds the poll a backend falls back to when it has no better option, or when its subscription drops.
 
+**The budget is kept on OrionLock's clock, not the store's.** `sp_getapplock`'s `@LockTimeout` is enforced against SQL Server's own lock-wait accounting rather than wall clock, and on a contended host that accounting runs ahead of it — a 700 ms budget has been measured giving up after 195 ms of real time. The SQL Server provider therefore times the wait itself and re-issues the command with what is left, so `WaitTimeout` means the same thing under load as it does on an idle box. That costs nothing when the server's timer is honest, which is the normal case.
+
 `WaitTimeout`, cancellation and the deadline overloads behave exactly as they always did. A wait that ends early without a grant is not a timeout: the core re-checks the budget, sleeps the retry floor and asks again, so a dropped subscription degrades to polling rather than failing the caller.
 
-`RetryBackoffCeiling` is off by default, which keeps the flat `RetryInterval` every release before v2.1 used. Set it and each fallback poll sleeps a random duration in `[RetryInterval, min(RetryInterval * 2^attempts, ceiling)]` - the randomness is the point, because a flat interval keeps N waiters that arrived together waking on the same tick for the whole queue drain.
+`RetryBackoffCeiling` is off by default, which keeps the flat `RetryInterval` every release before 3.0 used. Set it and each fallback poll sleeps a random duration in `[RetryInterval, min(RetryInterval * 2^attempts, ceiling)]` - the randomness is the point, because a flat interval keeps N waiters that arrived together waking on the same tick for the whole queue drain.
 
 **Writing a backend?** `WaitForAcquireAsync` is a default interface method whose default body is that poll loop, so an existing provider needs no change at all. Override it when your store can say "the lock is free now", and report a `LockAcquisition` - a lock taken by waiting carries its fencing token exactly as one taken on the first attempt does, and a wait that drops the token would leave fencing working on an idle key and dark under contention. If you decorate a provider, forward the member: a decorator that does not forward it makes every override below it unreachable. And because it is a default method, a signature that drifts out of step with the contract still compiles and silently stops overriding anything, so a backend is worth one test that asserts it really implements the member.
 
 ## Lease and renewal
 
 Each acquired lock carries a lease (default 30s). A background watchdog renews the lease at `LeaseDuration / 3` while the handle is alive. If renewal fails, `handle.IsHeld` flips to false and `handle.LostToken` is cancelled — so the critical section can observe and abort safely instead of running without the lock. See [docs/lease-and-renewal.md](docs/lease-and-renewal.md).
+
+Two other things trip `LostToken`, and both used to be silent:
+
+- **The hold outlived `MaxHoldDuration`** (default ten leases). See **Always dispose the handle** below.
+- **`AutoRenew = false` and the lease ran out.** With auto-renew off no watchdog runs, so nothing used to notice the lease expiring: `IsHeld` stayed `true` indefinitely, however long after a TTL backend had expired the key and handed it to someone else. A handle taken with `AutoRenew = false` against a TTL backend now trips `LostToken` and reports `IsHeld = false` once `LeaseDuration` has elapsed, running the same surrender a confirmed loss runs. The session-scoped backends (PostgreSQL, SQL Server, ZooKeeper), where the hold legitimately outlives `LeaseDuration`, are unaffected.
 
 ## Fencing tokens
 
@@ -208,6 +220,7 @@ guard.Accept($"order:{orderId}", fence);        // throws FencingTokenRegressedE
 It is not a substitute for the SQL above: two application instances would each keep their own idea of the highest token.
 
 The token is also passed to `ILockEventObserver.OnAcquired(key, durationMs, fencingToken)` and attached to the acquire span as `orionlock.fencing_token`. It is deliberately **not** a metric tag — it is unique per acquisition, so as a metric dimension it would mint a fresh time series on every acquire ([docs/lock-key-cardinality.md](docs/lock-key-cardinality.md)).
+
 ### Always dispose the handle
 
 Not disposing does not merely leak — it **holds the lock**. The renewal watchdog roots the handle, so a forgotten `await using` is not collected: it keeps renewing the lease, no other process can ever take the key, and on SQL Server and PostgreSQL it pins a dedicated open connection for as long as it runs. The failure is silent, because renewal keeps succeeding.
@@ -233,24 +246,36 @@ A lease lost *after* acquisition is not an exception from these methods. `handle
 
 ## Reentrancy
 
-A single `DistributedLock` instance (a DI singleton) re-acquiring a key it already holds returns a counted nested handle without touching the backend. The outermost dispose releases. Reentrancy collapses same-process re-acquisition only; it does not cross process boundaries.
+Reentrancy is scoped to **the flow that holds the lock**, not to the key. An acquire establishes an owner identity in the calling flow (an `AsyncLocal` scope, like `Activity.Current`), and only a re-acquire from inside that same flow — including one made deeper in the call stack, after any number of `await`s — collapses into a counted nested handle without touching the backend. The outermost dispose releases. Any other caller goes to the backend and contends normally.
+
+The scope belongs to the hold: work forked off *during* the critical section inherits it and still re-enters; work forked after the handle was released does not, and neither does work started from an independent context. Reentrancy never crosses process boundaries.
+
+> **Changed in 3.0.0.** Reentrancy used to be keyed on the lock key alone. Because `AddOrionLock` registers `IDistributedLock` as a singleton, two *unrelated* callers on that one instance — two concurrent HTTP requests, say — both got a handle for the same key: the second was handed a nested handle over the first one's lease, the backend was never consulted, and both ran inside the critical section at once. If you have in-process callers that were silently sharing a lease this way, they now block against each other, so `AcquireAsync` can throw `LockAcquisitionTimeoutException` where it previously returned immediately.
 
 ## Lock keys
 
 A key is **one opaque name**, the same on every backend. `LockKey.Validate` runs in the core before any backend sees the key, and throws `ArgumentException` on your own thread at acquire time — not later, as a driver error from whichever server happened to mind. It refuses:
 
-- **`/`.** The key is caller data that two backends splice into a namespace they do not own: Consul builds `/v1/kv/{key}` out of it and ZooKeeper builds a znode path. A `/` used to mean "hierarchy" there and nothing on the other five, so the same key addressed different things depending on the registration. Express hierarchy through the backend's own namespace knob — `RedisLockOptions.KeyPrefix`, `ConsulLockOptions.KeyPrefix`, `ZooKeeperLockOptions.RootPath`, `SqlServerLockOptions.KeyPrefix` — which every backend already has.
+- **`/`.** The key is caller data that two backends splice into a namespace they do not own: Consul builds `/v1/kv/{key}` out of it and ZooKeeper builds a znode path. A `/` used to mean "hierarchy" there and nothing on the other five, so the same key addressed different things depending on the registration. Express hierarchy through the backend's own namespace knob — `RedisLockOptions.KeyPrefix`, `ConsulLockOptions.KeyPrefix`, `SqlServerLockOptions.KeyPrefix`, `PostgresLockOptions.KeyPrefix`, `EtcdLockOptions.KeyPrefix`, `ZooKeeperLockOptions.RootPath` — which every backend already has.
 - **`.` and `..`**, which URI and znode canonicalisation resolve. This cannot be delegated to encoding: .NET unescapes `%2E` back to `.`, so `..` survives percent-encoding and still collapses.
 - **Control characters** (`U+0000`–`U+001F`, `U+007F`–`U+009F`) and the ranges ZooKeeper refuses in a znode name (`U+D800`–`U+F8FF`, `U+FFF0`–`U+FFFF`), so a key fails fast and identically everywhere rather than at one server.
 - **Keys longer than `LockKey.MaxLength` (200)** — the bound the EF Core row maps `Key` at, and small enough to fit SQL Server's `sp_getapplock` `@Resource` budget with a prefix.
 
 The core validates and rejects; it does not encode. A URI path, a znode name and a Redis key are different alphabets, so each backend encodes what remains for its own wire format.
 
+**The prefix is held to the same rule, at registration time.** `ConsulLockOptions.KeyPrefix` and `ZooKeeperLockOptions.RootPath` are concatenated into the same path the key is, so a prefix of `"../session/destroy/"` with a perfectly legal key still canonicalises out of the KV namespace — the traversal the key rule exists to stop, arriving through the half of the path the key rule cannot see. Both are validated per segment when you build the host, so a bad prefix fails at startup naming `KeyPrefix` / `RootPath` rather than at the first acquire. The backends that pass their prefix as a protocol field or a SQL parameter (Redis, etcd, SQL Server, PostgreSQL, EF Core) are unaffected.
+
 ## Shared / exclusive (reader-writer) locks
 
 Added in v0.4.0. `ISharedExclusiveLock` is a reader-writer lock for a resource key: any number of `Shared` (read) holders coexist, OR exactly one `Exclusive` (write) holder owns it. Acquire, `WaitTimeout`/`RetryInterval`, lease and renewal, release, and diagnostics semantics mirror the exclusive `IDistributedLock`, and every acquire returns the same `IDistributedLockHandle`.
 
-That mirroring is literal, not aspirational: both handles drive the same internal lease watchdog, so a reader-writer hold emits the same instruments in the same order as an exclusive one and fires the same `ILockEventObserver` callbacks. A parity test drives every lifecycle — renewal, backend-confirmed loss, exhausted renewal grace, TTL expiry — through both and fails if they ever diverge. Two documented exceptions: reentrancy is not modelled for reader-writer holds (each acquire takes a fresh backend hold), and the FIFO waiter coordinator is exclusive-only. An `ILockEventObserver` registered in DI reaches reader-writer holds too: the Redis, PostgreSQL, EF Core and in-memory registrations resolve it and hand it to the lock. Constructing `new SharedExclusiveLock(provider, observer)` by hand is for callers who build the lock themselves.
+That mirroring is literal, not aspirational: both handles drive the same internal lease watchdog, so a reader-writer hold emits the same instruments in the same order as an exclusive one and fires the same `ILockEventObserver` callbacks. A parity test drives every lifecycle — renewal, backend-confirmed loss, exhausted renewal grace, TTL expiry — through both and fails if they ever diverge. An `ILockEventObserver` registered in DI reaches reader-writer holds too: the Redis, PostgreSQL, EF Core and in-memory registrations resolve it and hand it to the lock. Constructing `new SharedExclusiveLock(provider, observer)` by hand is for callers who build the lock themselves.
+
+Three documented exceptions to the mirroring:
+
+- **Reentrancy is not modelled** for reader-writer holds; each acquire takes a fresh backend hold.
+- **The FIFO waiter coordinator is exclusive-only.**
+- **A reader-writer acquire still polls.** `ISharedExclusiveLockProvider` has no `WaitForAcquireAsync`, so none of the backend-side waiting described in **How a waiter waits** applies here: a contended reader-writer acquire sleeps `RetryInterval` (jittered, if you set `RetryBackoffCeiling`) and re-attempts. That also means `orion.lock.acquire.attempt_count` keeps its old meaning on this path while the exclusive path collapses towards 2 per acquire, so the two are not comparable and should not share a chart. The acquire span tells them apart: a reader-writer acquire tags its span `orionlock.mode` (`Shared` / `Exclusive`) and an exclusive one does not set the tag at all. The metric itself carries no such dimension — `attempt_count` is recorded from one instrument on both paths — so if you need to separate them in metrics rather than traces, record the two workloads under different meter views or keep them on separate services.
 
 `UseInMemory()` from `OrionLock.Testing` registers `ISharedExclusiveLock`, so it resolves from DI like the exclusive lock:
 
@@ -353,6 +378,18 @@ await using var handle = await locker.AcquireAsync(
 - **`OrionLock.Postgres`** — native `pg_try_advisory_lock` with session-scope lifetime, crash-safe with the same rationale as SqlServer. Also ships the distributed reader-writer lock (`UsePostgresSharedExclusive()`) over clock-leased rows serialized by `pg_advisory_xact_lock`.
 - **`OrionLock.Testing`** — in-memory provider for tests, no Redis or DB required.
 
+Those five, plus the core `OrionLock` package, are the six that ship to nuget.org.
+
+### Not published: Consul, etcd, ZooKeeper, health checks
+
+`OrionLock.Consul`, `OrionLock.Etcd`, `OrionLock.ZooKeeper` and `Moongazing.OrionLock.HealthChecks` live in this repository, build in this solution and are documented throughout this README, but they are **not on nuget.org** and never have been. They sit at 0.7.0 while the published packages are at 3.0.0, and the release job does not pack them.
+
+The reason is test coverage, not readiness. **The three backends have no container test coverage at all** — their test projects carry no Testcontainers reference, no fixture and no CI service, so every test in them runs against a fake adapter. The etcd watch, the Consul blocking query, the ZooKeeper predecessor watch, the fencing verdicts, the round-trip counts: all of it is proven at fake level only, and none of those providers has ever executed against a real etcd cluster, Consul agent or ZooKeeper ensemble. A distributed lock is exactly the kind of component where the gap between "the fake agrees" and "the server agrees" is where the bugs live, so shipping one on that basis is not something to do quietly.
+
+`Moongazing.OrionLock.HealthChecks` holds no lock semantics of its own — it probes whichever backend is registered — but its suite has no Testcontainers reference either: it has only ever probed the in-memory provider and throwing fakes.
+
+Use them by project reference if you want them, with that caveat in mind. They will be published when a container suite exists for them.
+
 ### Exactly one backend
 
 Every backend registers through the same `OrionLockBuilder.UseBackend(name, factory)`, so they all behave identically: one `IDistributedLock`, one backend. Asking for a second one on the same builder throws `InvalidOperationException` naming both, rather than silently picking one:
@@ -380,11 +417,13 @@ For a Native AOT or aggressively trimmed application, reference the core and (in
 
 ## Health checks
 
-`Moongazing.OrionLock.HealthChecks` ships an `IHealthCheck` that probes backend reachability by acquiring and releasing a sentinel lock. Register it via `services.AddHealthChecks().AddOrionLockHealthCheck(name: "orionlock", failureStatus: HealthStatus.Degraded, tags: ["ready", "infra"])`. The probe returns `Healthy` on success, `Degraded` when the sentinel is contended within `WaitTimeout`, and `Unhealthy` when the backend throws. Useful for failing fast in container readiness probes when Redis or the database is unreachable.
+`Moongazing.OrionLock.HealthChecks` ([unpublished](#not-published-consul-etcd-zookeeper-health-checks)) ships an `IHealthCheck` that probes backend reachability by acquiring and releasing a sentinel lock. Register it via `services.AddHealthChecks().AddOrionLockHealthCheck(name: "orionlock", failureStatus: HealthStatus.Degraded, tags: ["ready", "infra"])`. The probe returns `Healthy` on success, `Degraded` when the sentinel is contended within `WaitTimeout`, and `Unhealthy` when the backend throws. Useful for failing fast in container readiness probes when Redis or the database is unreachable.
 
 ## OpenTelemetry
 
-`ActivitySource` and `Meter` named `Moongazing.OrionLock`. Each acquire opens a span tagged with the key and outcome. Counters: `orion.lock.acquisitions`, `orion.lock.contentions`, `orion.lock.lease.lost`, `orion.lock.health_check.result` (tagged by `result`). Histograms: `orion.lock.acquire.duration` (end-to-end blocking-acquire time), `orion.lock.acquire.latency` (single backend round-trip, tagged by `backend`), `orion.lock.lease_renewal.duration` (per-renewal time, tagged by `backend`). See [docs/lock-key-cardinality.md](docs/lock-key-cardinality.md) before sending high-cardinality lock keys through the meter.
+`ActivitySource` and `Meter` named `Moongazing.OrionLock`. Each acquire opens a span tagged with the key and outcome, plus `orionlock.fencing_token` when the backend mints one. Counters: `orion.lock.acquisitions`, `orion.lock.contentions`, `orion.lock.lease.lost`, `orion.lock.lease.expired_before_release`, `orion.lock.lease.grace_period_exhausted`, `orion.lock.health_check.result` (tagged by `result`). Up-down counters: `orion.lock.leases.held_concurrent`, `orion.lock.reentrancy.depth`. Histograms: `orion.lock.acquire.duration` (end-to-end blocking-acquire time), `orion.lock.acquire.latency` (single backend round-trip, tagged by `backend`), `orion.lock.lease_renewal.duration` (per-renewal time, tagged by `backend`), `orion.lock.acquire.attempt_count`, `orion.lock.handle.renewals_per_hold`, `orion.lock.lease.renewal_failures_consecutive`. See [docs/lock-key-cardinality.md](docs/lock-key-cardinality.md) before sending high-cardinality lock keys through the meter.
+
+**Two things about 3.0.0 will move your charts.** `orion.lock.acquire.attempt_count` on the exclusive path now counts the attempts the core issued, which for a backend that blocks or subscribes collapses towards 2 per acquire — the reduction is the win, stated in the metric rather than hidden by it. And a reader-writer hold now emits the renewal, grace, attempt and `renewals_per_hold` instruments and fires `ILockEventObserver`, none of which it ever did, so alerts on those instruments will start seeing traffic they never saw. Re-baseline both.
 
 ## Benchmarks
 
@@ -392,7 +431,18 @@ See [benchmarks.md](benchmarks.md) for the BenchmarkDotNet harness in `bench/Moo
 
 ## Roadmap
 
-The current release is **2.0.0**. The **code** API is unchanged from 1.x — `IDistributedLock`, `IDistributedLockHandle`, `DistributedLockOptions`, the provider primitive interfaces (`IDistributedLockProvider`, `ISharedExclusiveLockProvider`), `ISharedExclusiveLock` / `LockMode`, and the bundled backends (Redis, EF Core, SqlServer, Postgres, Testing) are stable and guarded by `Microsoft.CodeAnalysis.PublicApiAnalyzers` with per-project `PublicAPI.Shipped.txt` baselines. The major bump is a **telemetry-only** break: the OpenTelemetry metric names were renamed from `orionlock.*` to the family `orion.lock.*` convention (see the [changelog](CHANGELOG.md)); update dashboards and alerts accordingly. Forward plan in [ROADMAP.md](ROADMAP.md): fair queueing beyond opt-in FIFO and a distributed counter/sequence primitive. If something on the list matters to you, open an issue with the `roadmap` label.
+The current release is **3.0.0**, and unlike 2.0.0 — which was a telemetry-only rename — this one genuinely breaks code. The surface is still guarded by `Microsoft.CodeAnalysis.PublicApiAnalyzers` with per-project `PublicAPI.Shipped.txt` baselines, and the breaks are deliberate:
+
+- lock keys are validated in the core and `/` is no longer legal in one;
+- registering two different backends on one builder throws;
+- `UseRedis(connectionString)` now connects with that connection string;
+- a `LeaseDuration` below the backend's floor is refused rather than silently raised;
+- `IDistributedLockHandle.EffectiveLeaseDuration` is a new abstract member;
+- driver exceptions are wrapped in `OrionLockBackendException`;
+- `MaxHoldDuration` bounds the renewal watchdog at ten leases by default;
+- reentrancy is scoped to the holding flow rather than the key.
+
+The [changelog](CHANGELOG.md) opens 3.0.0 with the full breaking-change list and what to do about each. Forward plan in [ROADMAP.md](ROADMAP.md): fair queueing beyond opt-in FIFO, a distributed counter/sequence primitive, and container suites for the three unpublished backends. If something on the list matters to you, open an issue with the `roadmap` label.
 
 ## More from the Orion family
 

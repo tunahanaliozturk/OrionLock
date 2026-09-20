@@ -1,8 +1,14 @@
 ﻿<Project Sdk="Microsoft.NET.Sdk">
   <PropertyGroup>
     <PackageId>OrionLock.Consul</PackageId>
-    <!-- Unpublished backend held below 1.0 (not on the published pack list, never released). Overrides the repo-wide 1.0.0 in Directory.Build.props. -->
-    <Version>0.6.0</Version>
+    <!--
+      Unpublished backend, held below 1.0 and overriding the repo-wide 3.0.0 in Directory.Build.props.
+      It is not on the release job's pack list and has never been released to nuget.org. The reason is
+      test coverage, not readiness: this project's test suite has no Testcontainers reference, no Consul
+      fixture and no CI service, so the provider's behaviour against a real Consul agent has never
+      executed anywhere. A distributed lock backend proven only against fakes is not something to ship.
+    -->
+    <Version>0.7.0</Version>
     <Description>HashiCorp Consul backend for OrionLock distributed locking. Implements IDistributedLockProvider over Consul session-bound KV acquire/release semantics; lease renewal maps to Consul session renew so lease loss propagates naturally on node failure.</Description>
     <PackageTags>distributed-lock;consul;hashicorp;orionlock</PackageTags>
     <PackageReadmeFile>docs/README.md</PackageReadmeFile>

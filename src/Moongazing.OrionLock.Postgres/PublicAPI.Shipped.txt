@@ -13,6 +13,7 @@ Moongazing.OrionLock.Postgres.PostgresLockProvider.PostgresLockProvider(string! 
 Moongazing.OrionLock.Postgres.PostgresLockProvider.ReleaseAsync(string! key, string! ownerToken, System.Threading.CancellationToken cancellationToken) -> System.Threading.Tasks.Task!
 Moongazing.OrionLock.Postgres.PostgresLockProvider.TryAcquireAsync(string! key, string! ownerToken, System.TimeSpan leaseDuration, System.Threading.CancellationToken cancellationToken) -> System.Threading.Tasks.Task<bool>!
 Moongazing.OrionLock.Postgres.PostgresLockProvider.TryRenewAsync(string! key, string! ownerToken, System.TimeSpan leaseDuration, System.Threading.CancellationToken cancellationToken) -> System.Threading.Tasks.Task<bool>!
+Moongazing.OrionLock.Postgres.PostgresLockProvider.WaitForAcquireAsync(string! key, string! ownerToken, System.TimeSpan leaseDuration, System.TimeSpan maxWait, Moongazing.OrionLock.Providers.LockWaitPolicy waitPolicy, System.Threading.CancellationToken cancellationToken) -> System.Threading.Tasks.Task<Moongazing.OrionLock.Providers.LockAcquisition>!
 Moongazing.OrionLock.Postgres.PostgresSharedExclusiveLockOptions
 Moongazing.OrionLock.Postgres.PostgresSharedExclusiveLockOptions.AutoCreateTable.get -> bool
 Moongazing.OrionLock.Postgres.PostgresSharedExclusiveLockOptions.AutoCreateTable.set -> void

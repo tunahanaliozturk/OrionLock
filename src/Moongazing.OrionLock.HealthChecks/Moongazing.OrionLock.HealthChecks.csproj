@@ -1,8 +1,14 @@
 <Project Sdk="Microsoft.NET.Sdk">
   <PropertyGroup>
     <PackageId>Moongazing.OrionLock.HealthChecks</PackageId>
-    <!-- Unpublished backend held below 1.0 (not on the published pack list, never released). Overrides the repo-wide 1.0.0 in Directory.Build.props. -->
-    <Version>0.6.0</Version>
+    <!--
+      Unpublished integration, held below 1.0 and overriding the repo-wide 3.0.0 in
+      Directory.Build.props. It is not on the release job's pack list and has never been released to
+      nuget.org. Unlike the three unpublished backends it holds no lock semantics of its own - it probes
+      whichever backend is registered - but its suite has no Testcontainers reference either: every test
+      runs against the in-memory provider or a throwing fake, so it has never probed a real backend.
+    -->
+    <Version>0.7.0</Version>
     <Description>IHealthCheck integration for OrionLock distributed locking. Probes backend reachability by acquiring a sentinel lock so container readiness probes fail fast when the lock backend is unreachable.</Description>
     <PackageTags>health-check;distributed-lock;orion;orionlock</PackageTags>
     <PackageReadmeFile>docs/README.md</PackageReadmeFile>

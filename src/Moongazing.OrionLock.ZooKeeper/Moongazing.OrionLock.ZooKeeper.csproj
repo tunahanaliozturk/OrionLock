@@ -1,8 +1,14 @@
 ﻿<Project Sdk="Microsoft.NET.Sdk">
   <PropertyGroup>
     <PackageId>OrionLock.ZooKeeper</PackageId>
-    <!-- Unpublished backend held below 1.0 (not on the published pack list, never released). Overrides the repo-wide 1.0.0 in Directory.Build.props. -->
-    <Version>0.6.0</Version>
+    <!--
+      Unpublished backend, held below 1.0 and overriding the repo-wide 3.0.0 in Directory.Build.props.
+      It is not on the release job's pack list and has never been released to nuget.org. The reason is
+      test coverage, not readiness: this project's test suite has no Testcontainers reference, no
+      ZooKeeper fixture and no CI service, so the provider's behaviour against a real ensemble has never
+      executed anywhere. A distributed lock backend proven only against fakes is not something to ship.
+    -->
+    <Version>0.7.0</Version>
     <Description>Apache ZooKeeper backend for OrionLock distributed locking. Implements IDistributedLockProvider over ephemeral-sequential znodes following the recipe in the ZooKeeper docs: TryAcquire creates an ephemeral-sequential child under a lock-key parent znode, then declares ownership when it holds the lowest sequence number. Session-expiry semantics drop the znode automatically so a crashed holder loses the lock without external intervention.</Description>
     <PackageTags>distributed-lock;zookeeper;apache;orionlock</PackageTags>
   </PropertyGroup>

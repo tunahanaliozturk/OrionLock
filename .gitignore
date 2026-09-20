@@ -6,3 +6,6 @@ artifacts/
 BenchmarkDotNet.Artifacts/
 .vs/
 [Tt]est[Rr]esults/
+# Packing is a release-time step and its output belongs on the feed, not in the tree.
+*.nupkg
+nupkgs/
