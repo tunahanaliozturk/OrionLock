@@ -130,7 +130,7 @@ public sealed class PostgresLockProvider : IDistributedLockProvider, IDisposable
     /// place in the queue - goes with it.
     /// </para>
     /// </remarks>
-    public async Task<bool> WaitForAcquireAsync(
+    public async Task<LockAcquisition> WaitForAcquireAsync(
         string key, string ownerToken, TimeSpan leaseDuration, TimeSpan maxWait,
         LockWaitPolicy waitPolicy, CancellationToken cancellationToken)
     {
@@ -161,7 +161,7 @@ public sealed class PostgresLockProvider : IDistributedLockProvider, IDisposable
                 {
                     // statement_timeout fired: the budget ran out and we do NOT hold the lock.
                     await conn.DisposeAsync().ConfigureAwait(false);
-                    return false;
+                    return LockAcquisition.NotAcquired;
                 }
             }
 
@@ -179,7 +179,10 @@ public sealed class PostgresLockProvider : IDistributedLockProvider, IDisposable
                 await conn.DisposeAsync().ConfigureAwait(false);
                 throw new InvalidOperationException($"ownerToken '{ownerToken}' already registered.");
             }
-            return true;
+            // Unfenced, for the reason the class remarks give: a session-scoped advisory lock
+            // writes nothing durable to count acquisitions in. The wait is not dropping a token
+            // that existed - there is none to drop.
+            return LockAcquisition.Unfenced;
         }
         catch
         {

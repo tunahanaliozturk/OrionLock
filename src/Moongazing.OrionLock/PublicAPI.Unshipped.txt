@@ -43,6 +43,7 @@ Moongazing.OrionLock.Providers.LockWaitPolicy.LockWaitPolicy() -> void
 Moongazing.OrionLock.Providers.LockWaitPolicy.LockWaitPolicy(System.TimeSpan RetryInterval, System.TimeSpan? BackoffCeiling = null) -> void
 Moongazing.OrionLock.Providers.LockWaitPolicy.RetryInterval.get -> System.TimeSpan
 Moongazing.OrionLock.Providers.LockWaitPolicy.RetryInterval.init -> void
+Moongazing.OrionLock.Providers.LockWaitPolicy.ToPollOptions() -> Moongazing.OrionLock.Providers.WaitForAcquireOptions!
 Moongazing.OrionLock.SharedExclusiveLock.SharedExclusiveLock(Moongazing.OrionLock.Providers.ISharedExclusiveLockProvider! provider, Moongazing.OrionLock.ILockEventObserver? eventObserver) -> void
 const Moongazing.OrionLock.LockKey.MaxLength = 200 -> int
 override Moongazing.OrionLock.Providers.LockAcquisition.GetHashCode() -> int
@@ -61,3 +62,4 @@ static Moongazing.OrionLock.Providers.LockWaitPolicy.operator ==(Moongazing.Orio
 ~override Moongazing.OrionLock.Providers.LockAcquisition.ToString() -> string
 ~override Moongazing.OrionLock.Providers.LockWaitPolicy.Equals(object obj) -> bool
 ~override Moongazing.OrionLock.Providers.LockWaitPolicy.ToString() -> string
+static Moongazing.OrionLock.Providers.DistributedLockProviderExtensions.PollUntilAcquiredAsync(this Moongazing.OrionLock.Providers.IDistributedLockProvider! provider, string! key, string! ownerToken, System.TimeSpan leaseDuration, System.TimeSpan acquireTimeout, Moongazing.OrionLock.Providers.WaitForAcquireOptions? options = null, System.Threading.CancellationToken cancellationToken = default(System.Threading.CancellationToken)) -> System.Threading.Tasks.Task<Moongazing.OrionLock.Providers.LockAcquisition>!

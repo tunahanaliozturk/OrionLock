@@ -90,7 +90,7 @@ public sealed class PostgresBlockingWaitTests : IClassFixture<PostgresContainerF
         await Task.Delay(300);
         await sut.ReleaseAsync(key, "holder", default);
 
-        Assert.True(await waiter);
+        Assert.True((await waiter).Acquired);
         sw.Stop();
         Assert.InRange(sw.ElapsedMilliseconds, 250, 10_000);
 
@@ -111,7 +111,7 @@ public sealed class PostgresBlockingWaitTests : IClassFixture<PostgresContainerF
         sw.Stop();
 
         // statement_timeout cancels the blocked statement; that is a budget expiry, not a fault.
-        Assert.False(acquired);
+        Assert.False(acquired.Acquired);
         Assert.InRange(sw.ElapsedMilliseconds, 500, 10_000);
 
         await sut.ReleaseAsync(key, "holder", default);
@@ -125,8 +125,8 @@ public sealed class PostgresBlockingWaitTests : IClassFixture<PostgresContainerF
         using var sut = NewProvider();
         var key = $"blocking-wait-{Guid.NewGuid():N}";
 
-        Assert.True(await sut.WaitForAcquireAsync(
-            key, "owner", Lease, TimeSpan.FromMilliseconds(400), LockWaitPolicy.Default, default));
+        Assert.True((await sut.WaitForAcquireAsync(
+            key, "owner", Lease, TimeSpan.FromMilliseconds(400), LockWaitPolicy.Default, default)).Acquired);
 
         var conn = sut.GetSessionForTesting("owner");
         Assert.NotNull(conn);
@@ -150,8 +150,8 @@ public sealed class PostgresBlockingWaitTests : IClassFixture<PostgresContainerF
             key, "waiter", Lease, TimeSpan.FromSeconds(30), LockWaitPolicy.Default, cts.Token));
 
         await sut.ReleaseAsync(key, "holder", default);
-        Assert.True(await sut.WaitForAcquireAsync(
-            key, "next", Lease, TimeSpan.FromSeconds(10), LockWaitPolicy.Default, default));
+        Assert.True((await sut.WaitForAcquireAsync(
+            key, "next", Lease, TimeSpan.FromSeconds(10), LockWaitPolicy.Default, default)).Acquired);
 
         await sut.ReleaseAsync(key, "next", default);
     }

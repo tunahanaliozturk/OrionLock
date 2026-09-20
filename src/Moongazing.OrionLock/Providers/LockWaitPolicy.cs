@@ -37,7 +37,13 @@ public readonly record struct LockWaitPolicy(TimeSpan RetryInterval, TimeSpan? B
     /// below the floor - collapses the jitter window onto the floor, which is a flat
     /// <see cref="RetryInterval"/> to the millisecond.
     /// </summary>
-    internal WaitForAcquireOptions ToPollOptions()
+    /// <remarks>
+    /// Public because a backend that overrides
+    /// <see cref="IDistributedLockProvider.WaitForAcquireAsync"/> still needs the poll fallback for
+    /// the path where its subscription is unavailable, and rebuilding this by hand in every backend
+    /// package is how the shapes drift apart.
+    /// </remarks>
+    public WaitForAcquireOptions ToPollOptions()
     {
         // WaitForAcquireOptions rejects a non-positive delay, and a caller asking for a zero
         // interval means "spin", not "throw". One tick is the smallest thing Task.Delay can be

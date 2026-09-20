@@ -73,6 +73,20 @@ public static class DistributedLockProviderExtensions
     /// unfenced attempt instead. One loop rather than two, because the deadline clamping and the
     /// never-call-past-the-deadline gate are the parts that are easy to get subtly wrong twice.
     /// </remarks>
+    public static Task<LockAcquisition> PollUntilAcquiredAsync(
+        this IDistributedLockProvider provider,
+        string key,
+        string ownerToken,
+        TimeSpan leaseDuration,
+        TimeSpan acquireTimeout,
+        WaitForAcquireOptions? options = null,
+        CancellationToken cancellationToken = default)
+        => PollUntilAcquiredAsync(
+            provider, key, ownerToken, leaseDuration, acquireTimeout, options, attempt: null, cancellationToken);
+
+    // Same loop, with the single attempt supplied: null means TryAcquireFencedAsync, which is what a
+    // backend wants, while the public WaitForAcquireAsync extension above supplies the unfenced one
+    // its callers' test doubles substitute.
     internal static async Task<LockAcquisition> PollUntilAcquiredAsync(
         IDistributedLockProvider provider,
         string key,
