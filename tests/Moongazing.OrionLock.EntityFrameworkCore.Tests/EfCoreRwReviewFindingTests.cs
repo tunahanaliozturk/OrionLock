@@ -133,7 +133,7 @@ public sealed class DecoyRwContext(DbContextOptions<DecoyRwContext> options) : D
 /// lapses while a transition waits on the per-resource anchor is still reclaimed. Two facts cover this:
 /// <list type="bullet">
 /// <item>A DISCRIMINATOR at the layer the fix lives: the exact SQL the provider selects for PostgreSQL
-/// (<see cref="EfCoreSharedExclusiveLockProvider.LiveClockExpression"/>) ADVANCES across a delay inside one
+/// (<see cref="EfCoreDbClock.LiveClockExpression"/>) ADVANCES across a delay inside one
 /// transaction, whereas transaction-start <c>CURRENT_TIMESTAMP</c> would not. This is the true RED/GREEN
 /// guard: reverting the PostgreSQL branch to <c>CURRENT_TIMESTAMP</c> fails it. A pure end-to-end reclaim
 /// test cannot discriminate because Npgsql DEFERS <c>BEGIN</c>, so the transaction timestamp pins only when
@@ -155,7 +155,7 @@ public sealed class PostgresLiveClockTests(PostgresRwContainerFixture fixture)
 
         // The provider's chosen expression for this PostgreSQL context must be the live wall clock. Asserting
         // the selection AND its runtime behaviour pins finding 1 at the layer the fix operates.
-        var expr = EfCoreSharedExclusiveLockProvider.LiveClockExpression(ctx);
+        var expr = EfCoreDbClock.LiveClockExpression(ctx);
         Assert.Equal("clock_timestamp()", expr);
 
         await using var conn = new NpgsqlConnection(fixture.ConnectionString);
@@ -253,7 +253,7 @@ public sealed class SqlServerLiveClockTests(SqlServerRwContainerFixture fixture)
         await using var scope = fixture.ScopeFactory.CreateAsyncScope();
         var ctx = scope.ServiceProvider.GetRequiredService<RwLockDbContext>();
 
-        var expr = EfCoreSharedExclusiveLockProvider.LiveClockExpression(ctx);
+        var expr = EfCoreDbClock.LiveClockExpression(ctx);
         Assert.Equal("SYSUTCDATETIME()", expr);
 
         // Round-trip the live UTC clock and confirm it tracks wall-clock UTC within a generous skew window.

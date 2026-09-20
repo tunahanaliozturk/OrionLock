@@ -407,67 +407,13 @@ public sealed class EfCoreSharedExclusiveLockProvider : ISharedExclusiveLockProv
         }
     }
 
-    // Read the database server's current time as the live clock for this transition. The expression is
-    // PROVIDER-AWARE and must reflect the real wall clock at the instant of evaluation, NOT transaction-start
-    // time: this read happens after the per-resource anchor wait, and a hold that expired DURING that wait
-    // must be pruned. On PostgreSQL CURRENT_TIMESTAMP is transaction-START time (frozen for the transaction),
-    // so it would be stale here and a lapsed hold would still look live - the exact bug the Postgres provider
-    // fixed with clock_timestamp(). So: clock_timestamp() on PostgreSQL, SYSUTCDATETIME() on SQL Server (both
-    // advance during the transaction); CURRENT_TIMESTAMP elsewhere (plain SQLite has no
-    // transaction-start-vs-now distinction at this scope, so it is already the live clock there). The lease
-    // math only needs ONE consistent clock shared by every process; the zone label does not matter as long as
-    // it is uniform, and ReadDbNowUtcAsync normalises whatever Kind the provider returns to a UTC instant.
-    private static async Task<DateTime> ReadDbNowUtcAsync(DbContext ctx, CancellationToken ct)
-    {
-        var sql = "SELECT " + LiveClockExpression(ctx) + " AS Value";
-        var rows = await ctx.Database
-            .SqlQueryRaw<DateTime>(sql)
-            .ToListAsync(ct)
-            .ConfigureAwait(false);
-        var value = rows[0];
-        // The holds column is mapped as a UTC instant (timestamp WITH time zone on PostgreSQL / datetime2
-        // on SQL Server), so both the stored ExpiresOnUtc and every parameter compared against it must be
-        // DateTimeKind.Utc; a non-Utc value would bind as a different PostgreSQL type and the comparison
-        // would be silently time-zone-shifted (an expired row would then never prune). The live-clock
-        // expression is the database server clock; normalise whatever Kind the provider returns to a UTC
-        // instant. Every process reads the same server clock, so this is one consistent comparison frame.
-        return value.Kind switch
-        {
-            DateTimeKind.Utc => value,
-            DateTimeKind.Local => value.ToUniversalTime(),
-            _ => DateTime.SpecifyKind(value, DateTimeKind.Utc),
-        };
-    }
-
-    // Provider-aware LIVE wall-clock SQL expression for the current DbContext's database provider, selected
-    // off Database.ProviderName so no provider package is referenced (this package depends only on
-    // EntityFrameworkCore.Relational). clock_timestamp()/SYSUTCDATETIME() advance during a transaction;
-    // CURRENT_TIMESTAMP is the safe portable fallback (and the live clock on plain SQLite). PostgreSQL is
-    // matched first so its CURRENT_TIMESTAMP (transaction-start time) is never used for expiry math.
-    // Internal (not private) so the regression suite can assert the per-provider selection directly: the
-    // staleness this guards against is otherwise masked end-to-end because Npgsql defers BEGIN, pinning the
-    // transaction timestamp only when the anchor statement runs.
-    internal static string LiveClockExpression(DbContext ctx)
-    {
-        var provider = ctx.Database.ProviderName;
-        if (provider is null)
-        {
-            return "CURRENT_TIMESTAMP";
-        }
-
-        if (provider.Contains("Npgsql", StringComparison.OrdinalIgnoreCase)
-            || provider.Contains("PostgreSQL", StringComparison.OrdinalIgnoreCase))
-        {
-            return "clock_timestamp()";
-        }
-
-        if (provider.Contains("SqlServer", StringComparison.OrdinalIgnoreCase))
-        {
-            return "SYSUTCDATETIME()";
-        }
-
-        return "CURRENT_TIMESTAMP";
-    }
+    // The live DB clock for this transition comes from EfCoreDbClock, shared with the exclusive
+    // EfCoreLockProvider so both providers in this package decide expiry against the SAME authoritative
+    // clock. The expression must reflect the real wall clock at the instant of evaluation, NOT
+    // transaction-start time: this read happens after the per-resource anchor wait, and a hold that
+    // expired DURING that wait must be pruned. See EfCoreDbClock for the per-provider selection.
+    private static Task<DateTime> ReadDbNowUtcAsync(DbContext ctx, CancellationToken ct)
+        => EfCoreDbClock.ReadUtcNowAsync(ctx, ct);
 
     private async Task BackoffAsync(int attempt, CancellationToken ct)
     {
