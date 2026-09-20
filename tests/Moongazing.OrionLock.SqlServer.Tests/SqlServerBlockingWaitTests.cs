@@ -123,6 +123,15 @@ public sealed class SqlServerBlockingWaitTests : IClassFixture<SqlServerContaine
         }
 
         const int Budget = 700;
+        // Both real failures happened on a saturated runner. Saturate it deliberately.
+        using var hog = new CancellationTokenSource();
+        var hogs = Enumerable.Range(0, Environment.ProcessorCount * 3)
+            .Select(_ => Task.Factory.StartNew(
+                () => { var s = new SpinWait(); while (!hog.IsCancellationRequested) { s.SpinOnce(); } },
+                TaskCreationOptions.LongRunning))
+            .ToArray();
+        sb.Append(inv, $"HOG threads={hogs.Length} cores={Environment.ProcessorCount}\n");
+
         var since = Stopwatch.StartNew();
         for (var i = 0; i < 60; i++)
         {
@@ -175,6 +184,9 @@ public sealed class SqlServerBlockingWaitTests : IClassFixture<SqlServerContaine
 
             await sut.ReleaseAsync(key, "holder", default);
         }
+
+        await hog.CancelAsync();
+        await Task.WhenAll(hogs);
 
         Assert.Fail(sb.ToString());
     }
