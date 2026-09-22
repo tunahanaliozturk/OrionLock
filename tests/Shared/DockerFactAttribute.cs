@@ -72,8 +72,14 @@ public static class DockerEnvironment
 
         if (RuntimeInformation.IsOSPlatform(OSPlatform.Windows))
         {
-            return Directory.Exists(@"\\.\pipe")
-                && Directory.EnumerateFiles(@"\\.\pipe").Any(static pipe =>
+            // The trailing separator is load-bearing. The named-pipe filesystem answers a directory
+            // query only for @"\\.\pipe\"; @"\\.\pipe" returns false even with Docker Desktop running,
+            // so the probe used to report "no Docker" on every Windows machine and the whole
+            // container suite skipped itself in silence - green, and proving nothing.
+            const string PipeRoot = @"\\.\pipe\";
+
+            return Directory.Exists(PipeRoot)
+                && Directory.EnumerateFiles(PipeRoot).Any(static pipe =>
                     pipe.Contains("docker_engine", StringComparison.OrdinalIgnoreCase)
                     || pipe.Contains("dockerDesktopLinuxEngine", StringComparison.OrdinalIgnoreCase));
         }

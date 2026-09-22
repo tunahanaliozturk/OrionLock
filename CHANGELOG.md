@@ -7,6 +7,17 @@ All notable changes to OrionLock are documented in this file. The format is base
 
 ## [Unreleased]
 
+### Fixed
+
+- **The container test suites no longer skip themselves on Windows.** `DockerFactAttribute`
+  probed for the named-pipe root as `\\.\pipe`, which `Directory.Exists` reports as **false**
+  even with Docker Desktop running - the named-pipe filesystem answers a directory query only
+  when the path carries its trailing separator. Every Windows machine therefore read as "no
+  Docker" and every container-backed test set its own `Skip`. In the SQL Server suite alone
+  that was 22 of 36 tests reporting green while never starting a container. Linux CI was
+  unaffected, which is why it went unnoticed: the suites that matter most ran there and only
+  there, so a developer could not reproduce a CI failure locally and would not know it.
+
 ### Changed
 
 - **`Moongazing.OrionLock.HealthChecks` is now `OrionLock.HealthChecks`.** Every other package in
