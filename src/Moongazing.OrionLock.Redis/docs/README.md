@@ -1,10 +1,29 @@
 # OrionLock.Redis
 
-Redis backend for [OrionLock](https://www.nuget.org/packages/OrionLock). `SET NX PX` acquire with owner-checked Lua compare-and-extend / compare-and-delete.
+Redis backend for [OrionLock](https://www.nuget.org/packages/OrionLock): `SET NX PX` acquire with owner-checked Lua compare-and-extend / compare-and-delete, plus a distributed reader-writer lock and opt-in fencing tokens.
+
+![OrionLock packages: the app calls the OrionLock core and one backend package, such as OrionLock.Redis, implements IDistributedLockProvider underneath it](https://raw.githubusercontent.com/tunahanaliozturk/OrionLock/main/docs/diagrams/overview.png)
+
+## Install
+
+    dotnet add package OrionLock.Redis
+
+It plugs into the core `OrionLock` package, which it references.
+
+## Quick start
 
 ```csharp
-services.AddOrionLock().UseRedis("localhost:6379");
+using Moongazing.OrionLock;
+using Moongazing.OrionLock.DependencyInjection;
+using Moongazing.OrionLock.Redis;
+
+services.AddOrionLock().UseRedis("localhost:6379", o => o.KeyPrefix = "orionlock:"); // default prefix
+
+var locker = serviceProvider.GetRequiredService<IDistributedLock>();
+await using var handle = await locker.AcquireAsync("order:42");
 ```
+
+`RedisLockOptions` defaults: `KeyPrefix` `"orionlock:"`, `Database` -1 (the connection's default), `FencingTokens` false, `UseReleaseNotifications` true, `ReleaseChannelSuffix` `":released"`.
 
 ## Which connection the locks use
 
@@ -17,12 +36,14 @@ instead.)
 `UseRedis()` with no connection string is the opt-in to sharing: it resolves the application's registered
 `IConnectionMultiplexer`.
 
-This package also ships the distributed reader-writer (shared/exclusive) lock. `UseRedisSharedExclusive()` registers `ISharedExclusiveLock` over Redis, additive to `UseRedis()`:
+This package also ships the distributed reader-writer (shared/exclusive) lock. `UseRedisSharedExclusive()` registers `ISharedExclusiveLock` over Redis, additive to `UseRedis()`. It resolves the application's registered `IConnectionMultiplexer` (not the private one `UseRedis(connectionString)` creates), so register one and share it:
 
 ```csharp
+services.AddSingleton<IConnectionMultiplexer>(ConnectionMultiplexer.Connect("localhost:6379"));
+
 services.AddOrionLock()
-    .UseRedis("localhost:6379")
-    .UseRedisSharedExclusive();
+    .UseRedis()                    // exclusive lock over the registered multiplexer
+    .UseRedisSharedExclusive();    // reader-writer lock over the same multiplexer
 ```
 
 It keeps a Lua-scripted writer marker, a per-reader sorted set scored by lease expiry (so one reader's expiry never frees another's), and a lease-bounded pending-writer marker that holds off new readers so a waiting writer is not starved. All lease math uses the Redis server clock, and renew/release are owner-token checked.
@@ -76,9 +97,18 @@ undesirable; waiters then fall back to exactly the poll loop earlier releases us
 
 ## FIFO waiter fairness
 
-`RedisFifoWaiterCoordinator` orders waiters by arrival millisecond, with a per-process sequence breaking
+`UseRedisFifoWaiterCoordinator()` registers a cross-process FIFO queue, over the application's registered `IConnectionMultiplexer`, for acquires that set `DistributedLockOptions.UseFifoWaiterCoordinator = true`. `RedisFifoWaiterCoordinator` orders waiters by arrival millisecond, with a per-process sequence breaking
 ties inside one millisecond. Two waiters in the same millisecond **in different processes** still fall
 back to member ordering — cross-process sub-millisecond ordering is not a guarantee this coordinator
 makes.
 
-Requires the `OrionLock` package. See <https://github.com/tunahanaliozturk/OrionLock>.
+## Related packages
+
+- `OrionLock` - the core: `IDistributedLock`, options, lease watchdog.
+- `OrionLock.Testing` - in-memory backend for tests, same API.
+
+## Links
+
+- Documentation and full README: https://github.com/tunahanaliozturk/OrionLock
+- Changelog: https://github.com/tunahanaliozturk/OrionLock/blob/main/CHANGELOG.md
+- License: MIT

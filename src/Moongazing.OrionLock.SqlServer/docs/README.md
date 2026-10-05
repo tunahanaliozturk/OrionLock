@@ -5,10 +5,29 @@ native `sp_getapplock` application lock primitive. Session-scope lifetime: the l
 held only while the dedicated SQL session is alive, so a crashed process releases its
 locks automatically (no clock-based expiry needed).
 
+![OrionLock packages: the app calls the OrionLock core and one backend package implements IDistributedLockProvider underneath it](https://raw.githubusercontent.com/tunahanaliozturk/OrionLock/main/docs/diagrams/overview.png)
+
+## Install
+
+    dotnet add package OrionLock.SqlServer
+
+It plugs into the core `OrionLock` package, which it references.
+
+## Quick start
+
 ```csharp
+using Moongazing.OrionLock;
+using Moongazing.OrionLock.DependencyInjection;
+using Moongazing.OrionLock.SqlServer;
+
 services.AddOrionLock()
         .UseSqlServer("Server=...;Database=app;Trusted_Connection=true;");
+
+var locker = serviceProvider.GetRequiredService<IDistributedLock>();
+await using var handle = await locker.AcquireAsync("order:42");
 ```
+
+`SqlServerLockOptions` defaults: `KeyPrefix` empty, `CommandTimeout` 30 s. This backend has no reader-writer lock and no fencing token (`handle.FencingToken` is `null`).
 
 ### Notes
 
@@ -64,4 +83,14 @@ command"* - as a `SqlException`, not a cancellation. The provider translates tha
 `BackendFaultGuard` would wrap it as `OrionLockBackendException` and tell the caller the backend failed
 for something they asked for.
 
-Requires the `OrionLock` package. See https://github.com/tunahanaliozturk/OrionLock.
+## Related packages
+
+- `OrionLock` - the core: `IDistributedLock`, options, lease watchdog.
+- `OrionLock.Postgres` - the same session-scoped model on PostgreSQL.
+- `OrionLock.EntityFrameworkCore` - a lock table on any EF Core relational provider, with fencing tokens.
+
+## Links
+
+- Documentation and full README: https://github.com/tunahanaliozturk/OrionLock
+- Changelog: https://github.com/tunahanaliozturk/OrionLock/blob/main/CHANGELOG.md
+- License: MIT

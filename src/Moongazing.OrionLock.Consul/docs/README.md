@@ -5,9 +5,36 @@ HashiCorp Consul backend for [OrionLock](https://www.nuget.org/packages/OrionLoc
 session-scoped KV acquire, renew is a session renew, and release drops the KV entry and then destroys the
 session.
 
+![OrionLock packages: the app calls the OrionLock core and one backend package implements IDistributedLockProvider underneath it; Consul, Etcd, ZooKeeper and HealthChecks are not published yet](https://raw.githubusercontent.com/tunahanaliozturk/OrionLock/main/docs/diagrams/overview.png)
+
+## Status: not published
+
+This package is at **0.7.0** and is **not on nuget.org**; the release job does not pack it, and the
+`dotnet add package` line below works only once it is published. The reason is test coverage, not
+readiness: its test suite has no Testcontainers reference, no fixture and no CI service, so the provider has never run against a real Consul agent - every test uses a fake client adapter.
+Until that coverage exists, use it by project reference from the
+[repository](https://github.com/tunahanaliozturk/OrionLock), with that caveat in mind.
+
+## Install
+
+    dotnet add package OrionLock.Consul
+
+It plugs into the core `OrionLock` package, which it references, and uses the `Consul` client.
+
+## Quick start
+
 ```csharp
-services.AddOrionLock().UseConsul(new ConsulLockOptions());
+using Moongazing.OrionLock;
+using Moongazing.OrionLock.DependencyInjection;
+using Moongazing.OrionLock.Consul;
+
+services.AddOrionLock().UseConsul("http://localhost:8500", o => o.KeyPrefix = "orionlock/"); // default prefix
+
+var locker = serviceProvider.GetRequiredService<IDistributedLock>();
+await using var handle = await locker.AcquireAsync("order:42"); // default 30 s lease, above the 10 s floor
 ```
+
+`UseConsul()` without an address uses an `IConsulClient` you registered yourself.
 
 ## `LockDelay` is the safety mechanism, not a tuning knob
 
@@ -58,6 +85,7 @@ whose token is quietly missing.
 on the KV entry and dies with it: a `delete` session behaviour removes the key on expiry and the next
 acquisition starts counting from 1 again, reissuing a token an earlier holder already used — under exactly
 the crash-and-expire conditions fencing exists for.
+
 ## Lease durations
 
 Consul refuses a session TTL below 10 seconds, so this backend cannot honour a shorter lease. A
@@ -98,4 +126,13 @@ out of the KV namespace and retarget an acquire at Consul's session endpoint, wh
 refused by `UseConsul(...)` rather than at the first acquire. One trailing `/` is the conventional shape
 and is fine; a leading, doubled or otherwise empty segment is not.
 
-See <https://github.com/tunahanaliozturk/OrionLock>.
+## Related packages
+
+- `OrionLock` - the core: `IDistributedLock`, options, lease watchdog.
+- `OrionLock.Redis` - a published TTL backend with opt-in fencing tokens.
+
+## Links
+
+- Documentation and full README: https://github.com/tunahanaliozturk/OrionLock
+- Changelog: https://github.com/tunahanaliozturk/OrionLock/blob/main/CHANGELOG.md
+- License: MIT

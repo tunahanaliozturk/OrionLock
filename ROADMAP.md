@@ -4,17 +4,21 @@ This document lists what is shipped, what is actively planned, and what we are d
 *not* building. It is a planning artifact, not a contract — dates slip, priorities reshuffle.
 If an item here matters to you, open a GitHub issue so we can weigh it against everything else.
 
-**Current release: 1.0.0.** Reader-writer (shared/exclusive) locking shipped for the in-memory
-backend in 0.4.0; 0.4.1 trimmed an allocation on the acquire hot path and made the diagnostics
-meter version self-deriving; 0.4.2 shipped the first *distributed* reader-writer provider, backed by
-Redis; 0.5.0 added the PostgreSQL distributed reader-writer provider plus a
-`TryAcquireAsync`-with-deadline ergonomics surface on the reader-writer lock; 0.6.0 added the
-*provider-portable* EF Core distributed reader-writer provider (works on SQL Server, PostgreSQL, and
-any other relational EF Core provider) and the matching `TryAcquireAsync`-with-deadline overload on
-the exclusive lock. 1.0.0 is the stabilization milestone: it freezes the public API surface with the
-`PublicApiAnalyzers` baselines, audits the family for trimming / Native AOT, and ships runnable docs,
-all without changing runtime behavior. The next milestone is folding the FIFO coordinator into the
-reader-writer path for fair ordering beyond the best-effort starvation marker.
+**Current release: 3.0.0** (2026-09-20) for `OrionLock`, `OrionLock.Redis`, `OrionLock.Postgres`,
+`OrionLock.SqlServer`, `OrionLock.EntityFrameworkCore` and `OrionLock.Testing`. 1.0.0 froze the public
+API behind `PublicApiAnalyzers` baselines; 1.0.1 packed the icon for every package; 2.0.0 was a
+telemetry-only break that renamed every instrument from `orionlock.*` to `orion.lock.*`. 3.0.0 is the
+first release since 1.0 that breaks code: lock keys are validated in the core and `/` is no longer
+legal, registering two different backends throws, a lease below the backend's floor is refused,
+driver exceptions are wrapped in `OrionLockBackendException`, `MaxHoldDuration` bounds an undisposed
+hold, and reentrancy is scoped to the holding flow. It also adds fencing tokens and waiters that
+block, subscribe or watch on the store instead of polling it. The full list, with what to do about
+each break, is in [CHANGELOG.md](CHANGELOG.md).
+
+`OrionLock.Consul`, `OrionLock.Etcd`, `OrionLock.ZooKeeper` and `OrionLock.HealthChecks` are at 0.7.0
+and are **not published** to nuget.org: their test suites have no container coverage, so they have
+never run against a real Consul agent, etcd cluster or ZooKeeper ensemble. They ship when that
+coverage exists.
 
 ## Status legend
 
@@ -320,11 +324,11 @@ surface.
 
 Cross-cutting work that lands incrementally rather than in one milestone.
 
-- **Reader-writer telemetry parity.** The exclusive lock has a deep instrument set
-  (`acquire.duration`, `contention.duration`, `leases.held_concurrent`, and the rest). The
-  shared/exclusive path needs the same coverage, tagged by `mode` (shared vs exclusive) so
-  operators can read reader/writer contention separately. A `held_concurrent`-style gauge split by
-  mode is the most useful first cut.
+- **Reader-writer telemetry split by mode.** Since 3.0.0 a reader-writer hold emits the same
+  renewal, grace, attempt and `renewals_per_hold` instruments and observer callbacks as an exclusive
+  one. What is still missing is a metric dimension that separates them: the acquire span carries
+  `orionlock.mode`, the instruments do not. A `held_concurrent`-style gauge split by `mode` is the
+  most useful first cut.
 - **Conformance suite coverage for the reader-writer semantics.** The shared backend contract
   (many readers coexist; a writer excludes all; lease expiry and renewal behave like the exclusive
   lock) should be expressed as a reusable provider conformance suite, so every new
@@ -354,6 +358,40 @@ and no existing public API broke. The public surface is captured as-is and froze
   `IsAotCompatible`, built clean with the trim and AOT analyzers; the only core reflection
   (assembly/attribute metadata for telemetry) is AOT-safe. The database and Redis backends are
   documented as not claimed AOT-safe because of their drivers' trimming posture.
+
+---
+
+## Released after 1.0
+
+### v1.0.1 — Package icon for every package *(shipped 2026-07-27)*
+
+The icon is packed from `Directory.Build.props`, so the Consul, Etcd and ZooKeeper projects no longer
+pack without one. Test-only pin of `SQLitePCLRaw.bundle_e_sqlite3` for GHSA-2m69-gcr7-jv3q.
+
+### v2.0.0 — Family metric names *(shipped 2026-07-29)*
+
+Telemetry-only break: every instrument moved from `orionlock.*` to `orion.lock.*`. No code API
+changed.
+
+### v3.0.0 — Correctness, fencing tokens, event-driven waiting *(shipped 2026-09-20)*
+
+- **Fencing tokens** on `IDistributedLockHandle.FencingToken` (etcd, Redis opt-in, EF Core, Consul
+  opt-in, in-memory), with `RequireFencingToken()` and `FencingGuard`.
+- **Waiters park on the store**: `IDistributedLockProvider.WaitForAcquireAsync` lets SQL Server block
+  in `sp_getapplock`, PostgreSQL in `pg_advisory_lock`, Redis subscribe to a release channel, etcd and
+  ZooKeeper watch, and Consul run a blocking query. `RetryBackoffCeiling` adds jittered backoff for
+  the backends that still poll.
+- **Breaking**: core lock-key validation, one backend per builder, lease floors refused instead of
+  raised, `EffectiveLeaseDuration` on the handle, wrapped driver exceptions, `MaxHoldDuration`,
+  flow-scoped reentrancy, `ConsulLockOptions.LockDelay` defaulting to 5 s. See the changelog.
+
+---
+
+## Container coverage for the unpublished packages *(planned)*
+
+- **Testcontainers suites for `OrionLock.Consul`, `OrionLock.Etcd` and `OrionLock.ZooKeeper`**, plus a
+  real-backend run for `OrionLock.HealthChecks`. Until each one has run against a real server in CI,
+  it stays at 0.7.0 and off nuget.org.
 
 ---
 
