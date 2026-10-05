@@ -1,0 +1,11 @@
+blank_issues_enabled: false
+contact_links:
+  - name: Documentation
+    url: https://github.com/tunahanaliozturk/OrionLock#readme
+    about: "\"How do I ...\" is usually answered in the README or the package's NuGet readme; they document the real behaviour."
+  - name: Roadmap
+    url: https://github.com/tunahanaliozturk/OrionLock/blob/main/ROADMAP.md
+    about: What is planned next, and why Consul, etcd, ZooKeeper and HealthChecks are not published yet.
+  - name: Security vulnerability
+    url: https://github.com/tunahanaliozturk/OrionLock/blob/main/SECURITY.md
+    about: Do not file a public issue. Report it privately as described in SECURITY.md.

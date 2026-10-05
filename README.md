@@ -1,5 +1,8 @@
 ﻿<p align="center">
-  <img src="docs/logo.png" alt="OrionLock Logo" width="150" />
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="docs/logo.png">
+    <img src="docs/icon.png" alt="OrionLock logo" width="150">
+  </picture>
 </p>
 
 <h1 align="center">OrionLock</h1>
@@ -9,62 +12,25 @@
 </p>
 
 <p align="center">
+  <a href="https://github.com/tunahanaliozturk/OrionLock/actions/workflows/ci-cd.yml"><img src="https://github.com/tunahanaliozturk/OrionLock/actions/workflows/ci-cd.yml/badge.svg" alt="CI/CD" /></a>
   <a href="https://www.nuget.org/packages/OrionLock"><img src="https://img.shields.io/nuget/v/OrionLock?style=flat-square&color=blue" alt="NuGet" /></a>
-  <a href="https://www.nuget.org/packages/OrionLock"><img src="https://img.shields.io/nuget/dt/OrionLock?style=flat-square&color=green" alt="Downloads" /></a>
   <a href="LICENSE.txt"><img src="https://img.shields.io/badge/license-MIT-yellow?style=flat-square" alt="License" /></a>
   <img src="https://img.shields.io/badge/.NET-8.0%20%7C%209.0%20%7C%2010.0-purple?style=flat-square" alt="Target" />
 </p>
 
 ---
 
+![OrionLock packages: your app calls the OrionLock core, one backend package implements IDistributedLockProvider underneath it (Redis, Postgres, SqlServer, EntityFrameworkCore, Testing on nuget.org; Consul, Etcd, ZooKeeper and HealthChecks unpublished at 0.7.0)](docs/diagrams/overview.png)
+
 ## How it works
 
-The acquire path is a single backend call with a generated lease id; the release path validates ownership before deleting the row so two processes cannot accidentally release each other's locks. Between the two, a watchdog renews the lease at one-third of `LeaseDuration` and trips `handle.LostToken` if renewal fails.
+Every acquire mints a fresh owner token. The core makes one attempt; if the key is held it hands the rest of `WaitTimeout` to the backend, which blocks, subscribes or polls until the lock frees (see **How a waiter waits**). Release is owner-checked, so two processes cannot release each other's locks. Between the two, a watchdog renews the lease every `LeaseDuration / 3` and trips `handle.LostToken` if the lease is lost.
 
-```mermaid
-sequenceDiagram
-    autonumber
-    participant App as Application code
-    participant Lock as DistributedLock
-    participant WD as Renewal watchdog<br/>(per handle)
-    participant BE as Backend<br/>(Redis / Postgres / SqlServer)
+![OrionLock acquire, renew and release: AcquireAsync makes one TryAcquireFencedAsync attempt, waits through WaitForAcquireAsync with the remaining budget or throws LockAcquisitionTimeoutException, the handle's watchdog calls TryRenewAsync every LeaseDuration / 3 and cancels LostToken when renewal fails, and DisposeAsync calls ReleaseAsync with the owner token](docs/diagrams/acquire-release.png)
 
-    App->>Lock: AcquireAsync("order:42", 30s)
-    Lock->>BE: SET NX PX 30000<br/>(or pg_try_advisory_lock / sp_getapplock)
-    BE-->>Lock: acquired (lease id = G)
-    Lock->>WD: start (renew every 10s)
-    Lock-->>App: handle (IsHeld=true, LostToken open)
+The same pattern fits the "single-instance hosted job" recipe: a background service tries to claim a well-known key on its schedule, runs the work if it wins, and goes back to sleep if another replica got there first. The session-scoped backends (PostgreSQL, SQL Server) make this especially clean because the lock is released when the holding process's database session ends, so a crashed replica does not block the next tick.
 
-    loop while held
-        WD->>BE: renew if owner == G
-        BE-->>WD: ok or lost
-        alt renewal failed
-            WD->>App: cancel LostToken
-        end
-    end
-
-    App->>Lock: handle.DisposeAsync()
-    Lock->>BE: delete if owner == G
-    BE-->>Lock: released
-```
-
-The same pattern fits the "single-instance hosted job" recipe: a background service tries to claim a well-known key on its schedule, runs the work if it wins, and goes back to sleep if another replica got there first. Postgres advisory locks make this especially clean because the lock is auto-released on session end if the holding process crashes.
-
-```mermaid
-flowchart TD
-    Start([Replica wakes on schedule]) --> Try{TryAcquireAsync<br/>'settlement:daily'}
-    Try -- "null (another replica holds it)" --> Skip[Log skipped]
-    Skip --> Sleep[Sleep until next tick]
-    Try -- "handle acquired" --> Run[Run the job body]
-    Run --> Release[Dispose handle<br/>backend releases]
-    Release --> Sleep
-    Sleep --> Start
-
-    classDef skip fill:#fee2e2,stroke:#991b1b,color:#7f1d1d
-    classDef run fill:#dcfce7,stroke:#166534,color:#14532d
-    class Skip,Sleep skip
-    class Run,Release run
-```
+![Run a scheduled job on one replica: each replica calls TryAcquireAsync("settlement:daily"); null means another replica holds it and the tick is skipped; a handle runs the job body, which stops writing if LostToken is cancelled, and disposing the handle releases the lock before the replica sleeps until the next tick](docs/diagrams/run-once-job.png)
 
 ## Quick start
 
@@ -74,11 +40,17 @@ dotnet add package OrionLock.Redis           # or OrionLock.EntityFrameworkCore
 ```
 
 ```csharp
+using Moongazing.OrionLock;
+using Moongazing.OrionLock.DependencyInjection;
+using Moongazing.OrionLock.Redis;
+
 services.AddOrionLock()
         .UseRedis("localhost:6379");
 ```
 
 ```csharp
+var locker = serviceProvider.GetRequiredService<IDistributedLock>();
+
 await using var handle = await locker.AcquireAsync(
     "order:42",
     new DistributedLockOptions { LeaseDuration = TimeSpan.FromSeconds(30) });
@@ -110,7 +82,7 @@ if (bounded is null)
 
 ## Option validation
 
-`DistributedLockOptions` is validated at every acquire entry point, on your own thread, where the value was set — a non-positive `LeaseDuration`, a negative `WaitTimeout`, a non-positive `RetryInterval` or a non-positive `RenewalFailureGracePeriod` throws `ArgumentOutOfRangeException` instead of surfacing later as a driver error or not at all. A `RetryInterval` longer than `WaitTimeout` is fine: the acquire loop clamps each poll to the remaining budget.
+`DistributedLockOptions` is validated at every acquire entry point, on your own thread, where the value was set — a non-positive `LeaseDuration`, a negative `WaitTimeout`, a non-positive `RetryInterval`, a non-positive `RenewalFailureGracePeriod` or a `MaxHoldDuration` shorter than `LeaseDuration` throws `ArgumentOutOfRangeException` instead of surfacing later as a driver error or not at all. A `RetryInterval` longer than `WaitTimeout` is fine: the acquire loop clamps each poll to the remaining budget.
 
 ## How a waiter waits
 
@@ -144,6 +116,8 @@ exclusive locks** below.
 **Writing a backend?** `WaitForAcquireAsync` is a default interface method whose default body is that poll loop, so an existing provider needs no change at all. Override it when your store can say "the lock is free now", and report a `LockAcquisition` - a lock taken by waiting carries its fencing token exactly as one taken on the first attempt does, and a wait that drops the token would leave fencing working on an idle key and dark under contention. If you decorate a provider, forward the member: a decorator that does not forward it makes every override below it unreachable. And because it is a default method, a signature that drifts out of step with the contract still compiles and silently stops overriding anything, so a backend is worth one test that asserts it really implements the member.
 
 ## Lease and renewal
+
+![OrionLock lease renewal: the watchdog waits LeaseDuration / 3, stops at MaxHoldDuration, calls TryRenewAsync, loses the lease on false or once renewal failures outlast RenewalFailureGracePeriod on a TTL backend, and with AutoRenew = false a TTL backend's lease expires at LeaseDuration](docs/diagrams/lease-renewal.png)
 
 Each acquired lock carries a lease (default 30s). A background watchdog renews the lease at `LeaseDuration / 3` while the handle is alive. If renewal fails, `handle.IsHeld` flips to false and `handle.LostToken` is cancelled — so the critical section can observe and abort safely instead of running without the lock. See [docs/lease-and-renewal.md](docs/lease-and-renewal.md).
 
@@ -310,8 +284,11 @@ if (write is null)
 The reader-writer lock runs distributed on Redis, PostgreSQL, and any EF Core relational provider. Each registration is additive to the exclusive-only registration of the same backend:
 
 ```csharp
+// The Redis reader-writer provider resolves the application's registered IConnectionMultiplexer,
+// so register one and share it with the exclusive lock through UseRedis().
+services.AddSingleton<IConnectionMultiplexer>(ConnectionMultiplexer.Connect("localhost:6379"));
 services.AddOrionLock()
-    .UseRedis("localhost:6379")        // exclusive IDistributedLock
+    .UseRedis()                        // exclusive IDistributedLock over that multiplexer
     .UseRedisSharedExclusive();        // reader-writer ISharedExclusiveLock over Redis
 
 // or PostgreSQL:
@@ -352,6 +329,10 @@ Assert.Equal(TimeSpan.FromSeconds(2), handle.EffectiveLeaseDuration);
 ```csharp
 using Microsoft.Extensions.DependencyInjection;
 using Moongazing.OrionLock;
+using Moongazing.OrionLock.DependencyInjection;
+using Moongazing.OrionLock.Postgres;   // UsePostgres
+using Moongazing.OrionLock.Redis;      // UseRedis
+using Moongazing.OrionLock.Testing;    // UseInMemory
 
 // In-memory (tests, single process) - no Redis or DB required.
 services.AddOrionLock().UseInMemory();                          // OrionLock.Testing
@@ -372,7 +353,20 @@ await using var handle = await locker.AcquireAsync(
 
 ## Backends
 
-- **`OrionLock.Redis`** — `SET NX PX` acquire, owner-checked Lua renew/release. Single Redis endpoint (single-instance lock; multi-master RedLock is a separate opt-in). Also ships the distributed reader-writer lock (`UseRedisSharedExclusive()`): a Lua-scripted writer marker plus a per-reader sorted set scored by lease expiry, with a lease-bounded pending-writer marker for writer fairness.
+| Package | Version | Registration | Status |
+| --- | --- | --- | --- |
+| `OrionLock` | 3.0.0 | `AddOrionLock()` | core, on nuget.org |
+| `OrionLock.Redis` | 3.0.0 | `UseRedis(...)`, `UseRedisSharedExclusive()`, `UseRedisFifoWaiterCoordinator()` | on nuget.org |
+| `OrionLock.Postgres` | 3.0.0 | `UsePostgres(...)`, `UsePostgresSharedExclusive(...)` | on nuget.org |
+| `OrionLock.SqlServer` | 3.0.0 | `UseSqlServer(...)` | on nuget.org |
+| `OrionLock.EntityFrameworkCore` | 3.0.0 | `UseEntityFrameworkCore<TDbContext>()`, `UseEntityFrameworkCoreSharedExclusive<TDbContext>()` | on nuget.org |
+| `OrionLock.Testing` | 3.0.0 | `UseInMemory()` | on nuget.org |
+| `OrionLock.Consul` | 0.7.0 | `UseConsul(address)` | not published |
+| `OrionLock.Etcd` | 0.7.0 | `UseEtcd(connectionString)` | not published |
+| `OrionLock.ZooKeeper` | 0.7.0 | `UseZooKeeper()` | not published |
+| `OrionLock.HealthChecks` | 0.7.0 | `AddOrionLockHealthCheck()` | not published |
+
+- **`OrionLock.Redis`** — `SET NX PX` acquire, owner-checked Lua renew/release. Single Redis endpoint (single-instance lock; multi-master RedLock is planned, see [ROADMAP.md](ROADMAP.md), and not shipped). Also ships the distributed reader-writer lock (`UseRedisSharedExclusive()`): a Lua-scripted writer marker plus a per-reader sorted set scored by lease expiry, with a lease-bounded pending-writer marker for writer fairness.
 - **`OrionLock.EntityFrameworkCore`** — provider-agnostic `OrionLock_Locks` table; PostgreSQL, SQL Server, MySQL, SQLite. Also ships the provider-portable reader-writer lock (`UseEntityFrameworkCoreSharedExclusive<TDbContext>()`) over clock-leased rows in a serializable transaction. See [docs/migrations/orionlock-locks-table.md](docs/migrations/orionlock-locks-table.md).
 - **`OrionLock.SqlServer`** — native `sp_getapplock` with session-scope lifetime. Crash-safe (no clock-based expiry; SQL Server releases the lock when the session ends) and faster than the EF Core lock table on SQL Server.
 - **`OrionLock.Postgres`** — native `pg_try_advisory_lock` with session-scope lifetime, crash-safe with the same rationale as SqlServer. Also ships the distributed reader-writer lock (`UsePostgresSharedExclusive()`) over clock-leased rows serialized by `pg_advisory_xact_lock`.
@@ -417,17 +411,17 @@ For a Native AOT or aggressively trimmed application, reference the core and (in
 
 ## Health checks
 
-`OrionLock.HealthChecks` ([unpublished](#not-published-consul-etcd-zookeeper-health-checks)) ships an `IHealthCheck` that probes backend reachability by acquiring and releasing a sentinel lock. Register it via `services.AddHealthChecks().AddOrionLockHealthCheck(name: "orionlock", failureStatus: HealthStatus.Degraded, tags: ["ready", "infra"])`. The probe returns `Healthy` on success, `Degraded` when the sentinel is contended within `WaitTimeout`, and `Unhealthy` when the backend throws. Useful for failing fast in container readiness probes when Redis or the database is unreachable.
+`OrionLock.HealthChecks` ([unpublished](#not-published-consul-etcd-zookeeper-health-checks)) ships an `IHealthCheck` that probes backend reachability by acquiring and releasing a sentinel lock. Register it via `services.AddHealthChecks().AddOrionLockHealthCheck(name: "orionlock", failureStatus: HealthStatus.Degraded, tags: ["ready", "infra"])`. The probe returns `Healthy` on success, `Degraded` when the sentinel stays contended for `OrionLockHealthCheckOptions.WaitTimeout` (default 500 ms), and the registration's `failureStatus` (`Unhealthy` unless you pass another) when the backend throws. Useful for failing fast in container readiness probes when Redis or the database is unreachable.
 
 ## OpenTelemetry
 
-`ActivitySource` and `Meter` named `Moongazing.OrionLock`. Each acquire opens a span tagged with the key and outcome, plus `orionlock.fencing_token` when the backend mints one. Counters: `orion.lock.acquisitions`, `orion.lock.contentions`, `orion.lock.lease.lost`, `orion.lock.lease.expired_before_release`, `orion.lock.lease.grace_period_exhausted`, `orion.lock.health_check.result` (tagged by `result`). Up-down counters: `orion.lock.leases.held_concurrent`, `orion.lock.reentrancy.depth`. Histograms: `orion.lock.acquire.duration` (end-to-end blocking-acquire time), `orion.lock.acquire.latency` (single backend round-trip, tagged by `backend`), `orion.lock.lease_renewal.duration` (per-renewal time, tagged by `backend`), `orion.lock.acquire.attempt_count`, `orion.lock.handle.renewals_per_hold`, `orion.lock.lease.renewal_failures_consecutive`. See [docs/lock-key-cardinality.md](docs/lock-key-cardinality.md) before sending high-cardinality lock keys through the meter.
+`ActivitySource` and `Meter` named `Moongazing.OrionLock`. Each acquire opens a span tagged with the key and outcome, plus `orionlock.fencing_token` when the backend mints one. Counters: `orion.lock.acquisitions`, `orion.lock.contentions`, `orion.lock.acquire.timeout`, `orion.lock.acquire.cancelled`, `orion.lock.lease.lost`, `orion.lock.lease_renewal.failures`, `orion.lock.lease.expired_before_release`, `orion.lock.lease.grace_period_exhausted`, `orion.lock.health_check.result` (tagged by `result`). Up-down counters: `orion.lock.leases.held_concurrent`, `orion.lock.reentrancy.depth`. Histograms: `orion.lock.acquire.duration` (end-to-end blocking-acquire time), `orion.lock.acquire.latency` (single backend round-trip, tagged by `backend`), `orion.lock.lease_renewal.duration` (per-renewal time, tagged by `backend`), `orion.lock.contention.duration`, `orion.lock.acquire.attempt_count`, `orion.lock.handle.holding_duration`, `orion.lock.handle.renewals_per_hold`, `orion.lock.lease.renewal_failures_consecutive`, `orion.lock.reentrancy.max_depth`, `orion.lock.fairness.queue_depth`, `orion.lock.fairness.coordinator_enter_duration`. Observable gauge: `orion.lock.health.last_check_at_unix_seconds`. See [docs/lock-key-cardinality.md](docs/lock-key-cardinality.md) before sending high-cardinality lock keys through the meter.
 
 **Two things about 3.0.0 will move your charts.** `orion.lock.acquire.attempt_count` on the exclusive path now counts the attempts the core issued, which for a backend that blocks or subscribes collapses towards 2 per acquire — the reduction is the win, stated in the metric rather than hidden by it. And a reader-writer hold now emits the renewal, grace, attempt and `renewals_per_hold` instruments and fires `ILockEventObserver`, none of which it ever did, so alerts on those instruments will start seeing traffic they never saw. Re-baseline both.
 
 ## Benchmarks
 
-See [benchmarks.md](benchmarks.md) for the BenchmarkDotNet harness in `bench/Moongazing.OrionLock.Benchmarks`, the scenarios it covers (uncontended in-memory acquire/release as the abstraction-cost floor), and the comparison baselines we report against. The Redis and Postgres backends ship as packages but are exercised by the integration tests rather than the benchmark harness.
+See [benchmarks.md](benchmarks.md) for the BenchmarkDotNet harness in `benchmarks/Moongazing.OrionLock.Benchmarks` and the scenarios it covers: acquire/release at rest and under contention, renewal at scale, release, the reader-writer path, the FIFO coordinator, key bucketing and reentrancy, all in-process so they measure the abstraction rather than a network round trip. The Redis and Postgres backends ship as packages but are exercised by the integration tests rather than the benchmark harness.
 
 ## Roadmap
 

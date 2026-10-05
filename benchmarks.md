@@ -7,10 +7,11 @@ reentrancy. Every scenario runs entirely in-process. None of them touch Redis, S
 ZooKeeper, etcd, or any other external service, so the numbers reflect the cost of the OrionLock
 abstraction itself rather than a network or database round-trip.
 
-The project lives in `benchmarks/Moongazing.OrionLock.Benchmarks` and references only the core
-`Moongazing.OrionLock` library. A tiny in-process `IDistributedLockProvider`
-(`BenchInMemoryLockProvider`) stands in for a real backend so the only thing measured is the
-orchestration around the provider call.
+The project lives in `benchmarks/Moongazing.OrionLock.Benchmarks` and references the core
+`Moongazing.OrionLock` library, plus `Moongazing.OrionLock.Testing` for the reader-writer benchmark,
+which measures the shipped in-memory reader-writer provider. A tiny in-process
+`IDistributedLockProvider` (`BenchInMemoryLockProvider`) stands in for a real backend everywhere else,
+so the only thing measured is the orchestration around the provider call.
 
 ## Methodology
 

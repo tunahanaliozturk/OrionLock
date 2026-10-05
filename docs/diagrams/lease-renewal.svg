@@ -1,0 +1,129 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1200" height="986" viewBox="0 0 1200 986">
+  <!--
+    Orion family diagram template. Copy it, keep <defs> and <style>, replace the body.
+    Classes: .step (our code) .ext (backend / external system) .ok (success end) .fail (failure path)
+             .decision (diamond) .note (side remark) .lane (sequence lifeline)
+    Arrows: class="flow" (main path), "flow alt" (alternate / failure path, dashed), "flow back" (response).
+  -->
+  <defs>
+    <marker id="arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="8" markerHeight="8" orient="auto-start-reverse">
+      <path d="M0,0 L10,5 L0,10 z" fill="#64748b"/>
+    </marker>
+    <marker id="arrow-fail" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="8" markerHeight="8" orient="auto-start-reverse">
+      <path d="M0,0 L10,5 L0,10 z" fill="#dc2626"/>
+    </marker>
+  </defs>
+  <style>
+    text { font-family: "Segoe UI", Inter, "Helvetica Neue", Arial, sans-serif; fill: #1e1b4b; }
+    .title { font-size: 24px; font-weight: 700; }
+    .subtitle { font-size: 14px; fill: #475569; }
+    .label { font-size: 15px; font-weight: 600; }
+    .small { font-size: 12.5px; fill: #475569; }
+    .code { font-family: "Cascadia Code", Consolas, "SF Mono", monospace; font-size: 13px; fill: #3730a3; }
+    .edge { font-size: 12.5px; fill: #334155; }
+    .step { fill: #eef2ff; stroke: #4f46e5; stroke-width: 2; }
+    .ext { fill: #f0f9ff; stroke: #0284c7; stroke-width: 2; }
+    .ok { fill: #ecfdf5; stroke: #059669; stroke-width: 2; }
+    .fail { fill: #fef2f2; stroke: #dc2626; stroke-width: 2; }
+    .decision { fill: #fffbeb; stroke: #d97706; stroke-width: 2; }
+    .note { fill: #f8fafc; stroke: #cbd5e1; stroke-width: 1.5; stroke-dasharray: 4 3; }
+    .lane { stroke: #cbd5e1; stroke-width: 1.5; stroke-dasharray: 6 5; }
+    .flow { fill: none; stroke: #64748b; stroke-width: 2; marker-end: url(#arrow); }
+    .flow.alt { stroke: #dc2626; stroke-dasharray: 6 4; marker-end: url(#arrow-fail); }
+    .flow.back { stroke-dasharray: 6 4; }
+    .badge { fill: #4f46e5; }
+    .badge-text { font-size: 12px; font-weight: 700; fill: #ffffff; }
+  </style>
+
+  <rect width="1200" height="986" fill="#ffffff"/>
+
+  <text class="title" x="40" y="52">OrionLock - lease renewal and how a hold is lost</text>
+  <text class="subtitle" x="40" y="78">The handle's watchdog renews in the background; every way out of the loop except DisposeAsync trips LostToken.</text>
+
+  <!-- start -->
+  <rect class="step" x="390" y="110" width="260" height="60" rx="14"/>
+  <text class="label" x="520" y="137" text-anchor="middle">Lock acquired</text>
+  <text class="small" x="520" y="157" text-anchor="middle">handle returned to your code</text>
+
+  <!-- AutoRenew = false branch -->
+  <path class="flow" d="M390,140 L262,140"/>
+  <text class="edge" x="326" y="130" text-anchor="middle">AutoRenew = false</text>
+  <rect class="step" x="40" y="110" width="220" height="60" rx="14"/>
+  <text class="label" x="150" y="137" text-anchor="middle">No watchdog</text>
+  <text class="small" x="150" y="157" text-anchor="middle">expiry timer on TTL backends</text>
+
+  <path class="flow alt" d="M150,170 L150,218"/>
+  <text class="edge" x="160" y="200">at LeaseDuration</text>
+  <rect class="fail" x="40" y="220" width="220" height="80" rx="14"/>
+  <text class="label" x="150" y="248" text-anchor="middle">Lease expired</text>
+  <text class="small" x="150" y="268" text-anchor="middle">TTL backends: IsHeld goes false</text>
+  <text class="small" x="150" y="286" text-anchor="middle">session-scoped: held until dispose</text>
+
+  <!-- watchdog loop -->
+  <path class="flow" d="M520,170 L520,198"/>
+  <text class="edge" x="532" y="190">AutoRenew = true (default)</text>
+
+  <rect class="step" x="390" y="200" width="260" height="56" rx="14"/>
+  <text class="label" x="520" y="234" text-anchor="middle">Wait LeaseDuration / 3</text>
+
+  <path class="flow" d="M520,256 L520,278"/>
+
+  <polygon class="decision" points="520,280 680,345 520,410 360,345"/>
+  <text class="code" x="520" y="340" text-anchor="middle" style="font-variant-ligatures: none">elapsed &gt;= MaxHoldDuration?</text>
+  <text class="small" x="520" y="362" text-anchor="middle">default 10 x LeaseDuration</text>
+
+  <path class="flow alt" d="M680,345 L818,345"/>
+  <text class="edge" x="749" y="335" text-anchor="middle">yes</text>
+  <rect class="fail" x="820" y="305" width="340" height="80" rx="14"/>
+  <text class="label" x="990" y="337" text-anchor="middle">Max hold reached</text>
+  <text class="small" x="990" y="361" text-anchor="middle">surrender, then ReleaseAsync (leak backstop)</text>
+
+  <path class="flow" d="M520,410 L520,438"/>
+  <text class="edge" x="532" y="430">no</text>
+
+  <rect class="step" x="380" y="440" width="280" height="56" rx="14"/>
+  <text class="code" x="520" y="473" text-anchor="middle">TryRenewAsync(key, ownerToken)</text>
+
+  <path class="flow" d="M520,496 L520,538"/>
+
+  <polygon class="decision" points="520,540 630,600 520,660 410,600"/>
+  <text class="label" x="520" y="605" text-anchor="middle">Result?</text>
+
+  <!-- true: loop back -->
+  <path class="flow" d="M410,600 L300,600 L300,228 L388,228"/>
+  <text class="edge" x="355" y="590" text-anchor="middle">true</text>
+  <text class="edge" x="290" y="420" text-anchor="end">lease extended,</text>
+  <text class="edge" x="290" y="438" text-anchor="end">next tick</text>
+
+  <!-- false -->
+  <path class="flow alt" d="M630,600 L818,600"/>
+  <text class="edge" x="724" y="590" text-anchor="middle">false</text>
+  <rect class="fail" x="820" y="560" width="340" height="80" rx="14"/>
+  <text class="label" x="990" y="592" text-anchor="middle">Lease lost</text>
+  <text class="small" x="990" y="616" text-anchor="middle">the backend no longer has this owner</text>
+
+  <!-- throws -->
+  <path class="flow" d="M520,660 L520,698"/>
+  <text class="edge" x="532" y="688">throws</text>
+
+  <polygon class="decision" points="520,700 700,775 520,850 340,775"/>
+  <text class="small" x="520" y="762" text-anchor="middle">TTL backend and no success</text>
+  <text class="small" x="520" y="780" text-anchor="middle">for RenewalFailureGracePeriod?</text>
+  <text class="small" x="520" y="798" text-anchor="middle">default LeaseDuration</text>
+
+  <path class="flow alt" d="M700,775 L818,775"/>
+  <text class="edge" x="759" y="765" text-anchor="middle">yes</text>
+  <rect class="fail" x="820" y="735" width="340" height="80" rx="14"/>
+  <text class="label" x="990" y="767" text-anchor="middle">Lease lost: grace exhausted</text>
+  <text class="small" x="990" y="791" text-anchor="middle">orion.lock.lease.grace_period_exhausted</text>
+
+  <!-- no: retry, joins the loop-back line -->
+  <path class="flow" style="marker-end: none" d="M340,775 L300,775 L300,600"/>
+  <text class="edge" x="290" y="700" text-anchor="end">no: retry</text>
+  <text class="edge" x="290" y="718" text-anchor="end">next tick</text>
+
+  <!-- what every loss does -->
+  <rect class="note" x="40" y="880" width="1120" height="76" rx="10"/>
+  <text class="small" x="60" y="908">Every loss: IsHeld = false, LostToken cancelled, ILockEventObserver.OnLeaseLost, orion.lock.lease.lost. handle.ThrowIfLost() turns it into LeaseLostException.</text>
+  <text class="small" x="60" y="932">DisposeAsync() is the normal exit: it stops the watchdog, then calls ReleaseAsync(key, ownerToken). A renewal that throws on a session-scoped backend keeps retrying.</text>
+</svg>

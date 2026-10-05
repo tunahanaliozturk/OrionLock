@@ -1,14 +1,33 @@
 # OrionLock.EntityFrameworkCore
 
-EF Core lock-table backend for [OrionLock](https://www.nuget.org/packages/OrionLock). One row per lock key in `OrionLock_Locks`; provider-agnostic (PostgreSQL, SQL Server, MySQL, SQLite).
+EF Core lock-table backend for [OrionLock](https://www.nuget.org/packages/OrionLock). One row per lock key in `OrionLock_Locks`; provider-agnostic (PostgreSQL, SQL Server, MySQL, SQLite). Also ships a provider-portable reader-writer lock and fencing tokens.
+
+![OrionLock packages: the app calls the OrionLock core and one backend package implements IDistributedLockProvider underneath it](https://raw.githubusercontent.com/tunahanaliozturk/OrionLock/main/docs/diagrams/overview.png)
+
+## Install
+
+    dotnet add package OrionLock.EntityFrameworkCore
+
+It plugs into the core `OrionLock` package, which it references, and uses your own `DbContext`.
+
+## Quick start
 
 ```csharp
+using Moongazing.OrionLock;
+using Moongazing.OrionLock.DependencyInjection;
+using Moongazing.OrionLock.EntityFrameworkCore;
+
+// in AppDbContext.OnModelCreating
 modelBuilder.ApplyConfiguration(new OrionLockRowEntityTypeConfiguration());
 
+// registration (AppDbContext is registered with AddDbContext as usual)
 services.AddOrionLock().UseEntityFrameworkCore<AppDbContext>();
+
+var locker = serviceProvider.GetRequiredService<IDistributedLock>();
+await using var handle = await locker.AcquireAsync("order:42");
 ```
 
-Run `dotnet ef migrations add Add_OrionLock_Locks`.
+Then add the table with a migration: `dotnet ef migrations add Add_OrionLock_Locks`.
 
 ### Which clock decides expiry
 
@@ -53,4 +72,13 @@ services.AddOrionLock().UseEntityFrameworkCoreSharedExclusive<AppDbContext>();
 
 Create both tables via EF Core migrations / `Database.EnsureCreated()`, then resolve `ISharedExclusiveLock`.
 
-See https://github.com/tunahanaliozturk/OrionLock.
+## Related packages
+
+- `OrionLock` - the core: `IDistributedLock`, options, lease watchdog.
+- `OrionLock.SqlServer`, `OrionLock.Postgres` - native session-scoped locks when you target one database.
+
+## Links
+
+- Documentation and full README: https://github.com/tunahanaliozturk/OrionLock
+- Changelog: https://github.com/tunahanaliozturk/OrionLock/blob/main/CHANGELOG.md
+- License: MIT

@@ -11,6 +11,7 @@
     <Version>0.7.0</Version>
     <Description>Apache ZooKeeper backend for OrionLock distributed locking. Implements IDistributedLockProvider over ephemeral-sequential znodes following the recipe in the ZooKeeper docs: TryAcquire creates an ephemeral-sequential child under a lock-key parent znode, then declares ownership when it holds the lowest sequence number. Session-expiry semantics drop the znode automatically so a crashed holder loses the lock without external intervention.</Description>
     <PackageTags>distributed-lock;zookeeper;apache;orionlock</PackageTags>
+    <PackageReadmeFile>docs/README.md</PackageReadmeFile>
   </PropertyGroup>
   <ItemGroup>
     <PackageReference Include="ZooKeeperNetEx" Version="3.4.12.4" />
@@ -21,5 +22,8 @@
   </ItemGroup>
   <ItemGroup>
     <ProjectReference Include="..\Moongazing.OrionLock\Moongazing.OrionLock.csproj" />
+  </ItemGroup>
+  <ItemGroup>
+    <None Include="docs/README.md" Pack="true" PackagePath="docs/" />
   </ItemGroup>
 </Project>

@@ -1,6 +1,6 @@
 # Contributing to OrionLock
 
-Thanks for taking the time to look at this. OrionLock is a small distributed-lock abstraction with Postgres, SQL Server, and Redis backends. The project is small and the bar for contributions is "does it make the package clearer, faster, or safer without expanding the public surface needlessly."
+Thanks for taking the time to look at this. OrionLock is a small distributed-lock abstraction with Redis, PostgreSQL, SQL Server, EF Core and in-memory backends (plus Consul, etcd and ZooKeeper backends that are not published yet). The project is small and the bar for contributions is "does it make the package clearer, faster, or safer without expanding the public surface needlessly."
 
 ## Before you open a PR
 
@@ -18,11 +18,11 @@ For typos, docs polish, comment fixes, single-line changes, please skip the issu
 git clone https://github.com/tunahanaliozturk/OrionLock
 cd OrionLock
 dotnet restore
-dotnet build -c Release
-dotnet test
+dotnet build Moongazing.OrionLock.sln -c Release
+dotnet test Moongazing.OrionLock.sln -c Release
 ```
 
-.NET 8 SDK is required. Multi-target builds may need 9.0 / 10.0 SDKs installed; the multi-target dimension is intentional and not optional.
+The .NET 10 SDK is required to build: every project targets `net8.0;net9.0;net10.0`. The .NET 8 and 9 runtimes are needed to run the full multi-targeted test matrix. The container-backed suites (Redis, PostgreSQL, SQL Server, EF Core) use Testcontainers and need a running Docker daemon; without one those tests are skipped, not failed.
 
 Branch from `main`. Name the branch after intent: `feat/...`, `fix/...`, `docs/...`, `refactor/...`, `chore/...`, `test/...`.
 
@@ -36,31 +36,32 @@ Branch from `main`. Name the branch after intent: `feat/...`, `fix/...`, `docs/.
 
 ## Coding style
 
-- The repo enforces analyzer warnings as errors and `AllEnabledByDefault` analysis mode. Treat warnings as bugs.
+- `Directory.Build.props` sets `TreatWarningsAsErrors`, `AnalysisLevel` `latest-recommended` and `EnforceCodeStyleInBuild`, so an analyzer or `.editorconfig` warning fails the build. Treat warnings as bugs.
+- The published packages carry `PublicAPI.Shipped.txt` / `PublicAPI.Unshipped.txt` baselines. New public API goes into `PublicAPI.Unshipped.txt`.
 - Match the surrounding code style. The repo does not have a separate STYLE.md; if the existing code does X, do X.
 - Names are spelled out. No `mgr`, `svc`, `ctx`. The exceptions are well-known abbreviations (`Id`, `Db`, `Url`, `Json`).
 - Comments explain why, not what. The code already says what.
 
 ## Tests
 
-- xUnit + FluentAssertions.
-- Test names are sentences with underscores: `Account_withdraw_throws_when_insufficient_funds`.
-- Integration tests that need infrastructure go in a separate test project, gated by Testcontainers or `Skip` attributes when the infrastructure is unavailable.
+- xUnit, with Moq where a fake is needed. Assertions use xUnit's `Assert`.
+- Test names read as a statement about the behaviour: `AddOrionLock_ShouldRegister_IDistributedLock_AsSingleton`, `Deadline_ReturnsHandle_WhenFree`.
+- Tests that need a real backend use Testcontainers and the `[DockerFact]` / `[DockerTheory]` attributes from `tests/Shared`, which skip the test when Docker is unavailable.
 - Coverage is a side effect of writing tests for behaviour, not a target in itself.
 
 ## Reporting bugs
 
-Open an issue with:
+Open an issue with the [bug report form](https://github.com/tunahanaliozturk/OrionLock/issues/new?template=bug_report.yml). Include:
 
 - A minimal reproduction (one file, one method, ideally less than 50 lines)
 - The actual behaviour vs the expected behaviour
 - The runtime (`dotnet --info` output) and the package version
 
-If the bug has security implications, please email the maintainer privately before opening a public issue.
+If the bug has security implications, do not open a public issue; follow [SECURITY.md](SECURITY.md).
 
 ## Security
 
-Do not file public issues for vulnerabilities. Contact the maintainer directly. See [SECURITY.md](SECURITY.md) if present, otherwise email the address listed in the package NuGet metadata.
+Do not file public issues for vulnerabilities. Report them privately through GitHub as described in [SECURITY.md](SECURITY.md).
 
 ## Conduct
 
@@ -68,4 +69,4 @@ Be kind. We follow the [Code of Conduct](CODE_OF_CONDUCT.md). Disagreement is fi
 
 ## License
 
-By submitting a pull request, you agree your contribution is licensed under the repo's [MIT License](LICENSE).
+By submitting a pull request, you agree your contribution is licensed under the repo's [MIT License](LICENSE.txt).

@@ -4,14 +4,17 @@
 
 Every successful `AcquireAsync` carries a **lease** — a time-bounded grant of ownership. After the lease's `ExpiresOnUtc` passes, the backend treats the key as free and the next caller can take it. This is the distributed-systems answer to a crashed holder: a process that died holding the lock cannot block the system forever.
 
-`DistributedLockOptions` carries three time values that govern the lease:
+`DistributedLockOptions` carries the values that govern the lease:
 
 | Option | Default | Meaning |
 |---|---|---|
 | `LeaseDuration` | 30s | How long the backend grant is valid before another caller can take over. |
-| `WaitTimeout` | 10s | How long a blocking `AcquireAsync` keeps retrying before throwing `LockAcquisitionTimeoutException`. |
-| `RetryInterval` | 250 ms | How long blocking acquire waits between attempts. |
+| `WaitTimeout` | 10s | How long a blocking `AcquireAsync` keeps waiting before throwing `LockAcquisitionTimeoutException`. |
+| `RetryInterval` | 250 ms | The floor of the wait between attempts when the backend has to poll. |
+| `RetryBackoffCeiling` | null (flat `RetryInterval`) | When set, each poll sleeps a random duration between `RetryInterval` and this ceiling. |
 | `AutoRenew` | true | Whether OrionLock runs a background watchdog to extend the lease. |
+| `RenewalFailureGracePeriod` | null (`LeaseDuration`) | How long renewals may keep throwing on a TTL backend before the lease is given up. |
+| `MaxHoldDuration` | null (ten times `LeaseDuration`) | When the watchdog stops renewing a hold that was never disposed. |
 
 ## The auto-renewal watchdog
 
@@ -21,11 +24,20 @@ Renewal goes through the backend's owner-checked path: Redis runs a Lua compare-
 
 ## Lease loss
 
-If a renewal returns false or throws — backend blip, lease already expired, another holder took over — the watchdog:
+![OrionLock lease renewal: the watchdog waits LeaseDuration / 3, stops at MaxHoldDuration, calls TryRenewAsync, loses the lease on false or once renewal failures outlast RenewalFailureGracePeriod on a TTL backend, and with AutoRenew = false a TTL backend's lease expires at LeaseDuration](diagrams/lease-renewal.png)
+
+The watchdog gives the lease up when:
+
+- a renewal returns `false`: the backend says this owner no longer holds the key;
+- renewals keep throwing on a TTL backend (Redis, EF Core, in-memory, Consul, etcd) and none has succeeded for `RenewalFailureGracePeriod`. A single transient failure is retried on the next tick. On the session-scoped backends (PostgreSQL, SQL Server, ZooKeeper) a throwing renewal is retried for as long as the session lives;
+- the hold has lasted `MaxHoldDuration`: the watchdog surrenders and releases the lock as a leak backstop;
+- `AutoRenew = false` on a TTL backend and `LeaseDuration` has elapsed.
+
+In each case it:
 
 1. flips `handle.IsHeld` to false,
 2. cancels `handle.LostToken`,
-3. stops renewing.
+3. stops renewing and calls `ILockEventObserver.OnLeaseLost`.
 
 The critical section is now running **without** the lock. OrionLock cannot abort the section for you; it only makes the loss observable. Use `LostToken` to bail safely:
 
@@ -42,7 +54,7 @@ foreach (var item in items)
 }
 ```
 
-`LeaseLostException` exists for code paths that want to throw rather than poll, but the canonical pattern is `LostToken` passed into cancellable inner work.
+`handle.ThrowIfLost()` throws `LeaseLostException` for code paths that want to throw rather than poll, but the canonical pattern is `LostToken` passed into cancellable inner work.
 
 ## A note on the SqlServer backend
 
@@ -64,4 +76,4 @@ each held lock costs one open SQL connection.
 
 ## Why not block forever?
 
-Distributed locks never give the strong "I hold this for sure" guarantee an in-process `lock` gives. Network partitions, process pauses (GC, hypervisor freeze), and clock skew can all cause a caller to *think* it holds a lock it has actually lost. The lease bounds the damage: the lock is automatically free after `LeaseDuration`, regardless of the original holder's state. `LostToken` lets the holder participate in detection. OrionLock dispatch is at-least-once from this angle — critical sections should be idempotent.
+Distributed locks never give the strong "I hold this for sure" guarantee an in-process `lock` gives. Network partitions, process pauses (GC, hypervisor freeze), and clock skew can all cause a caller to *think* it holds a lock it has actually lost. The lease bounds the damage: on a TTL backend the lock is automatically free after `LeaseDuration` (on a session-scoped backend, when the session ends), regardless of the original holder's state. `LostToken` lets the holder participate in detection. OrionLock dispatch is at-least-once from this angle — critical sections should be idempotent.
