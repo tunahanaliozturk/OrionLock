@@ -37,13 +37,13 @@ await ProcessAsync(handle.LostToken);
 
 | Option | Default | Meaning |
 | --- | --- | --- |
-| `LeaseDuration` | 30 s | Lease length; the watchdog renews every `LeaseDuration / 3`. |
+| `LeaseDuration` | 30 s | Lease length; the watchdog renews every `LeaseDuration / 3`, but never more often than every 10 ms, so a lease under 10 ms can expire before its first renewal. |
 | `WaitTimeout` | 10 s | How long `AcquireAsync` waits before `LockAcquisitionTimeoutException`. |
 | `RetryInterval` | 250 ms | Floor of the wait between attempts when the backend has to poll. |
 | `RetryBackoffCeiling` | null | When set, polls sleep a random duration up to this ceiling. |
 | `AutoRenew` | true | Run the renewal watchdog. |
 | `RenewalFailureGracePeriod` | null (`LeaseDuration`) | How long renewals may keep throwing on a TTL backend before the lease is given up. |
-| `MaxHoldDuration` | null (10 x `LeaseDuration`) | Leak backstop: an undisposed hold stops renewing and is released. |
+| `MaxHoldDuration` | null (10 x `LeaseDuration`) | Leak backstop: an undisposed hold stops renewing and is released. Checked by the watchdog only, so it applies only with `AutoRenew`; with `AutoRenew = false` on PostgreSQL, SQL Server or ZooKeeper an undisposed hold is never released. |
 | `UseFifoWaiterCoordinator` | false | Queue waiters in arrival order through the registered coordinator. |
 
 Options are validated at every acquire, on your thread, with `ArgumentOutOfRangeException`.

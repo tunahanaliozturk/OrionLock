@@ -64,7 +64,8 @@
   <text class="edge" x="532" y="190">AutoRenew = true (default)</text>
 
   <rect class="step" x="390" y="200" width="260" height="56" rx="14"/>
-  <text class="label" x="520" y="234" text-anchor="middle">Wait LeaseDuration / 3</text>
+  <text class="label" x="520" y="225" text-anchor="middle">Wait LeaseDuration / 3</text>
+  <text class="small" x="520" y="245" text-anchor="middle">never less than 10 ms</text>
 
   <path class="flow" d="M520,256 L520,278"/>
 
