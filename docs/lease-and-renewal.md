@@ -14,11 +14,11 @@ Every successful `AcquireAsync` carries a **lease** — a time-bounded grant of 
 | `RetryBackoffCeiling` | null (flat `RetryInterval`) | When set, each poll sleeps a random duration between `RetryInterval` and this ceiling. |
 | `AutoRenew` | true | Whether OrionLock runs a background watchdog to extend the lease. |
 | `RenewalFailureGracePeriod` | null (`LeaseDuration`) | How long renewals may keep throwing on a TTL backend before the lease is given up. |
-| `MaxHoldDuration` | null (ten times `LeaseDuration`) | When the watchdog stops renewing a hold that was never disposed. |
+| `MaxHoldDuration` | null (ten times `LeaseDuration`) | When the watchdog stops renewing a hold that was never disposed. Only applies with `AutoRenew = true`. |
 
 ## The auto-renewal watchdog
 
-When `AutoRenew = true`, OrionLock starts a background task on every successful acquire. The watchdog tries to extend the lease every `LeaseDuration / 3` (a 30s lease renews every 10s) — three attempts per lease window, so a single transient failure does not lose the lease.
+When `AutoRenew = true`, OrionLock starts a background task on every successful acquire. The watchdog tries to extend the lease every `LeaseDuration / 3` (a 30s lease renews every 10s) — three attempts per lease window, so a single transient failure does not lose the lease. The interval never goes below 10 ms: a lease shorter than 30 ms gets fewer than three attempts per window, and a lease shorter than 10 ms can expire on a TTL backend before the first renewal runs.
 
 Renewal goes through the backend's owner-checked path: Redis runs a Lua compare-and-extend; EF Core runs an owner-token-conditioned `UPDATE`. A renewal only succeeds while this caller still holds the lease.
 
@@ -30,7 +30,7 @@ The watchdog gives the lease up when:
 
 - a renewal returns `false`: the backend says this owner no longer holds the key;
 - renewals keep throwing on a TTL backend (Redis, EF Core, in-memory, Consul, etcd) and none has succeeded for `RenewalFailureGracePeriod`. A single transient failure is retried on the next tick. On the session-scoped backends (PostgreSQL, SQL Server, ZooKeeper) a throwing renewal is retried for as long as the session lives;
-- the hold has lasted `MaxHoldDuration`: the watchdog surrenders and releases the lock as a leak backstop;
+- the hold has lasted `MaxHoldDuration`: the watchdog surrenders and releases the lock as a leak backstop. The check runs inside the renewal loop, so it needs `AutoRenew = true`; with `AutoRenew = false` on a session-scoped backend (PostgreSQL, SQL Server, ZooKeeper) there is neither a watchdog nor an expiry timer, and a hold that is never disposed stays held;
 - `AutoRenew = false` on a TTL backend and `LeaseDuration` has elapsed.
 
 In each case it:

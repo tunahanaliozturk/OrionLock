@@ -24,7 +24,7 @@
 
 ## How it works
 
-Every acquire mints a fresh owner token. The core makes one attempt; if the key is held it hands the rest of `WaitTimeout` to the backend, which blocks, subscribes or polls until the lock frees (see **How a waiter waits**). Release is owner-checked, so two processes cannot release each other's locks. Between the two, a watchdog renews the lease every `LeaseDuration / 3` and trips `handle.LostToken` if the lease is lost.
+Every acquire mints a fresh owner token. The core makes one attempt; if the key is held it hands the rest of `WaitTimeout` to the backend, which blocks, subscribes or polls until the lock frees (see **How a waiter waits**). Release is owner-checked, so two processes cannot release each other's locks. Between the two, a watchdog renews the lease every `LeaseDuration / 3` (at least 10 ms apart) and trips `handle.LostToken` if the lease is lost.
 
 ![OrionLock acquire, renew and release: AcquireAsync makes one TryAcquireFencedAsync attempt, waits through WaitForAcquireAsync with the remaining budget or throws LockAcquisitionTimeoutException, the handle's watchdog calls TryRenewAsync every LeaseDuration / 3 and cancels LostToken when renewal fails, and DisposeAsync calls ReleaseAsync with the owner token](docs/diagrams/acquire-release.png)
 
@@ -119,11 +119,11 @@ exclusive locks** below.
 
 ![OrionLock lease renewal: the watchdog waits LeaseDuration / 3, stops at MaxHoldDuration, calls TryRenewAsync, loses the lease on false or once renewal failures outlast RenewalFailureGracePeriod on a TTL backend, and with AutoRenew = false a TTL backend's lease expires at LeaseDuration](docs/diagrams/lease-renewal.png)
 
-Each acquired lock carries a lease (default 30s). A background watchdog renews the lease at `LeaseDuration / 3` while the handle is alive. If renewal fails, `handle.IsHeld` flips to false and `handle.LostToken` is cancelled — so the critical section can observe and abort safely instead of running without the lock. See [docs/lease-and-renewal.md](docs/lease-and-renewal.md).
+Each acquired lock carries a lease (default 30s). A background watchdog renews the lease at `LeaseDuration / 3` while the handle is alive. The interval never drops below 10 ms, so a lease shorter than 10 ms can expire on a TTL backend before its first renewal. If renewal fails, `handle.IsHeld` flips to false and `handle.LostToken` is cancelled — so the critical section can observe and abort safely instead of running without the lock. See [docs/lease-and-renewal.md](docs/lease-and-renewal.md).
 
 Two other things trip `LostToken`, and both used to be silent:
 
-- **The hold outlived `MaxHoldDuration`** (default ten leases). See **Always dispose the handle** below.
+- **The hold outlived `MaxHoldDuration`** (default ten leases, `AutoRenew` only). See **Always dispose the handle** below.
 - **`AutoRenew = false` and the lease ran out.** With auto-renew off no watchdog runs, so nothing used to notice the lease expiring: `IsHeld` stayed `true` indefinitely, however long after a TTL backend had expired the key and handed it to someone else. A handle taken with `AutoRenew = false` against a TTL backend now trips `LostToken` and reports `IsHeld = false` once `LeaseDuration` has elapsed, running the same surrender a confirmed loss runs. The session-scoped backends (PostgreSQL, SQL Server, ZooKeeper), where the hold legitimately outlives `LeaseDuration`, are unaffected.
 
 ## Fencing tokens
@@ -200,6 +200,8 @@ The token is also passed to `ILockEventObserver.OnAcquired(key, durationMs, fenc
 Not disposing does not merely leak — it **holds the lock**. The renewal watchdog roots the handle, so a forgotten `await using` is not collected: it keeps renewing the lease, no other process can ever take the key, and on SQL Server and PostgreSQL it pins a dedicated open connection for as long as it runs. The failure is silent, because renewal keeps succeeding.
 
 `DistributedLockOptions.MaxHoldDuration` (default: ten times `LeaseDuration`) is the backstop. Once it elapses the watchdog stops renewing, `handle.IsHeld` goes false, `handle.LostToken` trips, and the hold is released best-effort — so the key comes back even on the session-scoped backends, where merely not renewing would free nothing. Raise it for a genuinely long critical section; it is a leak backstop, not a work deadline.
+
+The backstop lives in the renewal watchdog, so it only applies when `AutoRenew` is on. With `AutoRenew = false` on PostgreSQL, SQL Server or ZooKeeper there is neither a watchdog nor an expiry timer: a handle that is never disposed keeps the lock for as long as its backend session lives. Always dispose the handle. On a TTL backend with `AutoRenew = false` the lease simply expires at `LeaseDuration`.
 
 ## Exceptions
 
@@ -433,7 +435,7 @@ The current release is **3.0.0**, and unlike 2.0.0 — which was a telemetry-onl
 - a `LeaseDuration` below the backend's floor is refused rather than silently raised;
 - `IDistributedLockHandle.EffectiveLeaseDuration` is a new abstract member;
 - driver exceptions are wrapped in `OrionLockBackendException`;
-- `MaxHoldDuration` bounds the renewal watchdog at ten leases by default;
+- `MaxHoldDuration` bounds the renewal watchdog (with `AutoRenew` on) at ten leases by default;
 - reentrancy is scoped to the holding flow rather than the key.
 
 The [changelog](CHANGELOG.md) opens 3.0.0 with the full breaking-change list and what to do about each. Forward plan in [ROADMAP.md](ROADMAP.md): fair queueing beyond opt-in FIFO, a distributed counter/sequence primitive, and container suites for the three unpublished backends. If something on the list matters to you, open an issue with the `roadmap` label.
